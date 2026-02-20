@@ -27,6 +27,8 @@
 ./application/audio/tl_audio.h			TELINK_APACHE 
 ./application/keyboard/keyboard.c			TELINK_APACHE 
 ./application/keyboard/keyboard.h			TELINK_APACHE 
+./application/print/u_printf.c			TELINK_APACHE 
+./application/print/u_printf.h			TELINK_APACHE 
 ./application/usbstd/AudioClassCommon.h			TELINK_APACHE 
 ./application/usbstd/CDCClassCommon.h			TELINK_APACHE 
 ./application/usbstd/CDCClassDevice.h			TELINK_APACHE 

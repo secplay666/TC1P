@@ -42,15 +42,15 @@ void UARTIF_uartinit(void)
 	uart_reset();  //will reset uart digital registers from 0x90 ~ 0x9f, so uart setting must set after this reset
 
 	//baud rate: 115200
-	#if (CLOCK_SYS_CLOCK_HZ == 16000000)
+	// #if (CLOCK_SYS_CLOCK_HZ == 16000000)
 		uart_init(9, 13, PARITY_NONE, STOP_BIT_ONE);
-	#elif (CLOCK_SYS_CLOCK_HZ == 24000000)
-		uart_init(12, 15, PARITY_NONE, STOP_BIT_ONE);
-	#elif (CLOCK_SYS_CLOCK_HZ == 32000000)
-		uart_init(30, 8, PARITY_NONE, STOP_BIT_ONE);
-	#elif (CLOCK_SYS_CLOCK_HZ == 48000000)
-		uart_init(25, 15, PARITY_NONE, STOP_BIT_ONE);
-	#endif
+	// #elif (CLOCK_SYS_CLOCK_HZ == 24000000)
+	// 	uart_init(12, 15, PARITY_NONE, STOP_BIT_ONE);
+	// #elif (CLOCK_SYS_CLOCK_HZ == 32000000)
+	// 	uart_init(30, 8, PARITY_NONE, STOP_BIT_ONE);
+	// #elif (CLOCK_SYS_CLOCK_HZ == 48000000)
+	// 	uart_init(25, 15, PARITY_NONE, STOP_BIT_ONE);
+	// #endif
 
 	// uart_dma_enable(1, 1); 	//uart data in hardware buffer moved by dma, so we need enable them first
 
@@ -60,28 +60,28 @@ void UARTIF_uartinit(void)
 	uart_irq_enable(0, 0);  	//uart Rx/Tx irq no need, disable them
 }
 
-void UARTIF_uartPrintf(const char *format, ...)
-{
-    char buffer[256]; // 缓冲区，用于存储格式化后的字符串
-    va_list args;     // 可变参数列表
-    u8 len = 0;
-    u8 i = 0;
+// void UARTIF_uartPrintf(const char *format, ...)
+// {
+//     char buffer[256]; // 缓冲区，用于存储格式化后的字符串
+//     va_list args;     // 可变参数列表
+//     u8 len = 0;
+//     u8 i = 0;
 
-    // 初始化可变参数
-    va_start(args, format);
+//     // 初始化可变参数
+//     va_start(args, format);
 
-    // 格式化字符串并存入 buffer 中
-    len = vsnprintf(buffer, sizeof(buffer), format, args);
+//     // 格式化字符串并存入 buffer 中
+//     len = vsnprintf(buffer, sizeof(buffer), format, args);
 
-    // 清理可变参数列表
-    va_end(args);
+//     // 清理可变参数列表
+//     va_end(args);
 
-    // 如果格式化成功，逐字节发送字符串
-    if (len > 0) {
-        for (i = 0; i < len; i++) 
-        {
-            // 调用 uart_ndma_send_byte 发送字符
-            uart_ndma_send_byte((u8)buffer[i]);
-        }
-    }
-}
+//     // 如果格式化成功，逐字节发送字符串
+//     if (len > 0) {
+//         for (i = 0; i < len; i++) 
+//         {
+//             // 调用 uart_ndma_send_byte 发送字符
+//             uart_ndma_send_byte((u8)buffer[i]);
+//         }
+//     }
+// }

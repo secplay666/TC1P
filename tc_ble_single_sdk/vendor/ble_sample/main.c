@@ -28,6 +28,7 @@
 #include "gpio.h"
 #include "timer.h"
 #include "application/uartinterface/uart_interface.h"
+#include "application/print/u_printf.h"
 
 /**
  * @brief   IRQ handler
@@ -91,8 +92,8 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 	gpio_write(GPIO_PD3, 0);
 	gpio_write(GPIO_PD4, 0);
 	gpio_write(GPIO_PD5, 0);
-	// uart_ndma_send_byte('A');
-	UARTIF_uartPrintf("hello world\n");
+
+	u_printf("hello world\n");
 	while (1) {
 	// #if (MODULE_WATCHDOG_ENABLE)
 	// 	#if (MCU_CORE_TYPE == MCU_CORE_TC321X)
@@ -105,38 +106,32 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 	// 	main_loop();
 
 	sleep_us(500000);
-
+	u_printf("===1===\n");
 	gpio_write(GPIO_PD2, 0);
 	gpio_write(GPIO_PD3, 1);
 	gpio_write(GPIO_PD4, 0);
 	gpio_write(GPIO_PD5, 0);
-	sleep_us(500000);
-	// uart_ndma_send_byte('6');
-	UARTIF_uartPrintf("===1===\n");
 
+	sleep_us(500000);
+	u_printf("===2===\n");
 	gpio_write(GPIO_PD2, 0);
 	gpio_write(GPIO_PD3, 0);
 	gpio_write(GPIO_PD4, 1);
 	gpio_write(GPIO_PD5, 0);
-	sleep_us(500000);
-	// uart_ndma_send_byte('7');
-	UARTIF_uartPrintf("===2===\n");
 
+	sleep_us(500000);
+	u_printf("===3===\n");
 	gpio_write(GPIO_PD2, 0);
 	gpio_write(GPIO_PD3, 0);
 	gpio_write(GPIO_PD4, 0);
 	gpio_write(GPIO_PD5, 1);
-	sleep_us(500000);
-	// uart_ndma_send_byte('8');
-	UARTIF_uartPrintf("===3===\n");
 
+	sleep_us(500000);
+	u_printf("===4===\n");
 	gpio_write(GPIO_PD2, 1);
 	gpio_write(GPIO_PD3, 0);
 	gpio_write(GPIO_PD4, 0);
 	gpio_write(GPIO_PD5, 0);
-	// uart_ndma_send_byte('9');
-	UARTIF_uartPrintf("===4===\n");
-
 	}
 }
 

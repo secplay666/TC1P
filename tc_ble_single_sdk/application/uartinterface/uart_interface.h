@@ -4,7 +4,6 @@
 
 void UARTIF_uartinit(void);
 
-void UARTIF_uartPrintf(const char *format, ...);
 
 
 
