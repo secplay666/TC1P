@@ -42,7 +42,7 @@
 #define TX_FIFO_SIZE	40
 /* must be: (2^n), (power of 2); at least 8; recommended value: 8, 16, 32, other value not allowed. */
 #define TX_FIFO_NUM		16
-
+#define MAC_CACHE_SIZE 32
 
 _attribute_data_retention_  u8 		 	blt_rxfifo_b[RX_FIFO_SIZE * RX_FIFO_NUM] = {0};
 _attribute_data_retention_	my_fifo_t	blt_rxfifo = {
@@ -64,11 +64,17 @@ _attribute_data_retention_	my_fifo_t	blt_txfifo = {
 
 static u32 tick250ms = 0;
 static u8	tbl_advData[] = {
- 7,  DT_COMPLETE_LOCAL_NAME, 				'H', 'H', 'H', 'H', 'H', 'H',
+ 7,  DT_COMPLETE_LOCAL_NAME, 				'H', 'H', 'C', 'C', 'H', 'H',
  2,	 DT_FLAGS, 								0x01, 					// BLE limited discoverable mode and BR/EDR not supported
  3,  DT_APPEARANCE, 						0x66, 0x66, 			// 384, Generic Remote Control, Generic category
  5,  DT_INCOMPLETE_LIST_16BIT_SERVICE_UUID,	0xAA, 0xBB, 0xCC, 0xDD,	// incomplete list of service class UUIDs (0x1812, 0x180F)
 };
+
+
+static u8 mac_cache[MAC_CACHE_SIZE][6];
+static u8 mac_cache_count = 0;
+
+
 
 int controller_event_callback (u32 h, u8 *p, int n);
 
@@ -144,7 +150,9 @@ static void task250ms(void)
 		gpio_write(GPIO_PD4, 0);
 		gpio_write(GPIO_PD5, 0);
 
-		u_printf("Current ll state is %d\n", blc_ll_getCurrentState());
+		// u_printf("Current ll state is %d\n", blc_ll_getCurrentState());
+		u_printf("MAC cache count is %d\n", mac_cache_count);
+		blc_ll_setScanEnable (BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
 	}
 	else if (counter % 4 == 1) {
 		// u_printf("===2===\n");
@@ -208,114 +216,148 @@ static void blm_le_adv_report_event_handle(u8 *p)
 			return;
 		}
 
-		u8 event_type = p[idx++];
-		u8 addr_type = p[idx++];
+		// u8 event_type = p[idx++];
+		// u8 addr_type = p[idx++];
+		idx++;idx++; // skip event_type and addr_type
 		u8 addr[6];
 		for (int i = 0; i < 6; i++) {
 			addr[i] = p[idx++];
 		}
 
-		u8 data_len = p[idx++];
-		u8 *adv_data = &p[idx];
-		idx += data_len;
-
-		s8 rssi = 0;
-		/* RSSI is present after the data according to spec */
-		rssi = (s8)p[idx++];
-
-		// u_printf("ADV report #%d: evtType=0x%02x, addrType=0x%02x, addr=%02x:%02x:%02x:%02x:%02x:%02x, data_len=%d, RSSI=%d\n",
-		// 		 r, event_type, addr_type,
-		// 		 addr[5], addr[4], addr[3], addr[2], addr[1], addr[0],
-		// 		 data_len, rssi);
-		u_printf("ADV report %d: data: ", r);
-		u_printf("evtType=0x%x ", event_type);
-		u_printf("addrType=0x%x\n", addr_type);
-		u_printf("addr=%x:", addr[5]);
-		u_printf("%x:", addr[4]);
-		u_printf("%x:", addr[3]);
-		u_printf("%x:", addr[2]);
-		u_printf("%x:", addr[1]);
-		u_printf("%x\n", addr[0]);
-		u_printf("data_len=%d, ", data_len);
-		u_printf("RSSI=%d\n", rssi);
-
-		/* Parse Advertising Data (AD structures) */
-		int ad_idx = 0;
-		while (ad_idx < data_len) {
-			u8 ad_len = adv_data[ad_idx++];
-			if (ad_len == 0) break; /* no more AD structures */
-			if (ad_idx >= data_len) break;
-
-			u8 ad_type = adv_data[ad_idx++];
-			u8 ad_val_len = ad_len - 1; /* subtract the type byte */
-			u8 *ad_val = &adv_data[ad_idx];
-
-			/* Print AD type and value */
-			switch (ad_type) {
-				case 0x01: /* Flags */
-					u_printf("  AD: Flags (0x01): 0x%x\n", ad_val_len ? ad_val[0] : 0);
+		// Check if MAC is already in cache
+		int mac_seen = 0;
+		for (int i = 0; i < mac_cache_count; i++) {
+			int same = 1;
+			for (int j = 0; j < 6; j++) {
+				if (mac_cache[i][j] != addr[j]) {
+					same = 0;
 					break;
-				case 0x02: /* Incomplete List of 16-bit Service Class UUIDs */
-				case 0x03: /* Complete List of 16-bit Service Class UUIDs */
-					u_printf("  AD: 16-bit Service UUIDs (0x%x), len=%d:\n", ad_type, ad_val_len);
-					for (int j = 0; j + 1 < ad_val_len + 1; j += 2) {
-						if (j + 1 >= ad_val_len) break;
-						u16 uuid16 = ad_val[j] | (ad_val[j+1] << 8);
-						u_printf("    - 0x%x\n", uuid16);
-					}
-					break;
-				case 0x06: /* Incomplete List of 128-bit Service Class UUIDs */
-				case 0x07: /* Complete List of 128-bit Service Class UUIDs */
-					u_printf("  AD: 128-bit Service UUIDs (0x%x), len=%d\n", ad_type, ad_val_len);
-					for (int j = 0; j + 15 < ad_val_len + 1; j += 16) {
-						u_printf("    - ");
-						for (int k = 15; k >= 0; k--) {
-							u_printf("%x", ad_val[j + k]);
-						}
-						u_printf("\n");
-					}
-					break;
-				case 0x08: /* Shortened Local Name */
-				case 0x09: /* Complete Local Name */
+				}
+			}
+			if (same) {
+				mac_seen = 1;
+				break;
+			}
+		}
+
+		if (!mac_seen)
+		{
+			// Add to cache if space
+			if (mac_cache_count < MAC_CACHE_SIZE)
 			{
-				/* print as string */
-				char name[32];
-				int copy_len = ad_val_len < (int)(sizeof(name)-1) ? ad_val_len : (int)(sizeof(name)-1);
-				for (int j = 0; j < copy_len; j++) name[j] = (char)ad_val[j];
-				name[copy_len] = '\0';
-				u_printf("  AD: Local Name (0x%x): %s\n", ad_type, name);
-			}
-					break;
-				case 0x0A: /* Tx Power Level */
-					u_printf("  AD: Tx Power Level (0x0A): %d dBm\n", (int)(s8)ad_val[0]);
-					break;
-				case 0x16: /* Service Data - 16-bit UUID */
-					if (ad_val_len >= 2) {
-						u16 sd_uuid = ad_val[0] | (ad_val[1] << 8);
-						u_printf("  AD: Service Data - 16-bit UUID: 0x%x, data_len=%d\n", sd_uuid, ad_val_len-2);
-					} else {
-						u_printf("  AD: Service Data (0x16) len invalid\n");
-					}
-					break;
-				case 0xFF: /* Manufacturer Specific Data */
-					u_printf("  AD: Manufacturer Specific Data (0xFF), len=%d:\n", ad_val_len);
-					u_printf("    ");
-					for (int j = 0; j < ad_val_len; j++) u_printf("%x", ad_val[j]);
-					u_printf("\n");
-					break;
-				default:
-					u_printf("  AD: type=0x%x, len=%d:\n    ", ad_type, ad_val_len);
-					for (int j = 0; j < ad_val_len; j++) u_printf("%x", ad_val[j]);
-					u_printf("\n");
-					break;
+				for (int j = 0; j < 6; j++) mac_cache[mac_cache_count][j] = addr[j];
+				mac_cache_count++;
 			}
 
-			/* advance ad_idx by ad_val_len */
-			ad_idx += ad_val_len;
+			u8 data_len = p[idx++];
+			u8 *adv_data = &p[idx];
+			idx += data_len;
+
+			s8 rssi = 0;
+			/* RSSI is present after the data according to spec */
+			rssi = (s8)p[idx++];
+
+			// u_printf("ADV report #%d: evtType=0x%02x, addrType=0x%02x, addr=%02x:%02x:%02x:%02x:%02x:%02x, data_len=%d, RSSI=%d\n",
+			// 		 r, event_type, addr_type,
+			// 		 addr[5], addr[4], addr[3], addr[2], addr[1], addr[0],
+			// 		 data_len, rssi);
+			// u_printf("ADV report %d: ", r);
+			// u_printf("evtType=0x%x ", event_type);
+			// u_printf("addrType=0x%x\n", addr_type);
+			u_printf("===================================================\n");
+			u_printf("addr=%x:", addr[5]);
+			u_printf("%x:", addr[4]);
+			u_printf("%x:", addr[3]);
+			u_printf("%x:", addr[2]);
+			u_printf("%x:", addr[1]);
+			u_printf("%x\n", addr[0]);
+			u_printf("data_len=%d, ", data_len);
+			u_printf("RSSI=%d\n", rssi);
+
+			/* Parse Advertising Data (AD structures) */
+			int ad_idx = 0;
+			while (ad_idx < data_len) {
+				u8 ad_len = adv_data[ad_idx++];
+				if (ad_len == 0) break; /* no more AD structures */
+				if (ad_idx >= data_len) break;
+
+				u8 ad_type = adv_data[ad_idx++];
+				u8 ad_val_len = ad_len - 1; /* subtract the type byte */
+				u8 *ad_val = &adv_data[ad_idx];
+
+				/* Print AD type and value */
+				switch (ad_type) {
+					case 0x01: /* Flags */
+						u_printf("  AD: Flags (0x01): 0x%x\n", ad_val_len ? ad_val[0] : 0);
+						break;
+					case 0x02: /* Incomplete List of 16-bit Service Class UUIDs */
+					case 0x03: /* Complete List of 16-bit Service Class UUIDs */
+						u_printf("  AD: 16-bit Service UUIDs (0x%x), len=%d:\n", ad_type, ad_val_len);
+						for (int j = 0; j + 1 < ad_val_len + 1; j += 2) {
+							if (j + 1 >= ad_val_len) break;
+							u16 uuid16 = ad_val[j] | (ad_val[j+1] << 8);
+							u_printf("    - 0x%x\n", uuid16);
+						}
+						break;
+					case 0x06: /* Incomplete List of 128-bit Service Class UUIDs */
+					case 0x07: /* Complete List of 128-bit Service Class UUIDs */
+						u_printf("  AD: 128-bit Service UUIDs (0x%x), len=%d\n", ad_type, ad_val_len);
+						for (int j = 0; j + 15 < ad_val_len + 1; j += 16) {
+							u_printf("    - ");
+							for (int k = 15; k >= 0; k--) {
+								u_printf("%x", ad_val[j + k]);
+							}
+							u_printf("\n");
+						}
+						break;
+					case 0x08: /* Shortened Local Name */
+					case 0x09: /* Complete Local Name */
+						{
+							/* print as string */
+							char name[32];
+							int copy_len = ad_val_len < (int)(sizeof(name)-1) ? ad_val_len : (int)(sizeof(name)-1);
+							for (int j = 0; j < copy_len; j++) name[j] = (char)ad_val[j];
+							name[copy_len] = '\0';
+							u_printf("  AD: Local Name (0x%x): %s\n", ad_type, name);
+						}
+						break;
+					case 0x0A: /* Tx Power Level */
+						u_printf("  AD: Tx Power Level (0x0A): %d dBm\n", (int)(s8)ad_val[0]);
+						break;
+					case 0x16: /* Service Data - 16-bit UUID */
+						if (ad_val_len >= 2) {
+							u16 sd_uuid = ad_val[0] | (ad_val[1] << 8);
+							u_printf("  AD: Service Data - 16-bit UUID: 0x%x, data_len=%d\n", sd_uuid, ad_val_len-2);
+						} else {
+							u_printf("  AD: Service Data (0x16) len invalid\n");
+						}
+						break;
+					case 0xFF: /* Manufacturer Specific Data */
+						u_printf("  AD: Manufacturer Specific Data (0xFF), len=%d:\n", ad_val_len);
+						u_printf("    ");
+						for (int j = 0; j < ad_val_len; j++) u_printf("%x", ad_val[j]);
+						u_printf("\n");
+						break;
+					default:
+						u_printf("  AD: type=0x%x, len=%d:\n    ", ad_type, ad_val_len);
+						for (int j = 0; j < ad_val_len; j++) u_printf("%x", ad_val[j]);
+						u_printf("\n");
+						break;
+				}
+
+				/* advance ad_idx by ad_val_len */
+				ad_idx += ad_val_len;
+			}
+		} 
+		else 
+		{
+			// Skip printing for duplicate MAC
+			u8 data_len = p[idx++];
+			idx += data_len;
+			idx++; // skip RSSI
 		}
 	}
 }
-
 
 int controller_event_callback (u32 h, u8 *p, int n)
 {
