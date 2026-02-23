@@ -37,8 +37,8 @@ void UARTIF_uartinit(void)
 	//note: dma addr must be set first before any other uart initialization!
 	uart_recbuff_init( (u8 *)rec_buff, BUFF_DATA_LEN);
 
-	// uart_gpio_set(UART_TX_PB1, UART_RX_PB0); // Debug board UART pins
-	uart_gpio_set(UART_TX_PC2, UART_RX_PC3); // dangle UART pins
+	uart_gpio_set(UART_TX_PB1, UART_RX_PB0); // Debug board UART pins
+	// uart_gpio_set(UART_TX_PC2, UART_RX_PC3); // dangle UART pins
 
 
 	uart_reset();  //will reset uart digital registers from 0x90 ~ 0x9f, so uart setting must set after this reset
