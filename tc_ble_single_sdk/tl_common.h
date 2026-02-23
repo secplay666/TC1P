@@ -41,7 +41,6 @@
 #include "vendor/common/app_common.h"
 #include "vendor/common/ble_flash.h"
 #include "vendor/common/blt_fw_sign.h"
-#include "vendor/common/blt_led.h"
 #include "vendor/common/blt_soft_timer.h"
 #include "vendor/common/flash_fw_check.h"
 #include "vendor/common/tlkapi_debug.h"

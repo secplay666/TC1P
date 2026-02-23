@@ -34,42 +34,13 @@ static u32 tick250ms = 0;
 
 static void task250ms(void)
 {
-	static u32 counter = 0;
+	static u8 counter = 0;
 	static u8 sleepCounter = 0;
-	// u_printf("counter is %d\n", counter++);
-	if (counter % 4 == 0) {
-		// u_printf("===1===\n");
-		gpio_write(GPIO_PD2, 0);
-		gpio_write(GPIO_PD3, 1);
-		gpio_write(GPIO_PD4, 0);
-		gpio_write(GPIO_PD5, 0);
 
+	if (counter % 4 == 0) 
+	{
 		// u_printf("Current ll state is %d\n", blc_ll_getCurrentState());
-
 		blc_ll_setScanEnable (BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
-	}
-	else if (counter % 4 == 1) {
-		// u_printf("===2===\n");
-		gpio_write(GPIO_PD2, 0);
-		gpio_write(GPIO_PD3, 0);
-		gpio_write(GPIO_PD4, 1);
-		gpio_write(GPIO_PD5, 0);
-	}
-	else if (counter % 4 == 2) {
-		// u_printf("===3===\n");
-		gpio_write(GPIO_PD2, 0);
-		gpio_write(GPIO_PD3, 0);
-		gpio_write(GPIO_PD4, 0);
-		gpio_write(GPIO_PD5, 1);
-	}
-	else if (counter % 4 == 3) {
-		// u_printf("===4===\n");
-		gpio_write(GPIO_PD2, 1);
-		gpio_write(GPIO_PD3, 0);
-		gpio_write(GPIO_PD4, 0);
-		gpio_write(GPIO_PD5, 0);
-		// u_printf("= PD1 is %d =\n", gpio_read(GPIO_PD1));
-
 		if (sleepCounter <= 60) 
 		{
 			// u_printf("sleepCounter is %d\n", sleepCounter);
@@ -109,22 +80,11 @@ _attribute_ram_code_ void irq_handler(void)
  */
 _attribute_ram_code_ int main (void)    //must run in ramcode
 {
-
-	// DBG_CHN0_LOW;   //debug
-
 	blc_pm_select_external_32k_crystal();
 
-	// #if(MCU_CORE_TYPE == MCU_CORE_825x)
-		cpu_wakeup_init();
-	// #else
-	// 	cpu_wakeup_init(LDO_MODE,INTERNAL_CAP_XTAL24M);
-	// #endif
-
-	// int deepRetWakeUp = pm_is_MCU_deepRetentionWakeup();  //MCU deep retention wakeUp
-
+	cpu_wakeup_init();
 	rf_drv_ble_init();
 
-	// gpio_init(!deepRetWakeUp);  //analog resistance will keep available in deepSleep mode, so no need initialize again
 	gpio_init(1);
 	clock_init(SYS_CLK_TYPE);
 
@@ -133,31 +93,15 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 	// 	wd_start();
 	// #endif
 
-	// if( deepRetWakeUp ){
-	// 	user_init_deepRetn();
-	// }
-	// else{
-		// user_init_normal();
-	// }
 	controllerInitialization();
 
     irq_enable();
 	UARTIF_uartinit();
-	gpio_set_output_en(GPIO_PD0, 1);
+
 	gpio_set_input_en(GPIO_PD1, 1);
-	gpio_set_output_en(GPIO_PD2, 1);
-	gpio_set_output_en(GPIO_PD3, 1);
-	gpio_set_output_en(GPIO_PD4, 1);
-	gpio_set_output_en(GPIO_PD5, 1);
 
-	gpio_write(GPIO_PD2, 1);
-	gpio_write(GPIO_PD3, 0);
-	gpio_write(GPIO_PD4, 0);
-	gpio_write(GPIO_PD5, 0);
+	u_printf("Wellcome !!\n");
 
-	gpio_write(GPIO_PD0, 1);
-
-	u_printf("hello world\n");
 	tick250ms = clock_time();
 	while (1)
 	{

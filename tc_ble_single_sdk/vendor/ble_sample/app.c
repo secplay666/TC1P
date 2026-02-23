@@ -142,10 +142,6 @@ static void blm_le_adv_report_event_handle(u8 *p)
 			/* RSSI is present after the data according to spec */
 			rssi = (s8)p[idx++];
 
-			// u_printf("ADV report #%d: evtType=0x%02x, addrType=0x%02x, addr=%02x:%02x:%02x:%02x:%02x:%02x, data_len=%d, RSSI=%d\n",
-			// 		 r, event_type, addr_type,
-			// 		 addr[5], addr[4], addr[3], addr[2], addr[1], addr[0],
-			// 		 data_len, rssi);
 			// u_printf("ADV report %d: ", r);
 			// u_printf("evtType=0x%x ", event_type);
 			// u_printf("addrType=0x%x\n", addr_type);
@@ -250,13 +246,6 @@ void controllerInitialization(void)
 	u8  mac_random_static[6];
 	u8 adv_param_status = BLE_SUCCESS;
 
-	// const static u8	tbl_advData[] = {
-	//  7,  DT_COMPLETE_LOCAL_NAME, 				'H', 'H', 'H', 'H', 'H', 'H',
-	//  2,	 DT_FLAGS, 								0x01, 					// BLE limited discoverable mode and BR/EDR not supported
-	//  3,  DT_APPEARANCE, 						0x66, 0x66, 			// 384, Generic Remote Control, Generic category
-	//  5,  DT_INCOMPLETE_LIST_16BIT_SERVICE_UUID,	0xAA, 0xBB, 0xCC, 0xDD,	// incomplete list of service class UUIDs (0x1812, 0x180F)
-	// };
-
 	/* for 512K Flash, flash_sector_mac_address equals to 0x76000, for 1M  Flash, flash_sector_mac_address equals to 0xFF000 */
 	blc_initMacAddress(flash_sector_mac_address, mac_public, mac_random_static);
 	// u_printf("Public Address: %02x:%02x:%02x:%02x:%02x:%02x\n", mac_public[5], mac_public[4], mac_public[3], mac_public[2], mac_public[1], mac_public[0]);
@@ -274,8 +263,6 @@ void controllerInitialization(void)
 											NULL,
 											BLT_ENABLE_ADV_ALL,
 											ADV_FP_NONE);
-
-	// u_printf("ADV parameters set status: 0x%x\n", adv_param_status);
 
 	if (adv_param_status != BLE_SUCCESS) 
 	{
