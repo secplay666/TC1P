@@ -39,11 +39,11 @@ static void task250ms(void)
 
 	if (counter % 4 == 0) 
 	{
-		// u_printf("Current ll state is %d\n", blc_ll_getCurrentState());
+		// u_u_printf("Current ll state is %d\n", blc_ll_getCurrentState());
 		blc_ll_setScanEnable (BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
 		if (sleepCounter <= 60) 
 		{
-			// u_printf("sleepCounter is %d\n", sleepCounter);
+			// u_u_printf("sleepCounter is %d\n", sleepCounter);
 			updateAdvData(sleepCounter, 20u);
 
 			sleepCounter++;
@@ -94,6 +94,106 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 	// #endif
 
 	controllerInitialization();
+
+	//---------------------iic-----------------------------//
+		    unsigned char calib_result = 0; //store empty \0
+		    unsigned char middle_result = 0;
+		    //quit-standby
+		    i2c_write_byte(0x07, 1, (unsigned char)0x48);
+		    middle_result = i2c_read_byte(0x07, 1);
+		    u_printf("write 0 in 0x07, read value is 0x%02x\n", middle_result);
+		    //auto-calibration
+		    i2c_write_byte(0x07, 1, (unsigned char)0x4B); // set auto-calib
+		    middle_result = i2c_read_byte(0x07, 1);
+		    u_printf("write 3 in 0x07, read value is 0x%02x\n", middle_result);
+		    i2c_write_byte(0x08, 1, (unsigned char)0x80); // LRA_ERM SELECT
+		    middle_result = i2c_read_byte(0x08, 1);
+		    u_printf("write 0x80 in 0x08, read value is 0x%02x\n", middle_result);
+		    i2c_write_byte(0x1F, 1, (unsigned char)0x46); // RATED_VOLTAGE
+		    middle_result = i2c_read_byte(0x1F, 1);
+		    u_printf("write 0x46 in 0x1F, read value is 0x%02x\n", middle_result);
+		    i2c_write_byte(0x20, 1, (unsigned char)0x5C); // OD_CLAMP 0x20 in manual
+		    middle_result = i2c_read_byte(0x20, 1);
+		    u_printf("write 0x0A in 0x20, read value is 0x%02x\n", middle_result);
+		    i2c_write_byte(0x27, 1, (unsigned char)0x10); // DRIVE_TIME 0x27 in manual
+		    middle_result = i2c_read_byte(0x27, 1);
+		    u_printf("write 0x10 in 0x27, read value is 0x%02x\n", middle_result);
+		    i2c_write_byte(0x0C, 1, (unsigned char)0x01); // set Go
+		    middle_result = i2c_read_byte(0x0C, 1);
+		    u_printf("write 0x01 in 0x0C, read value is 0x%02x\n", middle_result);
+
+		    calib_result = i2c_read_byte(0x01, 1);
+		    u_printf("read 0x01, read value is 0x%02x\n", calib_result);
+
+		    if ((calib_result & 0x80) != (unsigned char)0x00){
+		    	u_printf("error, value is %c\n", calib_result);
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    	u_printf("calib failed!\n");
+		    }
+
+		    calib_result = i2c_read_byte(0x01, 1);
+		    u_printf("read 0x01 again, read value is 0x%02x\n", calib_result);
+
+		    char write_result = 0;
+		    //read 0x07
+			write_result = i2c_read_byte(0x07, 1);
+			u_printf("read 0x07, read value is 0x%02x\n", write_result);
+		   //set mode[1:0] 1
+			i2c_write_byte(0x07, 1, write_result & 0xFD);
+			write_result = i2c_read_byte(0x07, 1);
+			u_printf("read 0x07, read value is 0x%02x\n", write_result);
+
+			i2c_write_byte(0x08, 1, 0x88);
+
+			//write wave form
+			i2c_write_byte(0x0F, 1, 0x2F);//wave form
+			write_result = i2c_read_byte(0x0F, 1);
+			u_printf("read 0x0F, read value is 0x%02x\n", write_result);
+
+			i2c_write_byte(0x10, 1, 0x82);//delay
+			write_result = i2c_read_byte(0x10, 1);
+			u_printf("read 0x10, read value is 0x%02x\n", write_result);
+
+			i2c_write_byte(0x11, 1, 0x2F);//wave form
+			write_result = i2c_read_byte(0x11, 1);
+			u_printf("read 0x11, read value is 0x%02x\n", write_result);
+
+			i2c_write_byte(0x12, 1, 0x00);//delay
+			write_result = i2c_read_byte(0x12, 1);
+			u_printf("read 0x12, read value is 0x%02x\n", write_result);
+
+			i2c_write_byte(0x19, 1, 0x01);//repeat 0x01 means two times
+			write_result = i2c_read_byte(0x19, 1);
+			u_printf("read 0x19, read value is 0x%02x\n", write_result);
+			// set Go
+			i2c_write_byte(0x0C, 1, (unsigned char)0x01);
+			write_result = i2c_read_byte(0x0C, 1);
+			u_printf("write 0x01 in 0x0C, read value is 0x%02x\n", write_result);
+			//---------------------iic-----------------------------//
+
+			//--------------------GPIO-------------------------//
+
+			    //--set GPIO read and ADC pin--//
+				gpio_set_func(GPIO_PB5 ,AS_GPIO); // motor control
+			    gpio_set_func(GPIO_PA0 ,AS_GPIO); // vibrate sensor
+			    //gpio_set_func(GPIO_PB1 ,AS_GPIO); //MCU Vbatt check
+			    gpio_set_input_en(GPIO_PA0 ,1);
+			    gpio_setup_up_down_resistor(GPIO_PA0, PM_PIN_PULLUP_10K);
+			    gpio_set_input_en(GPIO_PB5 ,0);
+			    //gpio_set_input_en(GPIO_PB1 ,1);
+			    gpio_set_output_en(GPIO_PA0 ,0);
+			    gpio_set_output_en(GPIO_PB5 ,1);
+			    //gpio_set_output_en(GPIO_PB1 ,0);
+
+			    gpio_write(GPIO_PB5, 1);
+			//--------------------GPIO-------------------------//
 
     irq_enable();
 	UARTIF_uartinit();
