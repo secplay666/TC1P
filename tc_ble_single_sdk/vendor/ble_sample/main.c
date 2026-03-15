@@ -182,15 +182,20 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 
 			    //--set GPIO read and ADC pin--//
 				gpio_set_func(GPIO_PB5 ,AS_GPIO); // motor control
-			    gpio_set_func(GPIO_PA0 ,AS_GPIO); // vibrate sensor
-			    //gpio_set_func(GPIO_PB1 ,AS_GPIO); //MCU Vbatt check
-			    gpio_set_input_en(GPIO_PA0 ,1);
+			    gpio_set_func(GPIO_PC1 ,AS_GPIO); // vibrate sensor
+			    gpio_set_func(GPIO_PB1 ,AS_GPIO); // MCU Vbatt check
+			    gpio_set_func(GPIO_PA0 ,AS_GPIO); // charge detect
+
+			    gpio_set_input_en(GPIO_PC1 ,1);
 			    gpio_setup_up_down_resistor(GPIO_PA0, PM_PIN_PULLUP_10K);
 			    gpio_set_input_en(GPIO_PB5 ,0);
-			    //gpio_set_input_en(GPIO_PB1 ,1);
-			    gpio_set_output_en(GPIO_PA0 ,0);
+			    gpio_set_input_en(GPIO_PB1 ,1);
+			    gpio_set_input_en(GPIO_PA0 ,1);
+
+			    gpio_set_output_en(GPIO_PC1 ,0);
 			    gpio_set_output_en(GPIO_PB5 ,1);
-			    //gpio_set_output_en(GPIO_PB1 ,0);
+			    gpio_set_output_en(GPIO_PB1 ,0);
+			    gpio_set_output_en(GPIO_PA0 ,0);
 
 			    gpio_write(GPIO_PB5, 1);
 			//--------------------GPIO-------------------------//
@@ -198,29 +203,89 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
     irq_enable();
 	UARTIF_uartinit();
 
-	gpio_set_input_en(GPIO_PD1, 1);
+	adc_vbat_detect_init();
+
+	//gpio_set_input_en(GPIO_PD1, 1);
 
 	u_printf("Wellcome !!\n");
 
 	tick250ms = clock_time();
+
+	volatile int vibrate_value = 256;
+	volatile int charge_value = 256;
+	volatile int alarm_voltage = 2000;
+
 	while (1)
 	{
-		// #if (MODULE_WATCHDOG_ENABLE)
-		// 	#if (MCU_CORE_TYPE == MCU_CORE_TC321X)
-		// 		if (g_chip_version != CHIP_VERSION_A0)
-		// 	#endif
-		// 		{
-		// 			wd_clear(); //clear watch dog
-		// 		}
-		// #endif
-		// 	main_loop();
+
 		blt_sdk_main_loop();
 
-		if(clock_time_exceed(tick250ms, 250000))
+		/*if(clock_time_exceed(tick250ms, 250000))
 		{
 			tick250ms = clock_time();
 			task250ms();
-		}
+		}*/
+		app_battery_power_check(alarm_voltage);//暂时设置为2000mv，sdk里说是默认设置
+
+
+	    vibrate_value = gpio_read(GPIO_PC1);
+	    charge_value = gpio_read(GPIO_PA0);
+
+
+
+	    static int last_gpio_value = 0xFF;  // 0xFF表示初始状态
+	    static int consecutive_count = 0;
+	    static int sleep_triggered = 0;     // 防止重复进入休眠
+
+	    if (last_gpio_value == 0xFF || vibrate_value != last_gpio_value) {
+	        last_gpio_value = vibrate_value;
+	        consecutive_count = 1;
+	        sleep_triggered = 0;
+	    } else {
+	        consecutive_count++;
+	    }
+
+	    // printf("gpio=%d, count=%d\n", gpio_value, consecutive_count);
+
+	    // 连续20个相同值且未进入过休眠
+	    if (charge_value == 1 || consecutive_count >= 20 && !sleep_triggered) {
+	        sleep_triggered = 1;  // 标记已触发，防止重复进入
+
+	        printf(">>> Consecutive %d detected (value=%d), entering sleep\n",
+	               consecutive_count, vibrate_value);
+
+	        // 关闭BLE广播和扫描
+	        bls_ll_setAdvEnable(0);
+	        blc_ll_setScanEnable(0, 0);
+
+
+	        if (vibrate_value == 1) {
+		        gpio_set_interrupt_pol(GPIO_PA0, pol_falling);
+				reg_irq_src = FLD_IRQ_GPIO_EN; //清中断标志
+				reg_irq_mask |= FLD_IRQ_GPIO_EN;//使能irq中断
+				gpio_en_interrupt(GPIO_PC1, 1);
+
+				printf(">>> attempting sleep");
+
+				//cpu_set_gpio_wakeup(GPIO_PA0, Level_High, 1);
+				cpu_sleep_wakeup(DEEPSLEEP_MODE, PM_WAKEUP_PAD, 0);
+				printf(">>>  sleep failed!!!\n");
+
+	        } else {
+	        	gpio_set_interrupt_pol(GPIO_PA0, pol_rising);
+				reg_irq_src = FLD_IRQ_GPIO_EN; //清中断标志
+				reg_irq_mask |= FLD_IRQ_GPIO_EN;//使能irq中断
+				gpio_en_interrupt(GPIO_PC1, 1);
+
+				printf(">>> attempting sleep");
+
+				//cpu_set_gpio_wakeup(GPIO_PA0, Level_High, 1);
+				cpu_sleep_wakeup(DEEPSLEEP_MODE, PM_WAKEUP_PAD,  0);
+				printf(">>>  sleep failed!!!\n");
+
+	        }
+
+	    }
 	}
 }
 

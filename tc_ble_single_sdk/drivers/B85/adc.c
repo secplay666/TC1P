@@ -26,6 +26,7 @@
 #include "clock.h"
 #include "dfifo.h"
 #include "timer.h"
+
 /**
  * Note: When the reference voltage is configured to 1.2V, the calculated ADC voltage value is closest to the actual voltage value using 1175 as the coefficient default.
  * 1175 is the value obtained by ATE through big data statistics, which is more in line with most chips than 1200.
