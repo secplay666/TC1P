@@ -25,6 +25,7 @@
 #include "drivers.h"
 #include "stack/ble/ble.h"
 #include "battery_check.h"
+#include "app.h"
 
 
 #if (APP_BATT_CHECK_ENABLE)
@@ -228,8 +229,8 @@ _attribute_ram_code_ void adc_vbat_detect_init(void)
 	adc_power_on_sar_adc(0);
 
 	//telink advice: you must choose one gpio with adc function to output high level(voltage will equal to vbat), then use adc to measure high level voltage
-	gpio_set_output_en(GPIO_VBAT_DETECT, 1);
-	gpio_write(GPIO_VBAT_DETECT, 1);
+	//gpio_set_output_en(GPIO_VBAT_DETECT, 1);
+	//gpio_write(GPIO_VBAT_DETECT, 1);
 
 
 	/******set adc sample clk as 4MHz******/
@@ -252,7 +253,7 @@ _attribute_ram_code_ void adc_vbat_detect_init(void)
 	//set misc channel resolution 14 bit,  misc channel differential mode
 	//notice that: in differential_mode MSB is sign bit, rest are data,  here BIT(13) is sign bit
 	analog_write (anareg_adc_res_m, RES14 | FLD_ADC_EN_DIFF_CHN_M);
-	adc_set_ain_chn_misc(ADC_INPUT_PCHN, GND);
+	adc_set_ain_chn_misc(GPIO_PB1, GND);  //改为我们的input PB1引脚
 #else
 ////set misc channel use differential_mode,
 	adc_set_ain_channel_differential_mode(ADC_MISC_CHN, ADC_INPUT_PCHN, GND);
@@ -404,12 +405,12 @@ _attribute_ram_code_ int app_battery_power_check(u16 alram_vol_mv)
 		//                          (Vref, adc_pre_scale)   (BIT<12~0> valid data)
 		//			 =  adc_result * Vref * adc_pre_scale / 0x2000 + offset
 		//           =  adc_result * Vref*adc_pre_scale >>13 + offset
-		if (ADC_INPUT_PCHN == VBAT){
+		/*if (ADC_INPUT_PCHN == VBAT){
 			extern unsigned short adc_vbat_calib_vref;
 			batt_vol_mv  = ((adc_result*adc_pre_scale*adc_vbat_calib_vref)>>13)*3;
 		}
-		else
-			batt_vol_mv  = ((adc_result*adc_pre_scale*adc_gpio_calib_vref)>>13) + adc_gpio_calib_vref_offset;
+		else*/
+			batt_vol_mv  = ((adc_result*adc_pre_scale*adc_gpio_calib_vref)>>13) + adc_gpio_calib_vref_offset;  //vref的值待定
 	#elif (MCU_CORE_TYPE == MCU_CORE_TC321X)
 		else{
             #ifdef  GPIO_VBAT_DETECT
@@ -435,7 +436,34 @@ _attribute_ram_code_ int app_battery_power_check(u16 alram_vol_mv)
 	tlkapi_printf(APP_BATT_CHECK_LOG_EN, "[APP][BAT] The battery power is %dmV!\n", batt_vol_mv);
 
 	if(batt_vol_mv < alram_vol_mv){
-		return 0;
+		unsigned char write_result = 0;
+		//read 0x07
+		write_result = i2c_read_byte(0x07, 1);
+	    u_printf("low battery iic stage", write_result);
+	   //set mode[1:0] 1
+	    i2c_write_byte(0x07, 1, write_result & 0xFD);
+		write_result = i2c_read_byte(0x07, 1);
+	    u_printf("low battery iic stage", write_result);
+
+	    i2c_write_byte(0x08, 1, 0x88);
+
+		i2c_write_byte(0x19, 1, 0x00);//repeat 0x01 means two times
+		write_result = i2c_read_byte(0x19, 1);
+		u_printf("low battery iic stage", write_result);
+
+	    //write wave form
+	    i2c_write_byte(0x0F, 1, 0x54);//wave form
+	 	write_result = i2c_read_byte(0x0F, 1);
+	    u_printf("low battery iic stage", write_result);
+
+	    i2c_write_byte(0x10, 1, 0x00);//wave form
+	 	write_result = i2c_read_byte(0x10, 1);
+	    u_printf("low battery iic stage", write_result);
+
+	    // set Go
+	    i2c_write_byte(0x0C, 1, (unsigned char)0x01);
+	    write_result = i2c_read_byte(0x0C, 1);
+	    u_printf("low battery iic stage", write_result);
 	}
 	return 1;
 

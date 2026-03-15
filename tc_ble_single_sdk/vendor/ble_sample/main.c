@@ -203,7 +203,9 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
     irq_enable();
 	UARTIF_uartinit();
 
-	gpio_set_input_en(GPIO_PD1, 1);
+	adc_vbat_detect_init();
+
+	//gpio_set_input_en(GPIO_PD1, 1);
 
 	u_printf("Wellcome !!\n");
 
@@ -211,6 +213,7 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 
 	volatile int vibrate_value = 256;
 	volatile int charge_value = 256;
+	volatile int alarm_voltage = 2000;
 
 	while (1)
 	{
@@ -222,9 +225,13 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 			tick250ms = clock_time();
 			task250ms();
 		}*/
+		app_battery_power_check(alarm_voltage);//暂时设置为2000mv，sdk里说是默认设置
+
 
 	    vibrate_value = gpio_read(GPIO_PC1);
 	    charge_value = gpio_read(GPIO_PA0);
+
+
 
 	    static int last_gpio_value = 0xFF;  // 0xFF表示初始状态
 	    static int consecutive_count = 0;
@@ -241,7 +248,7 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 	    // printf("gpio=%d, count=%d\n", gpio_value, consecutive_count);
 
 	    // 连续20个相同值且未进入过休眠
-	    if (consecutive_count >= 20 && !sleep_triggered) {
+	    if (charge_value == 1 || consecutive_count >= 20 && !sleep_triggered) {
 	        sleep_triggered = 1;  // 标记已触发，防止重复进入
 
 	        printf(">>> Consecutive %d detected (value=%d), entering sleep\n",

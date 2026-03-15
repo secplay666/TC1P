@@ -43,7 +43,7 @@
 #define APP_FLASH_PROTECTION_ENABLE						1
 
 /* User must check battery voltage on mass production application to prevent abnormal writing or erasing Flash at a low voltage !!! */
-#define APP_BATT_CHECK_ENABLE							0
+#define APP_BATT_CHECK_ENABLE							1
 
 ///////////////////////// DEBUG  Configuration ////////////////////////////////////////////////
 #define DEBUG_GPIO_ENABLE					0
