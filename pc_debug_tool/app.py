@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import queue
 import random
 import struct
@@ -13,6 +12,7 @@ from tkinter import messagebox, scrolledtext, ttk
 from typing import Any, Dict, Iterable, Optional
 
 import pendant_protocol as proto
+from provision_db import ProvisionDatabase, normalize_date_code, today_date_code
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -270,9 +270,15 @@ class PendantDebugApp:
         self.worker = BleWorker(self.events)
         self.devices: list[dict] = []
         self.connected = False
+        self.connected_address: Optional[str] = None
+        self.provision_db = ProvisionDatabase()
+        self.provision_flow: Optional[dict] = None
 
         self.status_var = tk.StringVar(value="未连接")
         self.log_enable_var = tk.BooleanVar(value=True)
+        self.provision_lock_var = tk.BooleanVar(value=False)
+        self.provision_force_var = tk.BooleanVar(value=False)
+        self.provision_status_var = tk.StringVar(value="")
         self._build_ui()
         self.root.after(80, self._poll_events)
 
@@ -370,8 +376,7 @@ class PendantDebugApp:
         self.info_text.pack(fill=tk.BOTH, expand=True)
 
     def _default_terminal_sn(self) -> str:
-        today = datetime.date.today()
-        return f"0x{today.year % 100:02d}{today.month:02d}{today.day:02d}01"
+        return f"0x{today_date_code()}01"
 
     def _build_identity_tab(self) -> None:
         editor = ttk.LabelFrame(self.identity_tab, text="唯一识别码", padding=8)
@@ -394,10 +399,41 @@ class PendantDebugApp:
         ]:
             ttk.Button(buttons, text=text, command=command).pack(side=tk.LEFT, padx=(0, 6))
 
+        self._build_provision_panel()
+
         result = ttk.LabelFrame(self.identity_tab, text="身份与工厂信息", padding=8)
         result.pack(fill=tk.BOTH, expand=True)
         self.identity_text = scrolledtext.ScrolledText(result, height=18, wrap=tk.WORD)
         self.identity_text.pack(fill=tk.BOTH, expand=True)
+
+    def _build_provision_panel(self) -> None:
+        panel = ttk.LabelFrame(self.identity_tab, text="自动烧录", padding=8)
+        panel.pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Label(panel, text="日期 yymmdd").grid(row=0, column=0, padx=(0, 2))
+        self.provision_date_var = tk.StringVar(value=today_date_code())
+        ttk.Entry(panel, textvariable=self.provision_date_var, width=9).grid(row=0, column=1, padx=(0, 8))
+        ttk.Checkbutton(panel, text="成功后锁定", variable=self.provision_lock_var).grid(row=0, column=2, padx=(0, 8))
+        ttk.Checkbutton(panel, text="强制改写", variable=self.provision_force_var).grid(row=0, column=3, padx=(0, 8))
+        ttk.Button(panel, text="刷新数据库", command=self._refresh_provision_status).grid(row=0, column=4, padx=(0, 6))
+        ttk.Button(panel, text="自动烧录下一台", command=self._start_auto_provision).grid(row=0, column=5, padx=(0, 6))
+        ttk.Label(panel, textvariable=self.provision_status_var).grid(row=0, column=6, sticky=tk.W, padx=(8, 0))
+
+        columns = ("time", "terminal", "random", "short", "status", "addr")
+        self.provision_tree = ttk.Treeview(panel, columns=columns, show="headings", height=5)
+        for col, title, width in [
+            ("time", "时间", 140),
+            ("terminal", "终端序列", 110),
+            ("random", "随机值", 100),
+            ("short", "Short ID", 100),
+            ("status", "状态", 80),
+            ("addr", "设备地址", 150),
+        ]:
+            self.provision_tree.heading(col, text=title)
+            self.provision_tree.column(col, width=width, anchor=tk.CENTER)
+        self.provision_tree.grid(row=1, column=0, columnspan=7, sticky=tk.EW, pady=(8, 0))
+        panel.columnconfigure(6, weight=1)
+        self._refresh_provision_status()
 
     def _build_message_tab(self) -> None:
         self.log_text = scrolledtext.ScrolledText(self.message_tab, wrap=tk.WORD)
@@ -521,6 +557,208 @@ class PendantDebugApp:
         self.worker.send_command(proto.CMD_RUN_FACTORY_TEST, payload)
         self._log("TX RUN_FACTORY_TEST mask=0xFFFFFFFF")
 
+    def _refresh_provision_status(self) -> None:
+        try:
+            product_sn = self._parse_u32_entry(self.identity_product)
+            date_code = normalize_date_code(self.provision_date_var.get())
+            last_seq = self.provision_db.get_last_seq(product_sn, date_code)
+            next_seq = last_seq + 1
+            self.provision_status_var.set(
+                f"DB: {self.provision_db.path} | last={last_seq:02d}, next={next_seq:02d}"
+            )
+        except Exception as exc:
+            self.provision_status_var.set(f"数据库状态错误: {exc}")
+
+        if hasattr(self, "provision_tree"):
+            for item in self.provision_tree.get_children():
+                self.provision_tree.delete(item)
+            for row in self.provision_db.recent_records(30):
+                short_id = "" if row["short_id"] is None else f"0x{int(row['short_id']):08X}"
+                self.provision_tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        row["created_at"],
+                        f"0x{int(row['terminal_sn']):08X}",
+                        f"0x{int(row['random_value']):08X}",
+                        short_id,
+                        row["status"],
+                        row["device_address"] or "",
+                    ),
+                )
+
+    def _start_auto_provision(self) -> None:
+        if not self.connected:
+            messagebox.showinfo("提示", "请先连接一个设备")
+            return
+        if self.provision_flow:
+            messagebox.showinfo("提示", "自动烧录流程正在进行")
+            return
+        try:
+            product_sn = self._parse_u32_entry(self.identity_product)
+            reserved = self._parse_u32_entry(self.identity_reserved)
+            date_code = normalize_date_code(self.provision_date_var.get())
+        except Exception as exc:
+            messagebox.showerror("烧录参数错误", str(exc))
+            return
+
+        self.provision_flow = {
+            "stage": "system",
+            "product_sn": product_sn,
+            "reserved": reserved,
+            "date_code": date_code,
+            "lock": self.provision_lock_var.get(),
+            "force": self.provision_force_var.get(),
+        }
+        self._append_identity("Provision: 读取设备状态...")
+        self.worker.send_command(proto.CMD_GET_SYSTEM_STATE)
+
+    def _handle_provision_response(self, message: proto.HostMessage) -> None:
+        flow = self.provision_flow
+        if not flow or message.frame_type != proto.TYPE_RSP:
+            return
+
+        stage = flow.get("stage")
+        if stage == "system" and message.cmd == proto.CMD_GET_SYSTEM_STATE:
+            if message.status != 0:
+                self._finish_provision(f"Provision: 读取系统状态失败，status={message.status}", failed=True)
+                return
+            try:
+                flow["system"] = proto.parse_system_state(message.payload)
+            except Exception as exc:
+                self._finish_provision(f"Provision: 系统状态解析失败: {exc}", failed=True)
+                return
+            flow["stage"] = "identity_read"
+            self._append_identity("Provision: 读取当前身份...")
+            self.worker.send_command(proto.CMD_GET_IDENTITY)
+            return
+
+        if stage == "identity_read" and message.cmd == proto.CMD_GET_IDENTITY:
+            if message.status != 0:
+                self._finish_provision(f"Provision: 读取身份失败，status={message.status}", failed=True)
+                return
+            try:
+                info = proto.parse_identity_info(message.payload)
+            except Exception as exc:
+                self._finish_provision(f"Provision: 身份解析失败: {exc}", failed=True)
+                return
+            self._continue_provision_after_identity(info)
+            return
+
+        if stage == "identity_write" and message.cmd == proto.CMD_WRITE_IDENTITY:
+            if message.status != 0:
+                self._finish_provision(f"Provision: 写入身份失败，status={message.status}", failed=True)
+                return
+            try:
+                info = proto.parse_identity_info(message.payload)
+            except Exception as exc:
+                self._finish_provision(f"Provision: 写入响应解析失败: {exc}", failed=True)
+                return
+            self._finish_provision_write(info)
+
+    def _continue_provision_after_identity(self, info: dict) -> None:
+        flow = self.provision_flow
+        if not flow:
+            return
+
+        flags = info["flags"]
+        locked = bool(flags & proto.IDENTITY_FLAG_LOCKED)
+        needs_update = self._identity_needs_update(info, bool(flow["force"]))
+        existing = self.provision_db.find_by_unique_id(info["unique_id"])
+
+        if locked and needs_update:
+            self._finish_provision("Provision: 设备身份已锁定，不能自动改写", failed=True)
+            return
+        if not needs_update:
+            if existing:
+                self._finish_provision(
+                    f"Provision: 设备已有有效身份，数据库记录 #{existing['id']}，不改写",
+                    failed=False,
+                )
+            else:
+                self._finish_provision("Provision: 设备已有有效身份，但数据库里没有这条记录，不自动改写", failed=False)
+            return
+
+        try:
+            allocation = self.provision_db.allocate_next(
+                int(flow["product_sn"]),
+                str(flow["date_code"]),
+                int(flow["reserved"]),
+            )
+        except Exception as exc:
+            self._finish_provision(f"Provision: 分配终端序列失败: {exc}", failed=True)
+            return
+
+        flow["allocation"] = allocation
+        flow["stage"] = "identity_write"
+        self.identity_terminal.var.set(f"0x{allocation.terminal_sn:08X}")  # type: ignore[attr-defined]
+        self.identity_random.var.set(f"0x{allocation.random_value:08X}")  # type: ignore[attr-defined]
+        self.identity_reserved.var.set(f"0x{allocation.reserved:08X}")  # type: ignore[attr-defined]
+        payload = proto.make_write_identity_payload(allocation.unique_id, bool(flow["lock"]))
+        self._append_identity(
+            f"Provision: 写入 terminal=0x{allocation.terminal_sn:08X}, "
+            f"seq={allocation.seq_no:02d}, random=0x{allocation.random_value:08X}, lock={int(bool(flow['lock']))}"
+        )
+        self.worker.send_command(proto.CMD_WRITE_IDENTITY, payload)
+
+    def _finish_provision_write(self, info: dict) -> None:
+        flow = self.provision_flow
+        if not flow:
+            return
+        allocation = flow.get("allocation")
+        if not allocation:
+            self._finish_provision("Provision: 内部状态错误，缺少分配记录", failed=True)
+            return
+        expected = allocation.unique_id.hex().upper()
+        if info["unique_id"] != expected:
+            self._finish_provision(
+                f"Provision: 写入后校验失败，expected={expected}, got={info['unique_id']}",
+                failed=True,
+            )
+            return
+
+        status = "locked" if info["flags"] & proto.IDENTITY_FLAG_LOCKED else "written"
+        try:
+            self.provision_db.record_success(
+                allocation,
+                device_address=self.connected_address,
+                eid=info["eid"],
+                short_id=info["short_id"],
+                flags=info["flags"],
+                status=status,
+                note="auto_provision",
+            )
+        except Exception as exc:
+            self._finish_provision(f"Provision: 写入成功但数据库记录失败: {exc}", failed=True)
+            return
+
+        self._set_identity_fields(info)
+        self._refresh_provision_status()
+        self._finish_provision(
+            f"Provision: 写入成功并已记录，terminal=0x{allocation.terminal_sn:08X}, status={status}",
+            failed=False,
+        )
+
+    @staticmethod
+    def _identity_needs_update(info: dict, force: bool) -> bool:
+        flags = info["flags"]
+        if force:
+            return True
+        return bool(
+            not (flags & proto.IDENTITY_FLAG_PRESENT)
+            or (flags & proto.IDENTITY_FLAG_DEV_FALLBACK)
+            or not (flags & proto.IDENTITY_FLAG_VALID)
+        )
+
+    def _finish_provision(self, text: str, failed: bool) -> None:
+        self._append_identity(text)
+        self._log(text)
+        if failed:
+            self.status_var.set("自动烧录失败")
+        else:
+            self.status_var.set("自动烧录完成")
+        self.provision_flow = None
+
     def _send_raw(self) -> None:
         text = self.raw_var.get().replace("0x", "").replace(",", " ").replace(";", " ")
         try:
@@ -548,10 +786,13 @@ class PendantDebugApp:
             self._set_devices(event["devices"])
         elif kind == "connected":
             self.connected = True
+            self.connected_address = event.get("address")
             self.status_var.set("已连接" if event.get("debug_ready") else "已连接，但未找到调试服务")
             self._log(f"CONNECTED {event.get('address')} debug_ready={event.get('debug_ready')}")
         elif kind == "disconnected":
             self.connected = False
+            self.connected_address = None
+            self.provision_flow = None
             self._log("DISCONNECTED")
         elif kind == "services":
             self._set_text(self.service_text, event["text"])
@@ -603,6 +844,7 @@ class PendantDebugApp:
                     self._append_identity(summary)
             if message.cmd == proto.CMD_RUN_FACTORY_TEST:
                 self._append_identity(summary)
+            self._handle_provision_response(message)
             return
 
         if message.frame_type == proto.TYPE_LOG:

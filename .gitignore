@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 pc_debug_tool/.venv/
+pc_debug_tool/provisioning.db
+pc_debug_tool/provisioning.db-*
