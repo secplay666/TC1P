@@ -26,6 +26,9 @@ typedef enum {
     HOST_STATUS_ERR_UNSUPPORTED = 4,
     HOST_STATUS_ERR_CRC = 5,
     HOST_STATUS_ERR_NO_MEM = 6,
+    HOST_STATUS_ERR_PERMISSION = 7,
+    HOST_STATUS_ERR_NOT_FOUND = 8,
+    HOST_STATUS_ERR_FLASH = 9,
 } app_host_status_t;
 
 typedef struct {

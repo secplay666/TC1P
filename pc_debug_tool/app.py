@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import queue
+import random
 import struct
 import threading
 import time
@@ -306,15 +308,18 @@ class PendantDebugApp:
         notebook.pack(fill=tk.BOTH, expand=True)
 
         self.control_tab = ttk.Frame(notebook, padding=8)
+        self.identity_tab = ttk.Frame(notebook, padding=8)
         self.message_tab = ttk.Frame(notebook, padding=8)
         self.peer_tab = ttk.Frame(notebook, padding=8)
         self.service_tab = ttk.Frame(notebook, padding=8)
         notebook.add(self.control_tab, text="控制")
+        notebook.add(self.identity_tab, text="身份")
         notebook.add(self.message_tab, text="消息")
         notebook.add(self.peer_tab, text="发现设备")
         notebook.add(self.service_tab, text="GATT")
 
         self._build_control_tab()
+        self._build_identity_tab()
         self._build_message_tab()
         self._build_peer_tab()
         self._build_service_tab()
@@ -363,6 +368,36 @@ class PendantDebugApp:
         info_frame.pack(fill=tk.BOTH, expand=True)
         self.info_text = scrolledtext.ScrolledText(info_frame, height=14, wrap=tk.WORD)
         self.info_text.pack(fill=tk.BOTH, expand=True)
+
+    def _default_terminal_sn(self) -> str:
+        today = datetime.date.today()
+        return f"0x{today.year % 100:02d}{today.month:02d}{today.day:02d}01"
+
+    def _build_identity_tab(self) -> None:
+        editor = ttk.LabelFrame(self.identity_tab, text="唯一识别码", padding=8)
+        editor.pack(fill=tk.X)
+        self.identity_product = self._entry(editor, "产品序列", "0x50444E54", 0)
+        self.identity_terminal = self._entry(editor, "终端序列", self._default_terminal_sn(), 2)
+        self.identity_random = self._entry(editor, "随机值", f"0x{random.getrandbits(32):08X}", 4)
+        self.identity_reserved = self._entry(editor, "保留", "0x00000000", 6)
+
+        buttons = ttk.Frame(self.identity_tab)
+        buttons.pack(fill=tk.X, pady=8)
+        for text, command in [
+            ("生成随机值", self._generate_identity_random),
+            ("读取身份", lambda: self._send_empty(proto.CMD_GET_IDENTITY)),
+            ("写入身份", lambda: self._send_identity_write(False)),
+            ("写入并锁定", lambda: self._send_identity_write(True)),
+            ("锁定身份", self._send_identity_lock),
+            ("工厂信息", lambda: self._send_empty(proto.CMD_GET_FACTORY_INFO)),
+            ("工厂自检", self._send_factory_test),
+        ]:
+            ttk.Button(buttons, text=text, command=command).pack(side=tk.LEFT, padx=(0, 6))
+
+        result = ttk.LabelFrame(self.identity_tab, text="身份与工厂信息", padding=8)
+        result.pack(fill=tk.BOTH, expand=True)
+        self.identity_text = scrolledtext.ScrolledText(result, height=18, wrap=tk.WORD)
+        self.identity_text.pack(fill=tk.BOTH, expand=True)
 
     def _build_message_tab(self) -> None:
         self.log_text = scrolledtext.ScrolledText(self.message_tab, wrap=tk.WORD)
@@ -442,6 +477,50 @@ class PendantDebugApp:
         self.worker.send_command(proto.CMD_SET_RSSI_CONFIG, payload)
         self._log(f"TX SET_RSSI_CONFIG t1={t1}, t2={t2}, t3={t3}, tin={tin}, tout={tout}")
 
+    def _parse_u32_entry(self, entry: ttk.Entry) -> int:
+        text = entry.var.get().strip()  # type: ignore[attr-defined]
+        value = int(text, 0)
+        if value < 0 or value > 0xFFFFFFFF:
+            raise ValueError(f"{text} 超出 u32 范围")
+        return value
+
+    def _build_identity_payload(self, lock_after_write: bool) -> bytes:
+        product_sn = self._parse_u32_entry(self.identity_product)
+        terminal_sn = self._parse_u32_entry(self.identity_terminal)
+        random_value = self._parse_u32_entry(self.identity_random)
+        reserved = self._parse_u32_entry(self.identity_reserved)
+        unique_id = proto.build_unique_id(product_sn, terminal_sn, random_value, reserved)
+        return proto.make_write_identity_payload(unique_id, lock_after_write)
+
+    def _generate_identity_random(self) -> None:
+        self.identity_random.var.set(f"0x{random.getrandbits(32):08X}")  # type: ignore[attr-defined]
+        self.identity_terminal.var.set(self._default_terminal_sn())  # type: ignore[attr-defined]
+
+    def _send_identity_write(self, lock_after_write: bool) -> None:
+        if lock_after_write:
+            ok = messagebox.askyesno("确认锁定", "写入并锁定后，当前固件不会再允许改写唯一识别码。继续吗？")
+            if not ok:
+                return
+        try:
+            payload = self._build_identity_payload(lock_after_write)
+        except Exception as exc:
+            messagebox.showerror("身份参数错误", str(exc))
+            return
+        self.worker.send_command(proto.CMD_WRITE_IDENTITY, payload)
+        self._log("TX WRITE_IDENTITY lock=" + ("1" if lock_after_write else "0"))
+
+    def _send_identity_lock(self) -> None:
+        ok = messagebox.askyesno("确认锁定", "锁定后，当前固件不会再允许改写唯一识别码。继续吗？")
+        if not ok:
+            return
+        self.worker.send_command(proto.CMD_LOCK_IDENTITY)
+        self._log("TX LOCK_IDENTITY")
+
+    def _send_factory_test(self) -> None:
+        payload = struct.pack("<I", 0xFFFFFFFF)
+        self.worker.send_command(proto.CMD_RUN_FACTORY_TEST, payload)
+        self._log("TX RUN_FACTORY_TEST mask=0xFFFFFFFF")
+
     def _send_raw(self) -> None:
         text = self.raw_var.get().replace("0x", "").replace(",", " ").replace(";", " ")
         try:
@@ -510,6 +589,20 @@ class PendantDebugApp:
                 self._update_peer_table(proto.parse_peer_table(message.payload))
             if message.cmd == proto.CMD_GET_FLASH_MAP and message.status == 0:
                 self._append_info(self._format_flash_map(proto.parse_flash_map(message.payload)))
+            if message.cmd in (proto.CMD_GET_IDENTITY, proto.CMD_WRITE_IDENTITY, proto.CMD_LOCK_IDENTITY):
+                if message.status == 0:
+                    info = proto.parse_identity_info(message.payload)
+                    self._set_identity_fields(info)
+                    self._append_identity(self._format_identity(info))
+                else:
+                    self._append_identity(summary)
+            if message.cmd == proto.CMD_GET_FACTORY_INFO:
+                if message.status == 0:
+                    self._append_identity(self._format_factory(proto.parse_factory_info(message.payload)))
+                else:
+                    self._append_identity(summary)
+            if message.cmd == proto.CMD_RUN_FACTORY_TEST:
+                self._append_identity(summary)
             return
 
         if message.frame_type == proto.TYPE_LOG:
@@ -559,6 +652,38 @@ class PendantDebugApp:
             lines.append(f"  {part['name']}: addr=0x{part['addr']:X}, size=0x{part['size']:X}")
         return "\n".join(lines)
 
+    def _format_identity(self, info: dict) -> str:
+        return "\n".join(
+            [
+                "Identity",
+                f"  flags={info['flags_text']}, crc=0x{info['crc16']:04X}",
+                f"  unique_id={info['unique_id']}",
+                f"  product=0x{info['product_sn']:08X}, terminal=0x{info['terminal_sn']:08X}, "
+                f"random=0x{info['random']:08X}, reserved=0x{info['reserved']:08X}",
+                f"  short_id=0x{info['short_id']:08X}",
+                f"  eid={info['eid']}",
+            ]
+        )
+
+    def _set_identity_fields(self, info: dict) -> None:
+        self.identity_product.var.set(f"0x{info['product_sn']:08X}")  # type: ignore[attr-defined]
+        self.identity_terminal.var.set(f"0x{info['terminal_sn']:08X}")  # type: ignore[attr-defined]
+        self.identity_random.var.set(f"0x{info['random']:08X}")  # type: ignore[attr-defined]
+        self.identity_reserved.var.set(f"0x{info['reserved']:08X}")  # type: ignore[attr-defined]
+
+    def _format_factory(self, info: dict) -> str:
+        return "\n".join(
+            [
+                "Factory",
+                f"  flags={info['flags_text']}, crc=0x{info['crc16']:04X}",
+                f"  writes={info['write_count']}, locks={info['lock_count']}, last_error={info['last_error']}",
+                f"  test_mask=0x{info['test_mask']:08X}, result=0x{info['result_mask']:08X}",
+                f"  last_unique_id={info['last_unique_id']}",
+                f"  last_product=0x{info['last_product_sn']:08X}, last_terminal=0x{info['last_terminal_sn']:08X}, "
+                f"last_random=0x{info['last_random']:08X}",
+            ]
+        )
+
     def _set_text(self, widget: scrolledtext.ScrolledText, text: str) -> None:
         widget.configure(state=tk.NORMAL)
         widget.delete("1.0", tk.END)
@@ -568,6 +693,10 @@ class PendantDebugApp:
     def _append_info(self, text: str) -> None:
         self.info_text.insert(tk.END, f"[{now_text()}] {text}\n")
         self.info_text.see(tk.END)
+
+    def _append_identity(self, text: str) -> None:
+        self.identity_text.insert(tk.END, f"[{now_text()}] {text}\n")
+        self.identity_text.see(tk.END)
 
     def _log(self, text: str) -> None:
         self.log_text.insert(tk.END, f"[{now_text()}] {text}\n")

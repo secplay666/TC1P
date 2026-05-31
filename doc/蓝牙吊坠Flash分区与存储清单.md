@@ -84,7 +84,7 @@ app_base_addr      = sdk_reserved_start - app_total_size
 | --- | ---: | ---: | --- |
 | `magic` | `0x0000` | 4 | 固定 `0x49445050` |
 | `version` | `0x0004` | 1 | 当前 `1` |
-| `locked` | `0x0005` | 1 | 预留，后续用于出厂锁定 |
+| `locked` | `0x0005` | 1 | 出厂锁定标志，`1` 表示禁止再次写入唯一识别码 |
 | `crc16` | `0x0006` | 2 | `unique_id` CRC16 |
 | `unique_id` | `0x0008` | 16 | 128bit 唯一识别码 |
 
@@ -140,19 +140,28 @@ app_base_addr      = sdk_reserved_start - app_total_size
 
 ### 4.5 Factory 分区
 
-当前未写入业务数据，整区预留。
+起始偏移：`0x0000`
 
-计划用途：
+当前记录结构：
 
-- 产测状态。
-- 产测结果位图。
-- 身份写入批次。
-- 出厂锁定状态。
-- 硬件批次或工装版本。
+| 字段 | 偏移 | 大小 | 说明 |
+| --- | ---: | ---: | --- |
+| `magic` | `0x0000` | 4 | 固定 `0x46544350` |
+| `version` | `0x0004` | 1 | 当前 `1` |
+| `flags` | `0x0005` | 1 | bit0 identity_written, bit1 identity_locked, bit2 self_test_pass |
+| `crc16` | `0x0006` | 2 | Factory Record CRC16，计算时该字段置 0 |
+| `test_mask` | `0x0008` | 4 | 最近一次工厂自检请求 mask |
+| `result_mask` | `0x000C` | 4 | 最近一次工厂自检结果 mask |
+| `write_count` | `0x0010` | 4 | 身份写入次数 |
+| `lock_count` | `0x0014` | 4 | 身份锁定次数 |
+| `last_error` | `0x0018` | 4 | 最近一次工厂操作错误码，取 `app_status_t` |
+| `last_unique_id` | `0x001C` | 16 | 最近一次成功写入或锁定的唯一识别码 |
+
+当前有效记录大小：44 字节。其余空间预留。
 
 ### 4.6 当前记录绝对地址清单
 
-应用层当前会实际读写 `Identity Record` 和 `Config Record`。`Bond`、`Event Log`、`Factory` 是整扇区预留，当前不会写入业务数据。
+应用层当前会实际读写 `Identity Record`、`Config Record` 和 `Factory Record`。`Bond`、`Event Log` 是整扇区预留，当前不会写入业务数据。
 
 #### 512KB Flash
 
@@ -164,7 +173,8 @@ app_base_addr      = sdk_reserved_start - app_total_size
 | Config 分区剩余预留 | `0x7001C` | `0x70FFF` | 4068B | 预留 |
 | Bond 分区 | `0x71000` | `0x71FFF` | 4KB | 预留 |
 | Event Log 分区 | `0x72000` | `0x72FFF` | 4KB | 预留 |
-| Factory 分区 | `0x73000` | `0x73FFF` | 4KB | 预留 |
+| Factory Record | `0x73000` | `0x7302B` | 44B | 已实现读写 |
+| Factory 分区剩余预留 | `0x7302C` | `0x73FFF` | 4052B | 预留 |
 
 #### 1MB Flash
 
@@ -176,7 +186,8 @@ app_base_addr      = sdk_reserved_start - app_total_size
 | Config 分区剩余预留 | `0xF801C` | `0xF8FFF` | 4068B | 预留 |
 | Bond 分区 | `0xF9000` | `0xF9FFF` | 4KB | 预留 |
 | Event Log 分区 | `0xFA000` | `0xFAFFF` | 4KB | 预留 |
-| Factory 分区 | `0xFB000` | `0xFBFFF` | 4KB | 预留 |
+| Factory Record | `0xFB000` | `0xFB02B` | 44B | 已实现读写 |
+| Factory 分区剩余预留 | `0xFB02C` | `0xFBFFF` | 4052B | 预留 |
 
 #### 2MB Flash
 
@@ -188,7 +199,8 @@ app_base_addr      = sdk_reserved_start - app_total_size
 | Config 分区剩余预留 | `0x1F801C` | `0x1F8FFF` | 4068B | 预留 |
 | Bond 分区 | `0x1F9000` | `0x1F9FFF` | 4KB | 预留 |
 | Event Log 分区 | `0x1FA000` | `0x1FAFFF` | 4KB | 预留 |
-| Factory 分区 | `0x1FB000` | `0x1FBFFF` | 4KB | 预留 |
+| Factory Record | `0x1FB000` | `0x1FB02B` | 44B | 已实现读写 |
+| Factory 分区剩余预留 | `0x1FB02C` | `0x1FBFFF` | 4052B | 预留 |
 
 ## 5. SDK 数据记录清单
 
@@ -225,8 +237,8 @@ SDK 使用 `flash_sector_master_pairing`。512KB Flash 下地址为 `0x78000`；
 
 - 低电压禁止写 Flash 的策略尚未接入真实电池采样，量产前必须补齐。
 - Flash 写保护策略尚未按最终固件和分区重新设计。
-- Identity 分区的 `locked` 字段已预留，但唯一识别码烧录和锁定流程还未完成。
-- Event Log、Factory、Bond 分区目前只是保留，还没有日志格式和磨损均衡策略。
+- Identity 分区支持通过调试通道写入和锁定，但量产权限控制、工装授权和防误操作流程还未定版。
+- Event Log、Bond 分区目前只是保留，还没有日志格式和磨损均衡策略。
 
 ## 7. 调试读取方式
 

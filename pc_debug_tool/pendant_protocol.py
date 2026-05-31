@@ -29,6 +29,11 @@ CMD_LOG_ENABLE = 0x07
 CMD_DEBUG_RESET_STATS = 0x08
 CMD_ENTER_SLEEP = 0x09
 CMD_GET_FLASH_MAP = 0x0A
+CMD_GET_IDENTITY = 0x0B
+CMD_WRITE_IDENTITY = 0x0C
+CMD_LOCK_IDENTITY = 0x0D
+CMD_GET_FACTORY_INFO = 0x0E
+CMD_RUN_FACTORY_TEST = 0x0F
 
 EVENT_PEER_LEVEL = 0x81
 EVENT_SYSTEM = 0x82
@@ -45,6 +50,11 @@ CMD_NAMES = {
     CMD_DEBUG_RESET_STATS: "DEBUG_RESET_STATS",
     CMD_ENTER_SLEEP: "ENTER_SLEEP",
     CMD_GET_FLASH_MAP: "GET_FLASH_MAP",
+    CMD_GET_IDENTITY: "GET_IDENTITY",
+    CMD_WRITE_IDENTITY: "WRITE_IDENTITY",
+    CMD_LOCK_IDENTITY: "LOCK_IDENTITY",
+    CMD_GET_FACTORY_INFO: "GET_FACTORY_INFO",
+    CMD_RUN_FACTORY_TEST: "RUN_FACTORY_TEST",
 }
 
 STATUS_NAMES = {
@@ -55,6 +65,9 @@ STATUS_NAMES = {
     0x04: "ERR_UNSUPPORTED",
     0x05: "ERR_CRC",
     0x06: "ERR_NO_MEM",
+    0x07: "ERR_PERMISSION",
+    0x08: "ERR_NOT_FOUND",
+    0x09: "ERR_FLASH",
 }
 
 STATE_NAMES = {
@@ -81,6 +94,19 @@ FLASH_PART_NAMES = {
     2: "Bond",
     3: "Event Log",
     4: "Factory",
+}
+
+IDENTITY_FLAGS = {
+    0x01: "PRESENT",
+    0x02: "LOCKED",
+    0x04: "DEV_FALLBACK",
+    0x08: "VALID",
+}
+
+FACTORY_FLAGS = {
+    0x01: "IDENTITY_WRITTEN",
+    0x02: "IDENTITY_LOCKED",
+    0x04: "SELF_TEST_PASS",
 }
 
 
@@ -131,6 +157,11 @@ def u32le(data: bytes, offset: int = 0) -> int:
 
 def hex_bytes(data: bytes, sep: str = " ") -> str:
     return sep.join(f"{b:02X}" for b in data)
+
+
+def flag_names(value: int, names: dict[int, str]) -> str:
+    flags = [name for bit, name in names.items() if value & bit]
+    return "|".join(flags) if flags else "0"
 
 
 def encode_message(frame_type: int, seq: int, cmd: int, status: int = 0, payload: bytes = b"") -> list[bytes]:
@@ -234,6 +265,28 @@ def make_motor_test(seq: int, pattern: int) -> list[bytes]:
 def make_rssi_config(seq: int, t1: int, t2: int, t3: int, tin_ms: int, tout_ms: int) -> list[bytes]:
     payload = struct.pack("<bbbHH", t1, t2, t3, tin_ms, tout_ms)
     return encode_message(TYPE_CMD, seq, CMD_SET_RSSI_CONFIG, 0, payload)
+
+
+def build_unique_id(product_sn: int, terminal_sn: int, random_value: int, reserved: int = 0) -> bytes:
+    return struct.pack("<IIII", product_sn & 0xFFFFFFFF, terminal_sn & 0xFFFFFFFF, random_value & 0xFFFFFFFF, reserved & 0xFFFFFFFF)
+
+
+def parse_unique_id(unique_id: bytes) -> dict:
+    if len(unique_id) != 16:
+        raise ValueError("unique id must be 16 bytes")
+    return {
+        "raw": unique_id.hex().upper(),
+        "product_sn": u32le(unique_id, 0),
+        "terminal_sn": u32le(unique_id, 4),
+        "random": u32le(unique_id, 8),
+        "reserved": u32le(unique_id, 12),
+    }
+
+
+def make_write_identity_payload(unique_id: bytes, lock_after_write: bool = False) -> bytes:
+    if len(unique_id) != 16:
+        raise ValueError("unique id must be 16 bytes")
+    return bytes([1 if lock_after_write else 0]) + unique_id
 
 
 def parse_device_info(payload: bytes) -> dict:
@@ -344,6 +397,51 @@ def parse_flash_map(payload: bytes) -> dict:
     return info
 
 
+def parse_identity_info(payload: bytes) -> dict:
+    if len(payload) < 56:
+        raise ValueError("identity payload too short")
+    unique_id = payload[4:20]
+    parsed = parse_unique_id(unique_id)
+    flags = payload[1]
+    return {
+        "version": payload[0],
+        "flags": flags,
+        "flags_text": flag_names(flags, IDENTITY_FLAGS),
+        "crc16": u16le(payload, 2),
+        "unique_id": parsed["raw"],
+        "product_sn": u32le(payload, 20),
+        "terminal_sn": u32le(payload, 24),
+        "random": u32le(payload, 28),
+        "reserved": u32le(payload, 32),
+        "short_id": u32le(payload, 36),
+        "eid": payload[40:56].hex().upper(),
+    }
+
+
+def parse_factory_info(payload: bytes) -> dict:
+    if len(payload) < 40:
+        raise ValueError("factory info payload too short")
+    flags = payload[1]
+    unique_id = payload[24:40]
+    parsed = parse_unique_id(unique_id)
+    return {
+        "version": payload[0],
+        "flags": flags,
+        "flags_text": flag_names(flags, FACTORY_FLAGS),
+        "crc16": u16le(payload, 2),
+        "write_count": u32le(payload, 4),
+        "lock_count": u32le(payload, 8),
+        "test_mask": u32le(payload, 12),
+        "result_mask": u32le(payload, 16),
+        "last_error": u32le(payload, 20),
+        "last_unique_id": parsed["raw"],
+        "last_product_sn": parsed["product_sn"],
+        "last_terminal_sn": parsed["terminal_sn"],
+        "last_random": parsed["random"],
+        "last_reserved": parsed["reserved"],
+    }
+
+
 def parse_log(payload: bytes) -> dict:
     if len(payload) < 4:
         raise ValueError("log payload too short")
@@ -407,6 +505,25 @@ def format_response(message: HostMessage) -> str:
             return (
                 f"{name}: mid=0x{info['flash_mid']:08X}, size={info['flash_size']} bytes, "
                 f"app_base=0x{info['app_base_addr']:X}, reserved=0x{info['sdk_reserved_start']:X}"
+            )
+        if message.cmd in (CMD_GET_IDENTITY, CMD_WRITE_IDENTITY, CMD_LOCK_IDENTITY):
+            info = parse_identity_info(message.payload)
+            return (
+                f"{name}: flags={info['flags_text']}, product=0x{info['product_sn']:08X}, "
+                f"terminal=0x{info['terminal_sn']:08X}, short_id=0x{info['short_id']:08X}"
+            )
+        if message.cmd == CMD_GET_FACTORY_INFO:
+            info = parse_factory_info(message.payload)
+            return (
+                f"{name}: flags={info['flags_text']}, writes={info['write_count']}, "
+                f"locks={info['lock_count']}, last_error={info['last_error']}"
+            )
+        if message.cmd == CMD_RUN_FACTORY_TEST:
+            if len(message.payload) < 9:
+                raise ValueError("factory test payload too short")
+            return (
+                f"{name}: test_mask=0x{u32le(message.payload, 1):08X}, "
+                f"result=0x{u32le(message.payload, 5):08X}"
             )
     except Exception as exc:
         return f"{name}: parse error: {exc}; raw={hex_bytes(message.payload)}"

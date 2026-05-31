@@ -8,6 +8,7 @@
 #include "../charge/app_charge.h"
 #include "../config/app_config_store.h"
 #include "../storage/app_storage.h"
+#include "../factory/app_factory.h"
 #include "../adv_scheduler/app_adv_scheduler.h"
 #include "../peer_table/app_peer_table.h"
 #include "../motor/app_motor.h"
@@ -55,6 +56,11 @@ static u16 rd16(const u8 *p)
     return (u16)p[0] | ((u16)p[1] << 8);
 }
 
+static u32 rd32(const u8 *p)
+{
+    return ((u32)p[0]) | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
 static u8 host_status_from_app(app_status_t st)
 {
     switch (st) {
@@ -70,6 +76,12 @@ static u8 host_status_from_app(app_status_t st)
         return HOST_STATUS_ERR_CRC;
     case APP_ERR_UNSUPPORTED:
         return HOST_STATUS_ERR_UNSUPPORTED;
+    case APP_ERR_PERMISSION:
+        return HOST_STATUS_ERR_PERMISSION;
+    case APP_ERR_NOT_FOUND:
+        return HOST_STATUS_ERR_NOT_FOUND;
+    case APP_ERR_FLASH:
+        return HOST_STATUS_ERR_FLASH;
     default:
         return HOST_STATUS_ERR_STATE;
     }
@@ -250,6 +262,116 @@ static void handle_get_flash_map(u8 seq)
     send_rsp(seq, HOST_CMD_GET_FLASH_MAP, HOST_STATUS_OK, s_rsp_buf, offset);
 }
 
+static u8 build_identity_payload(u8 *buf)
+{
+    const app_identity_info_t *id = app_identity_get_info();
+    app_status_t st = app_identity_self_check();
+    u8 flags = id->flags;
+
+    if (st == APP_OK) {
+        flags |= APP_IDENTITY_FLAG_VALID;
+    } else {
+        flags &= (u8)~APP_IDENTITY_FLAG_VALID;
+    }
+
+    buf[0] = 1;
+    buf[1] = flags;
+    wr16(&buf[2], id->crc16);
+    memcpy(&buf[4], id->unique_id.bytes, APP_UNIQUE_ID_LEN);
+    wr32(&buf[20], rd32(&id->unique_id.bytes[0]));
+    wr32(&buf[24], rd32(&id->unique_id.bytes[4]));
+    wr32(&buf[28], rd32(&id->unique_id.bytes[8]));
+    wr32(&buf[32], rd32(&id->unique_id.bytes[12]));
+    wr32(&buf[36], id->short_id);
+    memcpy(&buf[40], id->current_eid.bytes, APP_EID_LEN);
+    return 56;
+}
+
+static void send_identity_rsp(u8 seq, u8 cmd, app_status_t st)
+{
+    u8 len = 0;
+    if (st == APP_OK) {
+        len = build_identity_payload(s_rsp_buf);
+    }
+    send_rsp(seq, cmd, host_status_from_app(st), s_rsp_buf, len);
+}
+
+static void handle_get_identity(u8 seq)
+{
+    send_identity_rsp(seq, HOST_CMD_GET_IDENTITY, APP_OK);
+}
+
+static void handle_write_identity(u8 seq, const u8 *payload, u16 len)
+{
+    app_unique_id_t id;
+    app_status_t st;
+    u8 lock_after_write;
+
+    if (!payload || len < 17) {
+        send_rsp(seq, HOST_CMD_WRITE_IDENTITY, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
+    }
+
+    lock_after_write = payload[0] & 0x01;
+    memcpy(id.bytes, &payload[1], APP_UNIQUE_ID_LEN);
+    st = app_factory_write_unique_id(&id);
+    if (st == APP_OK && lock_after_write) {
+        st = app_factory_lock_identity();
+    }
+    if (st == APP_OK) {
+        app_adv_scheduler_request_beacon_update();
+    }
+    send_identity_rsp(seq, HOST_CMD_WRITE_IDENTITY, st);
+}
+
+static void handle_lock_identity(u8 seq)
+{
+    app_status_t st = app_factory_lock_identity();
+    if (st == APP_OK) {
+        app_adv_scheduler_request_beacon_update();
+    }
+    send_identity_rsp(seq, HOST_CMD_LOCK_IDENTITY, st);
+}
+
+static void handle_get_factory_info(u8 seq)
+{
+    app_factory_info_t info;
+    app_status_t st;
+
+    st = app_factory_get_info(&info);
+    if (st != APP_OK) {
+        send_rsp(seq, HOST_CMD_GET_FACTORY_INFO, host_status_from_app(st), 0, 0);
+        return;
+    }
+
+    s_rsp_buf[0] = info.version;
+    s_rsp_buf[1] = info.flags;
+    wr16(&s_rsp_buf[2], info.crc16);
+    wr32(&s_rsp_buf[4], info.write_count);
+    wr32(&s_rsp_buf[8], info.lock_count);
+    wr32(&s_rsp_buf[12], info.test_mask);
+    wr32(&s_rsp_buf[16], info.result_mask);
+    wr32(&s_rsp_buf[20], info.last_error);
+    memcpy(&s_rsp_buf[24], info.last_unique_id.bytes, APP_UNIQUE_ID_LEN);
+    send_rsp(seq, HOST_CMD_GET_FACTORY_INFO, HOST_STATUS_OK, s_rsp_buf, 40);
+}
+
+static void handle_run_factory_test(u8 seq, const u8 *payload, u16 len)
+{
+    u32 test_mask = 0xffffffff;
+    u32 result_mask = 0;
+    app_status_t st;
+
+    if (payload && len >= 4) {
+        test_mask = rd32(payload);
+    }
+    st = app_factory_run_self_test(test_mask, &result_mask);
+    s_rsp_buf[0] = 1;
+    wr32(&s_rsp_buf[1], test_mask);
+    wr32(&s_rsp_buf[5], result_mask);
+    send_rsp(seq, HOST_CMD_RUN_FACTORY_TEST, host_status_from_app(st), s_rsp_buf, st == APP_OK ? 9 : 0);
+}
+
 static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
 {
     s_cmd_count++;
@@ -283,6 +405,21 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
         break;
     case HOST_CMD_GET_FLASH_MAP:
         handle_get_flash_map(seq);
+        break;
+    case HOST_CMD_GET_IDENTITY:
+        handle_get_identity(seq);
+        break;
+    case HOST_CMD_WRITE_IDENTITY:
+        handle_write_identity(seq, payload, len);
+        break;
+    case HOST_CMD_LOCK_IDENTITY:
+        handle_lock_identity(seq);
+        break;
+    case HOST_CMD_GET_FACTORY_INFO:
+        handle_get_factory_info(seq);
+        break;
+    case HOST_CMD_RUN_FACTORY_TEST:
+        handle_run_factory_test(seq, payload, len);
         break;
     default:
         send_rsp(seq, cmd, HOST_STATUS_ERR_UNSUPPORTED, 0, 0);
