@@ -25,6 +25,7 @@
 #include "drivers.h"
 #include "stack/ble/ble.h"
 #include "application/uartinterface/uart_interface.h"
+#include "vendor/common/ble_flash.h"
 #include "app.h"
 #include "pendant/app_pendant.h"
 
@@ -38,6 +39,8 @@ _attribute_ram_code_ int main(void)
 	blc_pm_select_external_32k_crystal();
 
 	cpu_wakeup_init();
+	blc_readFlashSize_autoConfigCustomFlashSector();
+	blc_app_loadCustomizedParameters_normal();
 	rf_drv_ble_init();
 
 	gpio_init(1);

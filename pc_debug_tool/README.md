@@ -25,11 +25,12 @@ python app.py
 - 扫描 BLE 设备，优先显示 `PENDANT`。
 - 连接单个吊坠设备。
 - 自动订阅 Response / Log / Event 三个 Notify。
-- 支持当前下位机 9 个调试命令：
+- 支持当前下位机 10 个调试命令：
   - 设备信息
   - 系统状态
   - 广播帧
   - 邻近表
+  - Flash 分区
   - RSSI 参数写入
   - 马达测试
   - 日志开关

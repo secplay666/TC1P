@@ -327,6 +327,7 @@ class PendantDebugApp:
             ("系统状态", lambda: self._send_empty(proto.CMD_GET_SYSTEM_STATE)),
             ("广播帧", lambda: self._send_empty(proto.CMD_GET_ADV_FRAME)),
             ("邻近表", lambda: self._send_empty(proto.CMD_GET_PEER_TABLE)),
+            ("Flash 分区", lambda: self._send_empty(proto.CMD_GET_FLASH_MAP)),
             ("清统计", lambda: self._send_empty(proto.CMD_DEBUG_RESET_STATS)),
             ("进入休眠", lambda: self._send_empty(proto.CMD_ENTER_SLEEP)),
         ]
@@ -507,6 +508,8 @@ class PendantDebugApp:
             self._append_info(summary)
             if message.cmd == proto.CMD_GET_PEER_TABLE and message.status == 0:
                 self._update_peer_table(proto.parse_peer_table(message.payload))
+            if message.cmd == proto.CMD_GET_FLASH_MAP and message.status == 0:
+                self._append_info(self._format_flash_map(proto.parse_flash_map(message.payload)))
             return
 
         if message.frame_type == proto.TYPE_LOG:
@@ -542,6 +545,19 @@ class PendantDebugApp:
                     f"0x{peer['flags']:02X}",
                 ),
             )
+
+    def _format_flash_map(self, info: dict) -> str:
+        lines = [
+            "Flash Map",
+            f"  mid=0x{info['flash_mid']:08X}, vendor=0x{info['flash_vendor']:08X}, size={info['flash_size']} bytes",
+            f"  sdk_reserved_start=0x{info['sdk_reserved_start']:X}",
+            f"  sdk_mac=0x{info['sdk_mac_addr']:X}, sdk_calibration=0x{info['sdk_calibration_addr']:X}, "
+            f"sdk_smp=0x{info['sdk_smp_pairing_addr']:X}, sdk_master=0x{info['sdk_master_pairing_addr']:X}",
+            f"  app_base=0x{info['app_base_addr']:X}, app_total=0x{info['app_total_size']:X}",
+        ]
+        for part in info["parts"]:
+            lines.append(f"  {part['name']}: addr=0x{part['addr']:X}, size=0x{part['size']:X}")
+        return "\n".join(lines)
 
     def _set_text(self, widget: scrolledtext.ScrolledText, text: str) -> None:
         widget.configure(state=tk.NORMAL)

@@ -28,6 +28,7 @@ CMD_MOTOR_TEST = 0x06
 CMD_LOG_ENABLE = 0x07
 CMD_DEBUG_RESET_STATS = 0x08
 CMD_ENTER_SLEEP = 0x09
+CMD_GET_FLASH_MAP = 0x0A
 
 EVENT_PEER_LEVEL = 0x81
 EVENT_SYSTEM = 0x82
@@ -43,6 +44,7 @@ CMD_NAMES = {
     CMD_LOG_ENABLE: "LOG_ENABLE",
     CMD_DEBUG_RESET_STATS: "DEBUG_RESET_STATS",
     CMD_ENTER_SLEEP: "ENTER_SLEEP",
+    CMD_GET_FLASH_MAP: "GET_FLASH_MAP",
 }
 
 STATUS_NAMES = {
@@ -71,6 +73,14 @@ PEER_LEVEL_NAMES = {
     2: "S2",
     3: "S3",
     4: "LOST",
+}
+
+FLASH_PART_NAMES = {
+    0: "Identity",
+    1: "Config",
+    2: "Bond",
+    3: "Event Log",
+    4: "Factory",
 }
 
 
@@ -294,6 +304,46 @@ def parse_peer_table(payload: bytes) -> list[dict]:
     return peers
 
 
+def parse_flash_map(payload: bytes) -> dict:
+    if len(payload) < 37:
+        raise ValueError("flash map payload too short")
+
+    has_master_pairing = len(payload) >= 41 and len(payload) >= 41 + payload[40] * 9
+    app_base_offset = 32 if has_master_pairing else 28
+    app_total_offset = 36 if has_master_pairing else 32
+    count_offset = 40 if has_master_pairing else 36
+
+    info = {
+        "flash_mid": u32le(payload, 0),
+        "flash_vendor": u32le(payload, 4),
+        "flash_size": u32le(payload, 8),
+        "sdk_reserved_start": u32le(payload, 12),
+        "sdk_mac_addr": u32le(payload, 16),
+        "sdk_calibration_addr": u32le(payload, 20),
+        "sdk_smp_pairing_addr": u32le(payload, 24),
+        "sdk_master_pairing_addr": u32le(payload, 28) if has_master_pairing else 0,
+        "app_base_addr": u32le(payload, app_base_offset),
+        "app_total_size": u32le(payload, app_total_offset),
+        "parts": [],
+    }
+    count = payload[count_offset]
+    offset = count_offset + 1
+    for _ in range(count):
+        if offset + 9 > len(payload):
+            break
+        part = payload[offset]
+        info["parts"].append(
+            {
+                "part": part,
+                "name": FLASH_PART_NAMES.get(part, f"Part {part}"),
+                "addr": u32le(payload, offset + 1),
+                "size": u32le(payload, offset + 5),
+            }
+        )
+        offset += 9
+    return info
+
+
 def parse_log(payload: bytes) -> dict:
     if len(payload) < 4:
         raise ValueError("log payload too short")
@@ -352,6 +402,12 @@ def format_response(message: HostMessage) -> str:
             return f"{name}: {len(peers)} peer(s)"
         if message.cmd == CMD_GET_ADV_FRAME:
             return f"{name}: {len(message.payload)} bytes, {hex_bytes(message.payload)}"
+        if message.cmd == CMD_GET_FLASH_MAP:
+            info = parse_flash_map(message.payload)
+            return (
+                f"{name}: mid=0x{info['flash_mid']:08X}, size={info['flash_size']} bytes, "
+                f"app_base=0x{info['app_base_addr']:X}, reserved=0x{info['sdk_reserved_start']:X}"
+            )
     except Exception as exc:
         return f"{name}: parse error: {exc}; raw={hex_bytes(message.payload)}"
 

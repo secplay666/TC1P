@@ -59,6 +59,33 @@
 | LOG_ENABLE | `0x07` | App -> 设备 | `u8 enable` |
 | DEBUG_RESET_STATS | `0x08` | App -> 设备 | 空 |
 | ENTER_SLEEP | `0x09` | App -> 设备 | 空 |
+| GET_FLASH_MAP | `0x0A` | App -> 设备 | 空 |
+
+### 4.1 GET_FLASH_MAP 响应 Payload
+
+多字节字段为 little-endian。
+
+| 偏移 | 字段 | 长度 | 说明 |
+| ---: | --- | ---: | --- |
+| `0x00` | `flash_mid` | 4 | Flash MID 原始值 |
+| `0x04` | `flash_vendor` | 4 | Flash 厂商值 |
+| `0x08` | `flash_size` | 4 | Flash 容量，单位 byte |
+| `0x0C` | `sdk_reserved_start` | 4 | SDK 保留区最小起始地址 |
+| `0x10` | `sdk_mac_addr` | 4 | SDK MAC 分区起始地址 |
+| `0x14` | `sdk_calibration_addr` | 4 | SDK 校准分区起始地址 |
+| `0x18` | `sdk_smp_pairing_addr` | 4 | SDK SMP Pairing 分区起始地址 |
+| `0x1C` | `sdk_master_pairing_addr` | 4 | SDK Master Pairing 分区起始地址 |
+| `0x20` | `app_base_addr` | 4 | Pendant 应用分区起始地址 |
+| `0x24` | `app_total_size` | 4 | Pendant 应用分区总大小 |
+| `0x28` | `part_count` | 1 | 后续分区条目数量 |
+
+每个分区条目长度 9 字节，连续排列：
+
+| 偏移 | 字段 | 长度 | 说明 |
+| ---: | --- | ---: | --- |
+| `+0` | `part_id` | 1 | `0` Identity, `1` Config, `2` Bond, `3` Event Log, `4` Factory |
+| `+1` | `addr` | 4 | 分区起始地址 |
+| `+5` | `size` | 4 | 分区大小 |
 
 ## 5. 当前事件
 
@@ -67,4 +94,3 @@
 | PEER_LEVEL | `0x81` | `eid[16], old_level, new_level, rssi_avg, reason` |
 | SYSTEM | `0x82` | 预留 |
 | ERROR | `0x83` | `u16 error_code, u16 detail` |
-

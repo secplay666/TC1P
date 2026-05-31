@@ -7,6 +7,7 @@
 #include "../battery/app_battery.h"
 #include "../charge/app_charge.h"
 #include "../config/app_config_store.h"
+#include "../storage/app_storage.h"
 #include "../adv_scheduler/app_adv_scheduler.h"
 #include "../peer_table/app_peer_table.h"
 #include "../motor/app_motor.h"
@@ -216,6 +217,39 @@ static void handle_enter_sleep(u8 seq)
     app_system_request_sleep(PM_SLEEP_REASON_APP_IDLE);
 }
 
+static void handle_get_flash_map(u8 seq)
+{
+    app_storage_flash_info_t info;
+    const app_storage_partition_t *part;
+    u8 i;
+    u8 offset = 0;
+
+    app_storage_get_flash_info(&info);
+    wr32(&s_rsp_buf[offset], info.flash_mid); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.flash_vendor); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.flash_size); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.sdk_reserved_start); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.sdk_mac_addr); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.sdk_calibration_addr); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.sdk_smp_pairing_addr); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.sdk_master_pairing_addr); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.app_base_addr); offset = (u8)(offset + 4);
+    wr32(&s_rsp_buf[offset], info.app_total_size); offset = (u8)(offset + 4);
+    s_rsp_buf[offset++] = APP_STORAGE_PART_COUNT;
+
+    for (i = 0; i < APP_STORAGE_PART_COUNT; i++) {
+        part = app_storage_get_partition((app_storage_part_t)i);
+        if (!part || offset + 9 > APP_HOST_MESSAGE_MAX_LEN) {
+            break;
+        }
+        s_rsp_buf[offset++] = (u8)part->part;
+        wr32(&s_rsp_buf[offset], part->addr); offset = (u8)(offset + 4);
+        wr32(&s_rsp_buf[offset], part->size); offset = (u8)(offset + 4);
+    }
+
+    send_rsp(seq, HOST_CMD_GET_FLASH_MAP, HOST_STATUS_OK, s_rsp_buf, offset);
+}
+
 static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
 {
     s_cmd_count++;
@@ -246,6 +280,9 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
         break;
     case HOST_CMD_ENTER_SLEEP:
         handle_enter_sleep(seq);
+        break;
+    case HOST_CMD_GET_FLASH_MAP:
+        handle_get_flash_map(seq);
         break;
     default:
         send_rsp(seq, cmd, HOST_STATUS_ERR_UNSUPPORTED, 0, 0);

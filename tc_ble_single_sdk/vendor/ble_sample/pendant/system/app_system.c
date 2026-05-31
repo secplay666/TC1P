@@ -2,6 +2,7 @@
 #include "../board/app_board.h"
 #include "../event/app_event.h"
 #include "../diag/app_diag.h"
+#include "../storage/app_storage.h"
 #include "../config/app_config_store.h"
 #include "../identity/app_identity.h"
 #include "../ble/app_ble.h"
@@ -25,6 +26,11 @@ static app_status_t app_system_self_check(void)
     app_status_t st;
 
     st = app_board_self_check();
+    if (st != APP_OK) {
+        return st;
+    }
+
+    st = app_storage_self_check();
     if (st != APP_OK) {
         return st;
     }

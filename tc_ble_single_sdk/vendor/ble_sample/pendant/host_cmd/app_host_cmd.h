@@ -13,6 +13,7 @@ typedef enum {
     HOST_CMD_LOG_ENABLE = 0x07,
     HOST_CMD_DEBUG_RESET_STATS = 0x08,
     HOST_CMD_ENTER_SLEEP = 0x09,
+    HOST_CMD_GET_FLASH_MAP = 0x0A,
 } app_host_cmd_id_t;
 
 typedef enum {
