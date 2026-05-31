@@ -1,4 +1,5 @@
 #include "tl_common.h"
+#include "pendant/app_pendant.h"
 #include "drivers.h"
 #include "stack/ble/ble.h"
 
@@ -19,6 +20,9 @@
 /* must be: (2^n), (power of 2); at least 8; recommended value: 8, 16, 32, other value not allowed. */
 #define TX_FIFO_NUM		16
 #define MAC_CACHE_SIZE 32
+#define	APP_ADV_SETS_NUMBER						1
+#define APP_MAX_LENGTH_ADV_DATA					240
+#define APP_MAX_LENGTH_SCAN_RESPONSE_DATA		240
 
 //static void blm_le_adv_report_event_handle(u8 *p);
 
@@ -41,6 +45,12 @@ _attribute_data_retention_	my_fifo_t	blt_txfifo = {
 												0,
 												0,
 												blt_txfifo_b,};
+
+u8  app_adv_set_param[ADV_SET_PARAM_LENGTH * APP_ADV_SETS_NUMBER];
+u8	app_primary_adv_pkt[MAX_LENGTH_PRIMARY_ADV_PKT * APP_ADV_SETS_NUMBER];
+u8	app_secondary_adv_pkt[MAX_LENGTH_SECOND_ADV_PKT * APP_ADV_SETS_NUMBER];
+u8 	app_scanRspData[APP_MAX_LENGTH_SCAN_RESPONSE_DATA * APP_ADV_SETS_NUMBER];
+u8 	app_advData[APP_MAX_LENGTH_ADV_DATA * APP_ADV_SETS_NUMBER];
 
 
 static u8	tbl_advData[] = {
@@ -141,6 +151,7 @@ static int controller_event_callback (u32 h, u8 *p, int n)
 			s8 rssi = 0;
 			// RSSI is present after the data according to spec
 			rssi = (s8)p[idx++];
+			app_pendant_on_adv_report(adv_data, data_len, rssi, addr);
 
 			// u_u_printf("ADV report %d: ", r);
 			// u_u_printf("evtType=0x%x ", event_type);
@@ -234,8 +245,10 @@ static int controller_event_callback (u32 h, u8 *p, int n)
 		{
 			// Skip printing for duplicate MAC
 			u8 data_len = p[idx++];
+			u8 *adv_data = &p[idx];
 			idx += data_len;
-			idx++; // skip RSSI
+			s8 rssi = (s8)p[idx++];
+			app_pendant_on_adv_report(adv_data, data_len, rssi, addr);
 		}
 	}
 }*/
@@ -254,15 +267,28 @@ void controllerInitialization(void)
 	blc_ll_initStandby_module(mac_public);		//mandatory
 	blc_ll_initAdvertising_module(mac_public); 	//legacy advertising module: mandatory for BLE slave
 	blc_ll_initScanning_module(mac_public);
+	blc_ll_initConnection_module();
+	blc_ll_initSlaveRole_module();
+	blc_ll_initExtendedAdvertising_module(app_adv_set_param, app_primary_adv_pkt, APP_ADV_SETS_NUMBER);
+	blc_ll_initExtSecondaryAdvPacketBuffer(app_secondary_adv_pkt, MAX_LENGTH_SECOND_ADV_PKT);
+	blc_ll_initExtAdvDataBuffer(app_advData, APP_MAX_LENGTH_ADV_DATA);
+	blc_ll_initExtScanRspDataBuffer(app_scanRspData, APP_MAX_LENGTH_SCAN_RESPONSE_DATA);
 
-	adv_param_status = bls_ll_setAdvParam(  ADV_INTERVAL_30MS,
+	adv_param_status = blc_ll_setExtAdvParam(ADV_HANDLE0,
+											ADV_EVT_PROP_EXTENDED_CONNECTABLE_UNDIRECTED,
 											ADV_INTERVAL_50MS,
-											ADV_TYPE_NONCONNECTABLE_UNDIRECTED,
-											OWN_ADDRESS_PUBLIC,
-											0,
-											NULL,
+											ADV_INTERVAL_50MS,
 											BLT_ENABLE_ADV_ALL,
-											ADV_FP_NONE);
+											OWN_ADDRESS_PUBLIC,
+											BLE_ADDR_PUBLIC,
+											NULL,
+											ADV_FP_NONE,
+											TX_POWER_8dBm,
+											BLE_PHY_1M,
+											0,
+											BLE_PHY_1M,
+											ADV_SID_0,
+											0);
 
 	if (adv_param_status != BLE_SUCCESS) 
 	{
@@ -271,9 +297,8 @@ void controllerInitialization(void)
 	}
 
 	blc_ll_clearResolvingList();
-	bls_ll_setAdvData( (u8 *)tbl_advData, sizeof(tbl_advData) );
-
-	bls_ll_setAdvEnable(BLC_ADV_ENABLE);  //must: set ADV enable
+	blc_ll_setExtAdvData(ADV_HANDLE0, DATA_OPER_COMPLETE, DATA_FRAGM_ALLOWED, sizeof(tbl_advData), (u8 *)tbl_advData);
+	blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, 1, ADV_HANDLE0, 0, 0);
 
 	blc_ll_addScanningInAdvState();  //add scan in ADV state
 	blc_ll_setScanParameter(SCAN_TYPE_PASSIVE,
@@ -292,7 +317,7 @@ void controllerInitialization(void)
 void updateAdvData(u8 data, u8 position)
 {
 	tbl_advData[position] = data;
-	bls_ll_setAdvData( (u8 *)tbl_advData, sizeof(tbl_advData) );
+	blc_ll_setExtAdvData(ADV_HANDLE0, DATA_OPER_COMPLETE, DATA_FRAGM_ALLOWED, sizeof(tbl_advData), (u8 *)tbl_advData);
 }
 
 //////--------------------------20260225----------------------------//////
@@ -657,6 +682,7 @@ int blm_le_adv_report_event_handle(u8 *p)
 {
 	event_adv_report_t *pa = (event_adv_report_t *)p;
 	s8 rssi = pa->data[pa->len];
+	app_pendant_on_adv_report(pa->data, pa->len, rssi, pa->mac);
 	u8 keyword [7] = {'z','h','a','o','h','u','i'};//7A 68 61 6F 68 75 69
 	u8 broadcast [6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 	enum{

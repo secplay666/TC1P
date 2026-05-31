@@ -28,6 +28,7 @@
 #include "timer.h"
 #include "application/uartinterface/uart_interface.h"
 #include "app.h"
+#include "pendant/app_pendant.h"
 
 
 static u32 tick250ms = 0;
@@ -94,6 +95,7 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 	// #endif
 
 	controllerInitialization();
+	app_pendant_init();
 
 	//---------------------iic-----------------------------//
 		    unsigned char calib_result = 0; //store empty \0
@@ -215,6 +217,7 @@ _attribute_ram_code_ int main (void)    //must run in ramcode
 		// #endif
 		// 	main_loop();
 		blt_sdk_main_loop();
+		app_pendant_poll();
 
 		if(clock_time_exceed(tick250ms, 250000))
 		{
