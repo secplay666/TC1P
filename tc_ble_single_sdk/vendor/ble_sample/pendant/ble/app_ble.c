@@ -11,9 +11,6 @@
 #define DUP_FILTER_DISABLE 0
 #endif
 
-extern void controllerInitialization(void);
-extern bool isDeviceInConnectionState(void);
-
 static app_ble_conn_info_t s_conn;
 
 void app_ble_init(void)
@@ -24,6 +21,8 @@ void app_ble_init(void)
 app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
 {
     (void)params;
+    blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, 1, ADV_HANDLE0, 0, 0);
+    blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
     return APP_OK;
 }
 
@@ -47,13 +46,15 @@ app_status_t app_ble_update_ext_adv_data(const u8 *data, u8 len)
 
 app_status_t app_ble_disconnect_app(u8 reason)
 {
-    (void)reason;
-    return APP_OK;
+    if (!s_conn.connected) {
+        return APP_OK;
+    }
+    return bls_ll_terminateConnection(reason) == BLE_SUCCESS ? APP_OK : APP_ERR_STATE;
 }
 
 u8 app_ble_is_app_connected(void)
 {
-    return isDeviceInConnectionState() ? 1 : s_conn.connected;
+    return s_conn.connected;
 }
 
 void app_ble_get_conn_info(app_ble_conn_info_t *info)
