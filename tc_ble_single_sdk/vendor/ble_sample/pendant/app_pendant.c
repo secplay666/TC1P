@@ -44,7 +44,6 @@ void app_pendant_init(void)
     app_discovery_init();
     app_scan_init();
     app_host_cmd_init();
-    app_host_gatt_init();
     app_system_init();
 }
 

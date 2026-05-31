@@ -43,8 +43,8 @@ _attribute_ram_code_ int main(void)
 	gpio_init(1);
 	clock_init(SYS_CLK_TYPE);
 
-	controllerInitialization();
 	UARTIF_uartinit();
+	controllerInitialization();
 	app_pendant_init();
 
 	irq_enable();

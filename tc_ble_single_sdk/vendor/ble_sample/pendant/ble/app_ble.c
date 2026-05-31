@@ -10,6 +10,9 @@
 #ifndef DUP_FILTER_DISABLE
 #define DUP_FILTER_DISABLE 0
 #endif
+#ifndef APP_BLE_ENABLE_DISCOVERY_SCAN
+#define APP_BLE_ENABLE_DISCOVERY_SCAN 0
+#endif
 
 static app_ble_conn_info_t s_conn;
 
@@ -22,14 +25,18 @@ app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
 {
     (void)params;
     blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, 1, ADV_HANDLE0, 0, 0);
+#if APP_BLE_ENABLE_DISCOVERY_SCAN
     blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
+#endif
     return APP_OK;
 }
 
 app_status_t app_ble_stop_adv_scan(void)
 {
     blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, 1, ADV_HANDLE0, 0, 0);
+#if APP_BLE_ENABLE_DISCOVERY_SCAN
     blc_ll_setScanEnable(BLC_SCAN_DISABLE, DUP_FILTER_DISABLE);
+#endif
     return APP_OK;
 }
 

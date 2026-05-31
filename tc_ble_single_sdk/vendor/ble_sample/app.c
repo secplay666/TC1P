@@ -1,5 +1,6 @@
 #include "tl_common.h"
 #include "pendant/app_pendant.h"
+#include "pendant/host_gatt/app_host_gatt.h"
 #include "drivers.h"
 #include "stack/ble/ble.h"
 #include "app.h"
@@ -41,6 +42,21 @@ static u8 tbl_advData[] = {
 	8, DT_COMPLETE_LOCAL_NAME, 'P', 'E', 'N', 'D', 'A', 'N', 'T',
 	2, DT_FLAGS, 0x06,
 };
+
+/*
+ * Keep discovery scan disabled during the GATT bring-up phase. The Telink stack
+ * needs extra role configuration before scan/adv can run reliably in slave
+ * connection state; enabling scan too early can make phone connection unstable.
+ */
+#ifndef APP_BLE_ENABLE_DISCOVERY_SCAN
+#define APP_BLE_ENABLE_DISCOVERY_SCAN 0
+#endif
+#ifndef BLC_SCAN_DISABLE
+#define BLC_SCAN_DISABLE 0
+#endif
+#ifndef DUP_FILTER_DISABLE
+#define DUP_FILTER_DISABLE 0
+#endif
 
 static void handle_legacy_adv_report(const u8 *p, int n)
 {
@@ -130,23 +146,10 @@ static int controller_event_callback(u32 h, u8 *p, int n)
 	if (h & HCI_FLAG_EVENT_BT_STD) {
 		u8 evt_code = h & 0xff;
 
-		if (evt_code == HCI_EVT_DISCONNECTION_COMPLETE) {
-			hci_disconnectionCompleteEvt_t *evt = (hci_disconnectionCompleteEvt_t *)p;
-			app_pendant_on_app_disconnected(evt->reason);
-		} else if (evt_code == HCI_EVT_LE_META) {
+		if (evt_code == HCI_EVT_LE_META) {
 			u8 sub_evt_code = p[0];
 
-			if (sub_evt_code == HCI_SUB_EVT_LE_CONNECTION_COMPLETE) {
-				hci_le_connectionCompleteEvt_t *evt = (hci_le_connectionCompleteEvt_t *)p;
-				if (evt->status == BLE_SUCCESS) {
-					app_pendant_on_app_connected(evt->peerAddr, evt->connHandle);
-				}
-			} else if (sub_evt_code == HCI_SUB_EVT_LE_ENHANCED_CONNECTION_COMPLETE) {
-				hci_le_enhancedConnCompleteEvt_t *evt = (hci_le_enhancedConnCompleteEvt_t *)p;
-				if (evt->status == BLE_SUCCESS) {
-					app_pendant_on_app_connected(evt->PeerAddr, evt->connHandle);
-				}
-			} else if (sub_evt_code == HCI_SUB_EVT_LE_ADVERTISING_REPORT) {
+			if (sub_evt_code == HCI_SUB_EVT_LE_ADVERTISING_REPORT) {
 				handle_legacy_adv_report(p, n);
 			} else if (sub_evt_code == HCI_SUB_EVT_LE_EXTENDED_ADVERTISING_REPORT) {
 				handle_extended_adv_report(p, n);
@@ -155,6 +158,58 @@ static int controller_event_callback(u32 h, u8 *p, int n)
 	}
 
 	return 0;
+}
+
+static int app_host_event_callback(u32 h, u8 *para, int n)
+{
+	u8 event = h & 0xff;
+
+	(void)para;
+	(void)n;
+
+	if (event == GAP_EVT_ATT_EXCHANGE_MTU) {
+		u_printf("mtu exchange event\r\n");
+	} else if (event == GAP_EVT_SMP_PAIRING_BEGIN) {
+		u_printf("pairing begin\r\n");
+	} else if (event == GAP_EVT_SMP_PAIRING_SUCCESS) {
+		u_printf("pairing success\r\n");
+	} else if (event == GAP_EVT_SMP_PAIRING_FAIL) {
+		gap_smp_pairingFailEvt_t *evt = (gap_smp_pairingFailEvt_t *)para;
+		u_printf("pairing fail, reason 0x%x\r\n", evt ? evt->reason : 0);
+	}
+
+	return 0;
+}
+
+static void task_connect(u8 e, u8 *p, int n)
+{
+	tlk_contr_evt_connect_t *evt = (tlk_contr_evt_connect_t *)p;
+
+	(void)e;
+	(void)n;
+
+#if APP_BLE_ENABLE_DISCOVERY_SCAN
+	blc_ll_setScanEnable(BLC_SCAN_DISABLE, DUP_FILTER_DISABLE);
+#endif
+
+	u_printf("[APP][EVT] connect\r\n");
+	app_pendant_on_app_connected(evt ? evt->initA : 0, BLS_CONN_HANDLE);
+}
+
+static void task_terminate(u8 e, u8 *p, int n)
+{
+	tlk_contr_evt_terminate_t *evt = (tlk_contr_evt_terminate_t *)p;
+	u8 reason = evt ? evt->terminate_reason : 0;
+
+	(void)e;
+	(void)n;
+
+	u_printf("[APP][EVT] disconnect, reason 0x%x\r\n", reason);
+	app_pendant_on_app_disconnected(reason);
+
+#if APP_BLE_ENABLE_DISCOVERY_SCAN
+	blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
+#endif
 }
 
 void controllerInitialization(void)
@@ -175,6 +230,16 @@ void controllerInitialization(void)
 	blc_ll_initExtSecondaryAdvPacketBuffer(app_secondary_adv_pkt, MAX_LENGTH_SECOND_ADV_PKT);
 	blc_ll_initExtAdvDataBuffer(app_advData, APP_MAX_LENGTH_ADV_DATA);
 	blc_ll_initExtScanRspDataBuffer(app_scanRspData, APP_MAX_LENGTH_SCAN_RESPONSE_DATA);
+	blc_ll_initChannelSelectionAlgorithm_2_feature();
+
+	app_host_gatt_init();
+	blc_gap_registerHostEventHandler(app_host_event_callback);
+	blc_gap_setEventMask(GAP_EVT_MASK_SMP_PAIRING_BEGIN |
+						  GAP_EVT_MASK_SMP_PAIRING_SUCCESS |
+						  GAP_EVT_MASK_SMP_PAIRING_FAIL |
+						  GAP_EVT_MASK_ATT_EXCHANGE_MTU);
+	bls_app_registerEventCallback(BLT_EV_FLAG_CONNECT, task_connect);
+	bls_app_registerEventCallback(BLT_EV_FLAG_TERMINATE, task_terminate);
 
 	adv_param_status = blc_ll_setExtAdvParam(ADV_HANDLE0,
 											 ADV_EVT_PROP_EXTENDED_CONNECTABLE_UNDIRECTED,
@@ -201,6 +266,7 @@ void controllerInitialization(void)
 	blc_ll_setExtAdvData(ADV_HANDLE0, DATA_OPER_COMPLETE, DATA_FRAGM_ALLOWED, sizeof(tbl_advData), tbl_advData);
 	blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, 1, ADV_HANDLE0, 0, 0);
 
+#if APP_BLE_ENABLE_DISCOVERY_SCAN
 	blc_ll_addScanningInAdvState();
 	blc_ll_setScanParameter(SCAN_TYPE_PASSIVE,
 							SCAN_INTERVAL_50MS,
@@ -208,12 +274,17 @@ void controllerInitialization(void)
 							OWN_ADDRESS_PUBLIC,
 							SCAN_FP_ALLOW_ADV_ANY);
 
-	blc_hci_setEventMask_cmd(HCI_EVT_MASK_DISCONNECTION_COMPLETE);
-	blc_hci_le_setEventMask_cmd(HCI_LE_EVT_MASK_CONNECTION_COMPLETE |
-								 HCI_LE_EVT_MASK_ENHANCED_CONNECTION_COMPLETE |
-								 HCI_LE_EVT_MASK_ADVERTISING_REPORT |
+	blc_hci_le_setEventMask_cmd(HCI_LE_EVT_MASK_ADVERTISING_REPORT |
 								 HCI_LE_EVT_MASK_EXTENDED_ADVERTISING_REPORT);
+#else
+	blc_hci_le_setEventMask_cmd(HCI_LE_EVT_MASK_ADVERTISING_REPORT |
+								 HCI_LE_EVT_MASK_EXTENDED_ADVERTISING_REPORT);
+#endif
 	blc_hci_registerControllerEventHandler(controller_event_callback);
 
+#if APP_BLE_ENABLE_DISCOVERY_SCAN
 	blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
+#endif
+
+	blc_app_checkControllerHostInitialization();
 }

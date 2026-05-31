@@ -196,12 +196,11 @@ void app_host_gatt_init(void)
     s_q_count = 0;
     s_connected = 0;
 
+    blc_gap_peripheral_init();
     blc_l2cap_register_handler(blc_l2cap_packet_receive);
+    bls_att_setAttributeTable((u8 *)s_att_table);
     blc_att_setRxMtuSize(23);
     blc_att_setServerDataPendingTime_upon_ClientCmd(0);
-    bls_att_setAttributeTable((u8 *)s_att_table);
-    blc_gap_peripheral_init();
-    blc_smp_peripheral_init();
     blc_smp_setSecurityLevel(No_Security);
 }
 
