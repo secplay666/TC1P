@@ -3,6 +3,7 @@
 #include "../peer_table/app_peer_table.h"
 #include "../event/app_event.h"
 #include "../motor/app_motor.h"
+#include "../host_cmd/app_host_cmd.h"
 #include "drivers.h"
 #include "timer.h"
 
@@ -35,6 +36,7 @@ static void notify_level_change(app_peer_record_t *peer, app_peer_level_t old_le
     app_event_post(new_level == PEER_LEVEL_NONE ? APP_EVT_PEER_LEVEL_CHANGED : APP_EVT_PEER_FOUND,
                    &event,
                    sizeof(event) <= APP_EVENT_DATA_MAX_LEN ? sizeof(event) : APP_EVENT_DATA_MAX_LEN);
+    app_host_cmd_notify_peer_level(&peer->eid, (u8)old_level, (u8)new_level, peer->rssi_avg, reason);
 
     app_peer_level_t pulse_level = new_level > old_level ? new_level : old_level;
     if (pulse_level == PEER_LEVEL_S1) {

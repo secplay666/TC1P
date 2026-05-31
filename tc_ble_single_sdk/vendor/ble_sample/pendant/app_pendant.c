@@ -17,6 +17,8 @@
 #include "peer_table/app_peer_table.h"
 #include "discovery/app_discovery.h"
 #include "scan/app_scan.h"
+#include "host_cmd/app_host_cmd.h"
+#include "host_gatt/app_host_gatt.h"
 #include "system/app_system.h"
 #include "drivers.h"
 #include "timer.h"
@@ -41,6 +43,8 @@ void app_pendant_init(void)
     app_peer_table_init();
     app_discovery_init();
     app_scan_init();
+    app_host_cmd_init();
+    app_host_gatt_init();
     app_system_init();
 }
 
@@ -50,6 +54,8 @@ void app_pendant_poll(void)
     app_ble_poll();
     app_system_poll();
     app_scan_poll();
+    app_host_cmd_poll();
+    app_host_gatt_poll();
     app_discovery_poll(now);
     app_adv_scheduler_poll();
     app_battery_poll(now);
@@ -67,9 +73,13 @@ void app_pendant_on_adv_report(const u8 *adv_data, u8 adv_len, s8 rssi, const u8
 void app_pendant_on_app_connected(const u8 *peer_addr, u16 conn_handle)
 {
     app_ble_on_connected(peer_addr, conn_handle);
+    app_host_gatt_on_connected();
+    app_host_cmd_log_text(1, "BLE", "app connected");
 }
 
 void app_pendant_on_app_disconnected(u8 reason)
 {
     app_ble_on_disconnected(reason);
+    app_host_gatt_on_disconnected();
+    (void)reason;
 }

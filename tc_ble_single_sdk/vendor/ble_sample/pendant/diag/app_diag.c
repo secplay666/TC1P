@@ -1,4 +1,5 @@
 #include "app_diag.h"
+#include "../host_cmd/app_host_cmd.h"
 #include "drivers.h"
 #include "timer.h"
 #include "application/uartinterface/uart_interface.h"
@@ -22,11 +23,13 @@ void app_diag_log_error(u16 error_code, u16 detail)
     s_last_error.detail = detail;
     s_last_error.tick = clock_time();
     u_printf("[PENDANT][ERR] code=0x%x detail=0x%x\n", error_code, detail);
+    app_host_cmd_notify_error(error_code, detail);
 }
 
 void app_diag_log_info(const char *tag, const char *msg)
 {
     u_printf("[PENDANT][%s] %s\n", tag, msg);
+    app_host_cmd_log_text(1, tag, msg);
 }
 
 void app_diag_get_last_error(app_error_record_t *record)

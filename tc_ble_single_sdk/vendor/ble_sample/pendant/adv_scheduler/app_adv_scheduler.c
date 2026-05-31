@@ -17,6 +17,10 @@ static u8 s_has_pending_frame;
 static u8 s_adv_buf[APP_ADV_FRAME_MAX_LEN];
 static u8 s_payload_buf[32];
 
+#define APP_ADV_DEBUG_NAME "PENDANT"
+#define AD_TYPE_FLAGS 0x01
+#define AD_TYPE_COMPLETE_LOCAL_NAME 0x09
+
 void app_adv_scheduler_init(void)
 {
     s_frame_seq = 0;
@@ -84,10 +88,24 @@ app_status_t app_adv_scheduler_build_next_adv_data(u8 *buf, u8 max_len, u8 *out_
     app_adv_frame_t frame;
     app_eid_t zero_eid;
     u8 payload_len;
+    u8 prefix_len;
+    u8 frame_len;
+    const u8 name_len = sizeof(APP_ADV_DEBUG_NAME) - 1;
 
     if (!buf || !out_len) {
         return APP_ERR_PARAM;
     }
+    if (max_len < (u8)(3 + 2 + name_len)) {
+        return APP_ERR_NO_MEM;
+    }
+
+    buf[0] = 2;
+    buf[1] = AD_TYPE_FLAGS;
+    buf[2] = 0x06;
+    buf[3] = (u8)(name_len + 1);
+    buf[4] = AD_TYPE_COMPLETE_LOCAL_NAME;
+    memcpy(&buf[5], APP_ADV_DEBUG_NAME, name_len);
+    prefix_len = (u8)(5 + name_len);
 
     if (s_has_pending_frame) {
         frame = s_pending_frame;
@@ -110,7 +128,11 @@ app_status_t app_adv_scheduler_build_next_adv_data(u8 *buf, u8 max_len, u8 *out_
         frame.payload_len = payload_len;
     }
 
-    return app_adv_proto_encode(&frame, buf, max_len, out_len);
+    if (app_adv_proto_encode(&frame, &buf[prefix_len], (u8)(max_len - prefix_len), &frame_len) != APP_OK) {
+        return APP_ERR_NO_MEM;
+    }
+    *out_len = (u8)(prefix_len + frame_len);
+    return APP_OK;
 }
 
 void app_adv_scheduler_poll(void)
