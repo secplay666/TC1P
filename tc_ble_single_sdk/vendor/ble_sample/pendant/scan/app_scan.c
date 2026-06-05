@@ -1,6 +1,7 @@
 #include "app_scan.h"
 #include "../adv_proto/app_adv_proto.h"
 #include "../discovery/app_discovery.h"
+#include "../host_adv/app_host_adv.h"
 #include "../identity/app_identity.h"
 #include "drivers.h"
 #include "timer.h"
@@ -23,6 +24,8 @@ void app_scan_on_report(const app_scan_report_t *report)
     }
     if (frame.type == ADV_FRAME_BEACON) {
         app_discovery_on_beacon(&frame.src_eid, report->rssi, clock_time());
+    } else if (frame.type == ADV_FRAME_DATA) {
+        app_host_adv_on_adv_frame(&frame, report->rssi);
     }
 }
 

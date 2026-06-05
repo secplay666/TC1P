@@ -70,6 +70,12 @@ python app.py
 
 ## 注意
 
+当前 GUI 工具仍是 GATT 调试工具。新的无连接广播上位机协议已经先加入协议辅助层：
+
+- `pendant_adv_protocol.py`：生成/解析 `PENDANT-ADV + HOST-ADV` 扩展广播帧。
+- Windows 普通 Bleak 后端通常不能发送自定义扩展广播，因此 GUI 暂未切到广播控制。
+- 后续需要接入 Android 原生 BLE advertiser、支持 HCI 原始命令的 BLE dongle，或专用调试器后端。
+
 如果 Windows 或手机缓存了旧 GATT 表，可能看不到新 Debug Service。测试前建议：
 
 1. 在系统蓝牙设置里删除/忘记旧的 `PENDANT`。

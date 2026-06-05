@@ -20,6 +20,7 @@
 #include "scan/app_scan.h"
 #include "host_cmd/app_host_cmd.h"
 #include "host_gatt/app_host_gatt.h"
+#include "host_transport/app_host_transport.h"
 #include "system/app_system.h"
 #include "drivers.h"
 #include "timer.h"
@@ -46,6 +47,7 @@ void app_pendant_init(void)
     app_discovery_init();
     app_scan_init();
     app_host_cmd_init();
+    app_host_transport_init();
     app_system_init();
 }
 
@@ -56,6 +58,7 @@ void app_pendant_poll(void)
     app_system_poll();
     app_scan_poll();
     app_host_cmd_poll();
+    app_host_transport_poll();
     app_host_gatt_poll();
     app_discovery_poll(now);
     app_adv_scheduler_poll();

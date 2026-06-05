@@ -1,6 +1,6 @@
 #include "app_host_cmd.h"
 #include "../host_frame/app_host_frame.h"
-#include "../host_gatt/app_host_gatt.h"
+#include "../host_transport/app_host_transport.h"
 #include "../board/app_board.h"
 #include "../identity/app_identity.h"
 #include "../system/app_system.h"
@@ -89,7 +89,7 @@ static u8 host_status_from_app(app_status_t st)
 
 static void send_rsp(u8 seq, u8 cmd, u8 status, const u8 *payload, u16 len)
 {
-    app_host_gatt_send_message_with_seq(HOST_FRAME_TYPE_RSP, seq, cmd, status, payload, len);
+    app_host_transport_send_message_with_seq(HOST_FRAME_TYPE_RSP, seq, cmd, status, payload, len);
 }
 
 static void handle_get_device_info(u8 seq)
@@ -127,7 +127,7 @@ static void handle_get_system_state(u8 seq)
     s_rsp_buf[1] = (u8)sys.previous_state;
     wr16(&s_rsp_buf[2], sys.error_code);
     s_rsp_buf[4] = sys.wakeup_reason;
-    s_rsp_buf[5] = app_host_gatt_is_ready();
+    s_rsp_buf[5] = app_host_transport_is_ready();
     wr32(&s_rsp_buf[6], sys.uptime_s);
     wr16(&s_rsp_buf[10], bat.voltage_mv);
     s_rsp_buf[12] = bat.percent;
@@ -492,9 +492,18 @@ void app_host_cmd_on_rx_frame(const u8 *data, u8 len)
     s_rx.next_frag++;
 
     if (s_rx.next_frag >= s_rx.frag_count) {
-        handle_command(s_rx.seq, s_rx.cmd, s_rx.buf, s_rx.len);
+        app_host_cmd_on_rx_message(HOST_FRAME_TYPE_CMD, s_rx.seq, s_rx.cmd, HOST_STATUS_OK, s_rx.buf, s_rx.len);
         memset(&s_rx, 0, sizeof(s_rx));
     }
+}
+
+void app_host_cmd_on_rx_message(app_host_frame_type_t type, u8 seq, u8 cmd, u8 status, const u8 *payload, u16 len)
+{
+    (void)status;
+    if (type != HOST_FRAME_TYPE_CMD) {
+        return;
+    }
+    handle_command(seq, cmd, payload, len);
 }
 
 void app_host_cmd_log_text(u8 level, const char *tag, const char *msg)
@@ -519,7 +528,7 @@ void app_host_cmd_log_text(u8 level, const char *tag, const char *msg)
     while (msg[i] && offset < sizeof(payload)) {
         payload[offset++] = (u8)msg[i++];
     }
-    app_host_gatt_send_message(HOST_FRAME_TYPE_LOG, 0, HOST_STATUS_OK, payload, offset);
+    app_host_transport_send_message(HOST_FRAME_TYPE_LOG, 0, HOST_STATUS_OK, payload, offset);
 }
 
 void app_host_cmd_notify_peer_level(const app_eid_t *eid, u8 old_level, u8 new_level, s8 rssi_avg, u8 reason)
@@ -535,7 +544,7 @@ void app_host_cmd_notify_peer_level(const app_eid_t *eid, u8 old_level, u8 new_l
     payload[17] = new_level;
     payload[18] = (u8)rssi_avg;
     payload[19] = reason;
-    app_host_gatt_send_message(HOST_FRAME_TYPE_EVENT, HOST_EVENT_PEER_LEVEL, HOST_STATUS_OK, payload, 20);
+    app_host_transport_send_message(HOST_FRAME_TYPE_EVENT, HOST_EVENT_PEER_LEVEL, HOST_STATUS_OK, payload, 20);
 }
 
 void app_host_cmd_notify_error(u16 error_code, u16 detail)
@@ -543,6 +552,6 @@ void app_host_cmd_notify_error(u16 error_code, u16 detail)
     u8 payload[4];
     wr16(&payload[0], error_code);
     wr16(&payload[2], detail);
-    app_host_gatt_send_message(HOST_FRAME_TYPE_EVENT, HOST_EVENT_ERROR, HOST_STATUS_OK, payload, sizeof(payload));
+    app_host_transport_send_message(HOST_FRAME_TYPE_EVENT, HOST_EVENT_ERROR, HOST_STATUS_OK, payload, sizeof(payload));
     app_host_cmd_log_text(HOST_LOG_LEVEL_ERROR, "ERR", "system error");
 }

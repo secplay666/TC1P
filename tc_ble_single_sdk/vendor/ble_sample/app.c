@@ -43,13 +43,11 @@ static u8 tbl_advData[] = {
 	2, DT_FLAGS, 0x06,
 };
 
-/*
- * Keep discovery scan disabled during the GATT bring-up phase. The Telink stack
- * needs extra role configuration before scan/adv can run reliably in slave
- * connection state; enabling scan too early can make phone connection unstable.
- */
+#ifndef APP_BLE_ENABLE_GATT_DEBUG
+#define APP_BLE_ENABLE_GATT_DEBUG 0
+#endif
 #ifndef APP_BLE_ENABLE_DISCOVERY_SCAN
-#define APP_BLE_ENABLE_DISCOVERY_SCAN 0
+#define APP_BLE_ENABLE_DISCOVERY_SCAN 1
 #endif
 #ifndef BLC_SCAN_DISABLE
 #define BLC_SCAN_DISABLE 0
@@ -160,6 +158,7 @@ static int controller_event_callback(u32 h, u8 *p, int n)
 	return 0;
 }
 
+#if APP_BLE_ENABLE_GATT_DEBUG
 static int app_host_event_callback(u32 h, u8 *para, int n)
 {
 	u8 event = h & 0xff;
@@ -211,6 +210,7 @@ static void task_terminate(u8 e, u8 *p, int n)
 	blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
 #endif
 }
+#endif
 
 void controllerInitialization(void)
 {
@@ -232,6 +232,7 @@ void controllerInitialization(void)
 	blc_ll_initExtScanRspDataBuffer(app_scanRspData, APP_MAX_LENGTH_SCAN_RESPONSE_DATA);
 	blc_ll_initChannelSelectionAlgorithm_2_feature();
 
+#if APP_BLE_ENABLE_GATT_DEBUG
 	app_host_gatt_init();
 	blc_gap_registerHostEventHandler(app_host_event_callback);
 	blc_gap_setEventMask(GAP_EVT_MASK_SMP_PAIRING_BEGIN |
@@ -240,9 +241,14 @@ void controllerInitialization(void)
 						  GAP_EVT_MASK_ATT_EXCHANGE_MTU);
 	bls_app_registerEventCallback(BLT_EV_FLAG_CONNECT, task_connect);
 	bls_app_registerEventCallback(BLT_EV_FLAG_TERMINATE, task_terminate);
+#endif
 
 	adv_param_status = blc_ll_setExtAdvParam(ADV_HANDLE0,
+#if APP_BLE_ENABLE_GATT_DEBUG
 											 ADV_EVT_PROP_EXTENDED_CONNECTABLE_UNDIRECTED,
+#else
+											 ADV_EVT_PROP_EXTENDED_NON_CONNECTABLE_NON_SCANNABLE_UNDIRECTED,
+#endif
 											 ADV_INTERVAL_50MS,
 											 ADV_INTERVAL_50MS,
 											 BLT_ENABLE_ADV_ALL,
@@ -283,7 +289,7 @@ void controllerInitialization(void)
 	blc_hci_registerControllerEventHandler(controller_event_callback);
 
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
-	blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_ENABLE);
+	blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_DISABLE);
 #endif
 
 	blc_app_checkControllerHostInitialization();
