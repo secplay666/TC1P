@@ -12,7 +12,7 @@
 
 void app_host_gatt_init(void);
 void app_host_gatt_poll(void);
-void app_host_gatt_on_connected(void);
+void app_host_gatt_on_connected(u16 conn_handle);
 void app_host_gatt_on_disconnected(void);
 u8 app_host_gatt_is_ready(void);
 app_status_t app_host_gatt_send_message(app_host_frame_type_t type, u8 cmd, u8 status, const u8 *payload, u16 len);

@@ -88,6 +88,8 @@ int app_host_event_callback(u32 h, u8 *para, int n);
  */
 int app_gatt_data_handler(u16 connHandle, u8 *pkt);
 
+void app_debug_reset_adv_report_log(void);
+
 
 #endif
 #endif /* VENDOR_APP_H_ */

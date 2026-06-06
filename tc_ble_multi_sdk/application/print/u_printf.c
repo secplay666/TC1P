@@ -52,14 +52,13 @@
 #include <stdarg.h>
 
 #include "drivers.h"
-#include "putchar.h"
 
 static void printchar(char **str, int c) {
 	if (str) {
 		**str = c;
 		++(*str);
 	} else
-		(void) putchar(c);
+		uart_ndma_send_byte((char)c);
 }
 
 #define PAD_RIGHT 1
@@ -127,7 +126,7 @@ static int printi(char **out, int i, int b, int sg, int width, int pad,
 		if (t >= 10)
 			t += letbase - '0' - 10;
 		*--s = t + '0';
-		u /= b;
+		u /= (unsigned int)b;
 	}
 
 	if (neg) {
@@ -203,14 +202,18 @@ static int print(char **out, const char *format, va_list args) {
 	}
 	if (out)
 		**out = '\0';
-	va_end( args );
 	return pc;
 }
 
 int u_printf(const char *format, ...) {
+	int ret;
 	va_list args;
+
 	va_start( args, format );
-	return print(0, format, args);
+	ret = print(0, format, args);
+	va_end( args );
+
+	return ret;
 }
 
 int v_printf(const char *format, va_list args) {
@@ -219,9 +222,14 @@ int v_printf(const char *format, va_list args) {
 }
 
 int u_sprintf(char *out, const char *format, ...) {
+	int ret;
 	va_list args;
+
 	va_start( args, format );
-	return print(&out, format, args);
+	ret = print(&out, format, args);
+	va_end( args );
+
+	return ret;
 }
 
 void u_array_printf(unsigned char*data, unsigned int len) {

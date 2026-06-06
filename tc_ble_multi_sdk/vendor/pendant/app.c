@@ -30,6 +30,9 @@
 #include "app_buffer.h"
 #include "default_att.h"
 #include "app_ui.h"
+#include "app_pendant.h"
+#include "common/app_debug_print.h"
+#include "application/uartinterface/uart_interface.h"
 #include "application/usbstd/usbkeycode.h"
 
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
@@ -53,12 +56,27 @@ const u8	tbl_scanRsp [] = {
 	 8,  DT_COMPLETE_LOCAL_NAME, 				'P','E','N','D','A','N','T',
 };
 
+#define APP_ADV_SETS_NUMBER                    2
+#define APP_MAX_LENGTH_ADV_DATA                256
+#define APP_MAX_LENGTH_SCAN_RESPONSE_DATA      31
+
+_attribute_ble_data_retention_ static u8 app_advSet_buffer[ADV_SET_PARAM_LENGTH * APP_ADV_SETS_NUMBER];
+_attribute_ble_data_retention_ static u8 app_advData_buffer[APP_MAX_LENGTH_ADV_DATA * APP_ADV_SETS_NUMBER];
+_attribute_ble_data_retention_ static u8 app_scanRspData_buffer[APP_MAX_LENGTH_SCAN_RESPONSE_DATA * APP_ADV_SETS_NUMBER];
 
 
 
 
 int AA_dbg_adv_rpt = 0;
 u32	tick_adv_rpt = 0;
+u32	tick_legadv_rpt = 0;
+
+void app_debug_reset_adv_report_log(void)
+{
+	AA_dbg_adv_rpt = 0;
+	tick_adv_rpt = 0;
+	tick_legadv_rpt = 0;
+}
 
 /**
  * @brief      BLE Adv report event handler
@@ -127,8 +145,6 @@ int app_le_adv_report_event_handle(u8 *p)
 
 
 
-u32	tick_legadv_rpt = 0;
-
 /**
  * @brief      LE Extended Advertising report event handler
  * @param[in]  p - Pointer point to event parameter buffer.
@@ -160,7 +176,7 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 		pExtAdvInfo = (extAdvEvt_info_t *)(pExtAdvRpt->advEvtInfo + offset);
 		offset += (EXTADV_INFO_LENGTH + pExtAdvInfo->data_length);
 		s8 rssi = pExtAdvInfo->rssi;
-		//TODO: add a function process data combine
+		app_pendant_on_adv_report(pExtAdvInfo->data, pExtAdvInfo->data_length, rssi, pExtAdvInfo->address);
 
 
 		#if 1  //debug
@@ -302,6 +318,11 @@ int app_le_enhanced_connection_complete_event_handle(u8 *p)
 
 		dev_char_info_insert_by_enhanced_conn_event(pConnEvt);
 
+		if( pConnEvt->role == ACL_ROLE_PERIPHERAL )
+		{
+			app_pendant_on_app_connected(pConnEvt->PeerAddr, pConnEvt->connHandle);
+		}
+
 		if( pConnEvt->role == ACL_ROLE_CENTRAL ) // master role, process SMP and SDP if necessary
 		{
 			#if (ACL_CENTRAL_SMP_ENABLE)
@@ -351,6 +372,10 @@ int 	app_disconnect_event_handle(u8 *p)
 
 	if(central_disconnect_connhandle == pCon->connHandle){  //un_pair disconnection flow finish, clear flag
 		central_disconnect_connhandle = 0;
+	}
+
+	if(dev_char_get_conn_role_by_connhandle(pCon->connHandle) == ACL_ROLE_PERIPHERAL){
+		app_pendant_on_app_disconnected(pCon->reason);
 	}
 
 	dev_char_info_delete_by_connhandle(pCon->connHandle);
@@ -623,6 +648,9 @@ _attribute_no_inline_ void user_init_normal(void)
 {
 //////////////////////////// basic hardware Initialization  Begin //////////////////////////////////
 
+	UARTIF_uartinit();
+	u_printf("Pendant boot\r\n");
+
 	/* random number generator must be initiated here( in the beginning of user_init_nromal).
 	 * When deepSleep retention wakeUp, no need initialize again */
 	#if(MCU_CORE_TYPE == MCU_CORE_825x || MCU_CORE_TYPE == MCU_CORE_827x)
@@ -654,7 +682,10 @@ _attribute_no_inline_ void user_init_normal(void)
 
 	blc_ll_initStandby_module(mac_public);						   //mandatory
 
-    blc_ll_initLegacyAdvertising_module(); 	//adv module: 		 mandatory for BLE slave,
+    blc_ll_initExtendedAdvertising_module();
+    blc_ll_initExtendedAdvSetBuffer(app_advSet_buffer, APP_ADV_SETS_NUMBER);
+    blc_ll_initExtendedAdvDataBuffer(app_advData_buffer, APP_MAX_LENGTH_ADV_DATA);
+    blc_ll_initExtendedScanRspDataBuffer(app_scanRspData_buffer, APP_MAX_LENGTH_SCAN_RESPONSE_DATA);
 
     blc_ll_initLegacyScanning_module();
     blc_ll_initLegacyInitiating_module();			//initiate module: 	 mandatory for BLE master
@@ -667,8 +698,7 @@ _attribute_no_inline_ void user_init_normal(void)
 	blc_ll_initAclCentralRole_module();
 	blc_ll_initAclPeriphrRole_module();
 
-//	blc_ll_setMaxConnectionNumber(ACL_CENTRAL_MAX_NUM, ACL_PERIPHR_MAX_NUM);
-	blc_ll_setMaxConnectionNumber(2, 1);
+	blc_ll_setMaxConnectionNumber(ACL_CENTRAL_MAX_NUM, ACL_PERIPHR_MAX_NUM);
 
 	blc_ll_setAclConnMaxOctetsNumber(ACL_CONN_MAX_RX_OCTETS, ACL_MASTER_MAX_TX_OCTETS, ACL_SLAVE_MAX_TX_OCTETS);
 
@@ -720,8 +750,7 @@ _attribute_no_inline_ void user_init_normal(void)
 	blc_att_setMasterRxMTUSize(ATT_MTU_MASTER_RX_MAX_SIZE); ///must be placed after "blc_gap_init"
 	blc_att_setSlaveRxMTUSize(ATT_MTU_SLAVE_RX_MAX_SIZE);   ///must be placed after "blc_gap_init"
 
-	/* GATT Initialization */
-	my_gatt_init();
+	/* GATT attribute table is registered by app_host_gatt_init(). */
 	blc_gatt_register_data_handler(app_gatt_data_handler);
 
 	/* SMP Initialization */
@@ -760,65 +789,23 @@ _attribute_no_inline_ void user_init_normal(void)
 
 
 //////////////////////////// User Configuration for BLE application ////////////////////////////
-	blc_ll_setAdvData( (u8 *)tbl_advData, sizeof(tbl_advData) );
-	blc_ll_setScanRspData( (u8 *)tbl_scanRsp, sizeof(tbl_scanRsp));
-	blc_ll_setAdvParam(ADV_INTERVAL_30MS, ADV_INTERVAL_30MS, ADV_TYPE_CONNECTABLE_UNDIRECTED, OWN_ADDRESS_PUBLIC, 0, NULL, BLT_ENABLE_ADV_ALL, ADV_FP_NONE);
-	blc_ll_setAdvEnable(BLC_ADV_ENABLE);  //ADV enable
+	blc_ll_setExtAdvParam(ADV_HANDLE0, ADV_EVT_PROP_LEGACY_CONNECTABLE_SCANNABLE_UNDIRECTED,
+						   ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, BLT_ENABLE_ADV_ALL,
+						   OWN_ADDRESS_PUBLIC, BLE_ADDR_PUBLIC, NULL, ADV_FP_NONE,
+						   TX_POWER_3dBm, BLE_PHY_1M, 0, BLE_PHY_1M, ADV_SID_0, 0);
+	blc_ll_setExtAdvData(ADV_HANDLE0, sizeof(tbl_advData), tbl_advData);
+	blc_ll_setExtScanRspData(ADV_HANDLE0, sizeof(tbl_scanRsp), tbl_scanRsp);
 
+	blc_ll_setExtAdvParam(ADV_HANDLE1, ADV_EVT_PROP_EXTENDED_NON_CONNECTABLE_NON_SCANNABLE_UNDIRECTED,
+						   ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, BLT_ENABLE_ADV_ALL,
+						   OWN_ADDRESS_PUBLIC, BLE_ADDR_PUBLIC, NULL, ADV_FP_NONE,
+						   TX_POWER_3dBm, BLE_PHY_1M, 0, BLE_PHY_1M, ADV_SID_1, 0);
 
+	blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M,
+						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
+						   0, 0, 0);
 
-
-
-
-
-
-
-
-#if 1 		/* Extended Scan */
-	#if 1   //normal test
-		#if 1  //Scan 1M PHY only
-			blc_ll_setExtScanParam( OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M, \
-									SCAN_TYPE_PASSIVE,  SCAN_INTERVAL_100MS,   SCAN_WINDOW_100MS, \
-									0, 					0, 					   0);
-		#elif 0 //Scan Coded PHY only
-			blc_ll_setExtScanParam( OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_CODED, \
-									0, 					0, 					   0, 				\
-									SCAN_TYPE_PASSIVE,  SCAN_INTERVAL_150MS,   SCAN_WINDOW_100MS);
-		#else //Scan both 1M PHY & Coded PHY
-			blc_ll_setExtScanParam( OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M_CODED, \
-									SCAN_TYPE_PASSIVE,  SCAN_INTERVAL_100MS,   SCAN_WINDOW_50MS, \
-									SCAN_TYPE_PASSIVE,  SCAN_INTERVAL_150MS,   SCAN_WINDOW_100MS);
-		#endif
-
-	#else //use whitelist to filter
-
-		blc_ll_clearWhiteList(); 	  //clear whitelist
-		blc_ll_clearResolvingList(); //clear resolving list
-
-		u8 test_mac1[6] = {0x11, 0x11, 0x00, 0x33, 0x33, 0x33};
-		u8 test_mac2[6] = {0x22, 0x22, 0x00, 0x33, 0x33, 0x33};
-		u8 test_mac3[6] = {0x33, 0x33, 0x00, 0x33, 0x33, 0x33};
-		u8 test_mac4[6] = {0x44, 0x44, 0x00, 0x33, 0x33, 0x33};
-		blc_ll_addDeviceToWhiteList(BLE_ADDR_PUBLIC, test_mac1);
-		blc_ll_addDeviceToWhiteList(BLE_ADDR_PUBLIC, test_mac2);
-		blc_ll_addDeviceToWhiteList(BLE_ADDR_PUBLIC, test_mac3);
-		blc_ll_addDeviceToWhiteList(BLE_ADDR_PUBLIC, test_mac4);
-
-		blc_ll_setExtScanParam( OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_WL, SCAN_PHY_1M, \
-								SCAN_TYPE_PASSIVE,  SCAN_INTERVAL_100MS,   SCAN_WINDOW_100MS, \
-								0, 					0, 					   0);
-	#endif
-
-
-	blc_ll_setExtScanEnable( BLC_SCAN_ENABLE, DUP_FILTER_DISABLE, SCAN_DURATION_CONTINUOUS, SCAN_WINDOW_CONTINUOUS);
-
-
-#else 	//Legacy Scan
-	blc_ll_setScanParameter(SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_30MS, OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY);
-	blc_ll_setScanEnable (BLC_SCAN_ENABLE, DUP_FILTER_DISABLE);
-#endif
-
-//	blc_ll_setAdvCustomedChannel(37, 37, 37);  //debug
+	app_pendant_init();
 
 }
 
@@ -870,6 +857,7 @@ int main_idle_loop(void)
 _attribute_no_inline_ void main_loop(void)
 {
 	main_idle_loop();
+	app_pendant_poll();
 }
 
 #endif

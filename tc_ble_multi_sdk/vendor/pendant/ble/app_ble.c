@@ -14,38 +14,57 @@
 #define APP_BLE_ENABLE_DISCOVERY_SCAN 1
 #endif
 
+#define APP_BLE_APP_ADV_HANDLE      ADV_HANDLE0
+#define APP_BLE_PENDANT_ADV_HANDLE  ADV_HANDLE1
+
 static app_ble_conn_info_t s_conn;
+static u8 s_adv_scan_started;
 
 void app_ble_init(void)
 {
     memset(&s_conn, 0, sizeof(s_conn));
+    s_adv_scan_started = 0;
 }
 
 app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
 {
     (void)params;
-    blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, 1, ADV_HANDLE0, 0, 0);
+    blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_APP_ADV_HANDLE, 0, 0);
+    blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
+    s_adv_scan_started = 1;
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
-    blc_ll_setScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_DISABLE);
+    blc_ll_setExtScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_DISABLE, SCAN_DURATION_CONTINUOUS, SCAN_WINDOW_CONTINUOUS);
 #endif
     return APP_OK;
 }
 
 app_status_t app_ble_stop_adv_scan(void)
 {
-    blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, 1, ADV_HANDLE0, 0, 0);
+    blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, APP_BLE_APP_ADV_HANDLE, 0, 0);
+    blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
+    s_adv_scan_started = 0;
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
-    blc_ll_setScanEnable(BLC_SCAN_DISABLE, DUP_FILTER_DISABLE);
+    blc_ll_setExtScanEnable(BLC_SCAN_DISABLE, DUP_FILTER_DISABLE, SCAN_DURATION_CONTINUOUS, SCAN_WINDOW_CONTINUOUS);
 #endif
     return APP_OK;
 }
 
 app_status_t app_ble_update_ext_adv_data(const u8 *data, u8 len)
 {
+    ble_sts_t st;
+
     if (!data || !len) {
         return APP_ERR_PARAM;
     }
-    if (blc_ll_setExtAdvData(ADV_HANDLE0, DATA_OPER_COMPLETE, DATA_FRAGM_ALLOWED, len, (u8 *)data) != BLE_SUCCESS) {
+
+    st = blc_ll_setExtAdvData(APP_BLE_PENDANT_ADV_HANDLE, len, data);
+    if (st != BLE_SUCCESS && s_adv_scan_started) {
+        blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
+        st = blc_ll_setExtAdvData(APP_BLE_PENDANT_ADV_HANDLE, len, data);
+        blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
+    }
+
+    if (st != BLE_SUCCESS) {
         return APP_ERR_STATE;
     }
     return APP_OK;
@@ -56,7 +75,7 @@ app_status_t app_ble_disconnect_app(u8 reason)
     if (!s_conn.connected) {
         return APP_OK;
     }
-    return bls_ll_terminateConnection(reason) == BLE_SUCCESS ? APP_OK : APP_ERR_STATE;
+    return blc_ll_disconnect(s_conn.conn_handle, reason) == BLE_SUCCESS ? APP_OK : APP_ERR_STATE;
 }
 
 u8 app_ble_is_app_connected(void)

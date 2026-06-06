@@ -31,8 +31,8 @@
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
 
 
-#define ACL_CENTRAL_MAX_NUM								4
-#define ACL_PERIPHR_MAX_NUM								4
+#define ACL_CENTRAL_MAX_NUM								1
+#define ACL_PERIPHR_MAX_NUM								1
 #define MASTER_ACL_PERIPHR_MAX_NUM						(ACL_CENTRAL_MAX_NUM+ACL_PERIPHR_MAX_NUM)
 
 
@@ -53,7 +53,7 @@
 #define APP_CONTR_EVENT_LOG_EN				1  //controller event log
 #define APP_HOST_EVENT_LOG_EN				1  //host event log
 
-#define APP_DEFAULT_HID_BATTERY_OTA_ATTRIBUTE_TABLE			1
+#define APP_DEFAULT_HID_BATTERY_OTA_ATTRIBUTE_TABLE			0
 
 
 /////////////////////// Board Select Configuration ///////////////////////////////

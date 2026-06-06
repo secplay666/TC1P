@@ -1,7 +1,7 @@
 param(
     [int]$DeviceId = 1,
     [string]$Chip = "B85",
-    [string]$BdtConfigPath = "C:\Users\secpl\Desktop\test\8258\Telink_material\Sw_and_SDK\BDT_v5.8.4\config",
+    [string]$BdtConfigPath = "C:\TelinkIoTStudio\tools\TBD_release\config",
     [string]$BinPath = "",
     [switch]$NoReset
 )

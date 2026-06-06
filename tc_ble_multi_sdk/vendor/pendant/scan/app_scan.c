@@ -3,6 +3,7 @@
 #include "../discovery/app_discovery.h"
 #include "../host_adv/app_host_adv.h"
 #include "../identity/app_identity.h"
+#include "../common/app_debug_print.h"
 #include "drivers.h"
 #include "timer.h"
 

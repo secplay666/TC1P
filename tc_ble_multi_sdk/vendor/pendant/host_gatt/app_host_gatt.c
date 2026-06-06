@@ -1,9 +1,10 @@
 #include "app_host_gatt.h"
 #include "../host_cmd/app_host_cmd.h"
 #include "stack/ble/ble.h"
+#include "stack/ble/ble_format.h"
 #include "common/string.h"
 
-#define HOST_GATT_NOTIFY_QUEUE_SIZE 32
+#define HOST_GATT_NOTIFY_QUEUE_SIZE 8
 
 enum {
     ATT_HANDLE_NONE = 0,
@@ -77,9 +78,10 @@ static u8 s_q_head;
 static u8 s_q_tail;
 static u8 s_q_count;
 static u8 s_connected;
+static u16 s_conn_handle;
 
-static int app_host_gatt_cmd_write_cb(void *p);
-static int app_host_gatt_ccc_write_cb(void *p);
+static int app_host_gatt_cmd_write_cb(u16 conn_handle, void *p);
+static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p);
 
 static attribute_t s_att_table[] = {
     {ATT_HANDLE_END - 1, 0, 0, 0, 0, 0, 0, 0},
@@ -149,11 +151,12 @@ static app_status_t app_host_gatt_queue_notify(u16 handle, const u8 *data, u8 le
     return APP_OK;
 }
 
-static int app_host_gatt_cmd_write_cb(void *p)
+static int app_host_gatt_cmd_write_cb(u16 conn_handle, void *p)
 {
-    rf_packet_att_write_t *pkt = (rf_packet_att_write_t *)p;
+    rf_packet_att_t *pkt = (rf_packet_att_t *)p;
     u16 len;
 
+    (void)conn_handle;
     if (!pkt || pkt->l2capLen < 3) {
         return 0;
     }
@@ -162,20 +165,21 @@ static int app_host_gatt_cmd_write_cb(void *p)
     if (len > APP_HOST_FRAME_MAX_PACKET_LEN) {
         len = APP_HOST_FRAME_MAX_PACKET_LEN;
     }
-    app_host_cmd_on_rx_frame((const u8 *)&pkt->value, (u8)len);
+    app_host_cmd_on_rx_frame((const u8 *)pkt->dat, (u8)len);
     return 0;
 }
 
-static int app_host_gatt_ccc_write_cb(void *p)
+static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p)
 {
-    rf_packet_att_write_t *pkt = (rf_packet_att_write_t *)p;
+    rf_packet_att_t *pkt = (rf_packet_att_t *)p;
     u16 value;
 
+    (void)conn_handle;
     if (!pkt || pkt->l2capLen < 5) {
         return 0;
     }
 
-    value = (u16)((u8 *)&pkt->value)[0] | ((u16)((u8 *)&pkt->value)[1] << 8);
+    value = (u16)pkt->dat[0] | ((u16)pkt->dat[1] << 8);
     if (pkt->handle == ATT_HANDLE_DEBUG_RSP_CCC) {
         s_rsp_ccc = value;
     } else if (pkt->handle == ATT_HANDLE_DEBUG_LOG_CCC) {
@@ -195,12 +199,9 @@ void app_host_gatt_init(void)
     s_q_tail = 0;
     s_q_count = 0;
     s_connected = 0;
+    s_conn_handle = 0;
 
-    blc_gap_peripheral_init();
-    blc_l2cap_register_handler(blc_l2cap_packet_receive);
     bls_att_setAttributeTable((u8 *)s_att_table);
-    blc_att_setRxMtuSize(23);
-    blc_att_setServerDataPendingTime_upon_ClientCmd(0);
     blc_smp_setSecurityLevel(No_Security);
 }
 
@@ -220,16 +221,17 @@ void app_host_gatt_poll(void)
         return;
     }
 
-    st = bls_att_pushNotifyData(item->handle, item->data, item->len);
+    st = blc_gatt_pushHandleValueNotify(s_conn_handle, item->handle, item->data, item->len);
     if (st == BLE_SUCCESS) {
         s_q_head = (u8)((s_q_head + 1) & (HOST_GATT_NOTIFY_QUEUE_SIZE - 1));
         s_q_count--;
     }
 }
 
-void app_host_gatt_on_connected(void)
+void app_host_gatt_on_connected(u16 conn_handle)
 {
     s_connected = 1;
+    s_conn_handle = conn_handle;
 }
 
 void app_host_gatt_on_disconnected(void)
@@ -241,6 +243,7 @@ void app_host_gatt_on_disconnected(void)
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;
+    s_conn_handle = 0;
 }
 
 u8 app_host_gatt_is_ready(void)

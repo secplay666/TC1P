@@ -49,7 +49,7 @@ static u32 app_storage_calc_reserved_start(void)
     start = app_storage_min_nonzero(start, flash_sector_smp_storage);
     start = app_storage_min_nonzero(start, flash_sector_mac_address);
     start = app_storage_min_nonzero(start, flash_sector_calibration);
-    start = app_storage_min_nonzero(start, flash_sector_master_pairing);
+    start = app_storage_min_nonzero(start, flash_sector_simple_sdp_att);
     return start;
 }
 
@@ -91,7 +91,7 @@ void app_storage_init(void)
     s_flash_info.sdk_mac_addr = flash_sector_mac_address;
     s_flash_info.sdk_calibration_addr = flash_sector_calibration;
     s_flash_info.sdk_smp_pairing_addr = flash_sector_smp_storage;
-    s_flash_info.sdk_master_pairing_addr = flash_sector_master_pairing;
+    s_flash_info.sdk_master_pairing_addr = flash_sector_simple_sdp_att;
     s_flash_info.app_total_size = APP_STORAGE_PART_COUNT * APP_STORAGE_PART_SIZE;
 
     if (s_flash_info.sdk_reserved_start >= s_flash_info.app_total_size) {

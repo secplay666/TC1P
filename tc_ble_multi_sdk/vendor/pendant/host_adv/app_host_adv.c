@@ -4,11 +4,12 @@
 #include "../host_cmd/app_host_cmd.h"
 #include "../identity/app_identity.h"
 #include "../system/app_system.h"
+#include "../common/app_debug_print.h"
 #include "common/string.h"
 #include "drivers.h"
 #include "timer.h"
 
-#define APP_HOST_ADV_RX_QUEUE_SIZE       4
+#define APP_HOST_ADV_RX_QUEUE_SIZE       2
 #define APP_HOST_ADV_TX_REPEAT           3
 #define APP_HOST_ADV_ACTIVE_TIMEOUT_US   30000000
 #define APP_HOST_ADV_DUP_TIMEOUT_US      5000000

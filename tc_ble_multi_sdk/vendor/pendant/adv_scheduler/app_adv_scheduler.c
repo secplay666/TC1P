@@ -5,6 +5,7 @@
 #include "../battery/app_battery.h"
 #include "../charge/app_charge.h"
 #include "../peer_table/app_peer_table.h"
+#include "../common/app_debug_print.h"
 #include "common/string.h"
 #include "drivers.h"
 #include "timer.h"
@@ -16,7 +17,7 @@ static u8 s_adv_buf[APP_ADV_FRAME_MAX_LEN];
 static u8 s_payload_buf[32];
 static u8 s_tx_log_count;
 
-#define APP_ADV_SCHED_QUEUE_SIZE 8
+#define APP_ADV_SCHED_QUEUE_SIZE 4
 #define APP_ADV_DEBUG_NAME "PENDANT"
 #define AD_TYPE_FLAGS 0x01
 #define AD_TYPE_COMPLETE_LOCAL_NAME 0x09
