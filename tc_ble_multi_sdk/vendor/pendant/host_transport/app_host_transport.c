@@ -1,4 +1,5 @@
 #include "app_host_transport.h"
+#include "../app_config.h"
 #include "../host_adv/app_host_adv.h"
 #include "../host_gatt/app_host_gatt.h"
 

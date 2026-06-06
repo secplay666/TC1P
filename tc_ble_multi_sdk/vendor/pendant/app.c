@@ -129,6 +129,11 @@ const u8	tbl_scanRsp [] = {
 	 8,  DT_COMPLETE_LOCAL_NAME, 				'P','E','N','D','A','N','T',
 };
 
+const u8 tbl_extAdvInitData[] = {
+	2, DT_FLAGS, 0x06,
+	8, DT_COMPLETE_LOCAL_NAME, 'P','E','N','D','A','N','T',
+};
+
 #define APP_ADV_SETS_NUMBER                    2
 #define APP_MAX_LENGTH_ADV_DATA                256
 #define APP_MAX_LENGTH_SCAN_RESPONSE_DATA      31
@@ -143,12 +148,33 @@ _attribute_ble_data_retention_ static u8 app_scanRspData_buffer[APP_MAX_LENGTH_S
 int AA_dbg_adv_rpt = 0;
 u32	tick_adv_rpt = 0;
 u32	tick_legadv_rpt = 0;
+static u32 s_ext_adv_rpt_count = 0;
+static u32 s_ext_adv_aux_count = 0;
+static u32 s_ext_adv_legacy_count = 0;
 
 void app_debug_reset_adv_report_log(void)
 {
 	AA_dbg_adv_rpt = 0;
 	tick_adv_rpt = 0;
 	tick_legadv_rpt = 0;
+	s_ext_adv_rpt_count = 0;
+	s_ext_adv_aux_count = 0;
+	s_ext_adv_legacy_count = 0;
+}
+
+u32 app_radio_debug_legacy_reports(void)
+{
+	return AA_dbg_adv_rpt + s_ext_adv_legacy_count;
+}
+
+u32 app_radio_debug_ext_reports(void)
+{
+	return s_ext_adv_rpt_count;
+}
+
+u32 app_radio_debug_aux_reports(void)
+{
+	return s_ext_adv_aux_count;
 }
 
 /**
@@ -162,8 +188,9 @@ int app_le_adv_report_event_handle(u8 *p)
 	event_adv_report_t *pa = (event_adv_report_t *)p;
 	s8 rssi = pa->data[pa->len];
 
-	#if 1  //debug, print ADV report number
-		AA_dbg_adv_rpt ++;
+	AA_dbg_adv_rpt ++;
+
+	#if 0  //debug, print ADV report number
 		if(clock_time_exceed(tick_adv_rpt, 200000)){
 //			tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]Adv report", pa->mac, 6);
 			tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]Adv report", pa->mac, pa->len + 7);
@@ -250,9 +277,10 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 		offset += (EXTADV_INFO_LENGTH + pExtAdvInfo->data_length);
 		s8 rssi = pExtAdvInfo->rssi;
 		app_pendant_on_adv_report(pExtAdvInfo->data, pExtAdvInfo->data_length, rssi, pExtAdvInfo->address);
+		s_ext_adv_rpt_count++;
 
 
-		#if 1  //debug
+		#if 0  //debug
 				if(pExtAdvInfo->event_type & EXTADV_RPT_EVT_MASK_LEGACY)
 				{
 					if(clock_time_exceed(tick_legadv_rpt, 4000 * 1000)){
@@ -269,6 +297,13 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 					//aux_adv_cnt ++;
 				}
 		#endif
+
+		if(pExtAdvInfo->event_type & EXTADV_RPT_EVT_MASK_LEGACY){
+			s_ext_adv_legacy_count++;
+		}
+		else{
+			s_ext_adv_aux_count++;
+		}
 
 
 		u8 ext_evtType = pExtAdvInfo->event_type & EXTADV_RPT_EVTTYPE_MASK;
@@ -776,19 +811,24 @@ _attribute_no_inline_ void user_init_normal(void)
 
 	blc_ll_initStandby_module(mac_public);						   //mandatory
 
-	blc_ll_initLegacyAdvertising_module();
-
+#if (PENDANT_EXT_ADV_ENABLE)
     blc_ll_initExtendedAdvertising_module();
     blc_ll_initExtendedAdvSetBuffer(app_advSet_buffer, APP_ADV_SETS_NUMBER);
     blc_ll_initExtendedAdvDataBuffer(app_advData_buffer, APP_MAX_LENGTH_ADV_DATA);
     blc_ll_initExtendedScanRspDataBuffer(app_scanRspData_buffer, APP_MAX_LENGTH_SCAN_RESPONSE_DATA);
+#else
+	blc_ll_initLegacyAdvertising_module();
+#endif
 
+#if (APP_BLE_ENABLE_DISCOVERY_SCAN)
+    blc_ll_initExtendedScanning_module();	//extended scan module
+#else
     blc_ll_initLegacyScanning_module();
+#endif
 #if (ACL_CENTRAL_MAX_NUM)
     blc_ll_initLegacyInitiating_module();			//initiate module: 	 mandatory for BLE master
 #endif
 
-    blc_ll_initExtendedScanning_module();	//extended scan module
 #if (ACL_CENTRAL_MAX_NUM)
     blc_ll_initExtendedInitiating_module();
 #endif
@@ -899,21 +939,31 @@ _attribute_no_inline_ void user_init_normal(void)
 
 
 //////////////////////////// User Configuration for BLE application ////////////////////////////
-	blc_ll_setAdvData((u8 *)tbl_advData, sizeof(tbl_advData));
-	blc_ll_setScanRspData((u8 *)tbl_scanRsp, sizeof(tbl_scanRsp));
-	blc_ll_setAdvParam(ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, ADV_TYPE_CONNECTABLE_UNDIRECTED,
-					   OWN_ADDRESS_PUBLIC, 0, NULL, BLT_ENABLE_ADV_ALL, ADV_FP_NONE);
-
 #if (PENDANT_EXT_ADV_ENABLE)
+	blc_ll_setExtAdvParam(ADV_HANDLE0, ADV_EVT_PROP_LEGACY_CONNECTABLE_SCANNABLE_UNDIRECTED,
+						   ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, BLT_ENABLE_ADV_ALL,
+						   OWN_ADDRESS_PUBLIC, BLE_ADDR_PUBLIC, NULL, ADV_FP_NONE,
+						   TX_POWER_3dBm, BLE_PHY_1M, 0, BLE_PHY_1M, ADV_SID_0, 0);
+	blc_ll_setExtAdvData(ADV_HANDLE0, sizeof(tbl_advData), (u8 *)tbl_advData);
+	blc_ll_setExtScanRspData(ADV_HANDLE0, sizeof(tbl_scanRsp), (u8 *)tbl_scanRsp);
+
 	blc_ll_setExtAdvParam(ADV_HANDLE1, ADV_EVT_PROP_EXTENDED_NON_CONNECTABLE_NON_SCANNABLE_UNDIRECTED,
 						   ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, BLT_ENABLE_ADV_ALL,
 						   OWN_ADDRESS_PUBLIC, BLE_ADDR_PUBLIC, NULL, ADV_FP_NONE,
 						   TX_POWER_3dBm, BLE_PHY_1M, 0, BLE_PHY_1M, ADV_SID_1, 0);
+	blc_ll_setExtAdvData(ADV_HANDLE1, sizeof(tbl_extAdvInitData), (u8 *)tbl_extAdvInitData);
+#else
+	blc_ll_setAdvData((u8 *)tbl_advData, sizeof(tbl_advData));
+	blc_ll_setScanRspData((u8 *)tbl_scanRsp, sizeof(tbl_scanRsp));
+	blc_ll_setAdvParam(ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, ADV_TYPE_CONNECTABLE_UNDIRECTED,
+					   OWN_ADDRESS_PUBLIC, 0, NULL, BLT_ENABLE_ADV_ALL, ADV_FP_NONE);
 #endif
 
+#if (APP_BLE_ENABLE_DISCOVERY_SCAN)
 	blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M,
 						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_30MS,
 						   0, 0, 0);
+#endif
 
 	app_pendant_init();
 

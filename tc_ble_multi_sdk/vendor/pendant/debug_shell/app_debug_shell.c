@@ -68,6 +68,7 @@ static void print_help(void)
     u_printf(" send\r\n");
     u_printf(" clear\r\n");
     u_printf(" logs\r\n");
+    u_printf(" radio\r\n");
     u_printf(" disc\r\n");
     u_printf(" usb\r\n");
     u_printf(" usb on\r\n");
@@ -105,6 +106,24 @@ static void print_peers(void)
         dbg_print_s8(" avg=", peers[i].rssi_avg);
         dbg_print_u8(" level=", (u8)peers[i].level);
     }
+}
+
+static void print_radio(void)
+{
+    app_ble_debug_t ble;
+
+    app_ble_get_debug(&ble);
+    u_printf("[DBG] radio\r\n");
+    dbg_print_u8(" conn=", ble.connected);
+    dbg_print_u8(" adv0=", ble.adv0_status);
+    dbg_print_u8(" adv1=", ble.adv1_status);
+    dbg_print_u8(" scan=", ble.scan_status);
+    dbg_print_u8(" upd_st=", ble.last_adv_update_status);
+    dbg_print_u32(" upd_ok=", ble.adv_update_ok);
+    dbg_print_u32(" upd_fail=", ble.adv_update_fail);
+    dbg_print_u32(" rpt_leg=", app_radio_debug_legacy_reports());
+    dbg_print_u32(" rpt_ext=", app_radio_debug_ext_reports());
+    dbg_print_u32(" rpt_aux=", app_radio_debug_aux_reports());
 }
 
 static void send_test_frame(void)
@@ -169,6 +188,8 @@ static void handle_line(void)
         app_scan_debug_reset();
         app_adv_scheduler_debug_reset();
         u_printf("[DBG] logs reset\r\n");
+    } else if (cmd_eq("radio")) {
+        print_radio();
     } else if (cmd_eq("disc")) {
         app_ble_disconnect_app(0x13);
         u_printf("[DBG] disconnect\r\n");

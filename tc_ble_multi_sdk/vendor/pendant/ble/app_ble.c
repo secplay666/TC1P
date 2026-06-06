@@ -1,4 +1,5 @@
 #include "app_ble.h"
+#include "../app_config.h"
 #include "../event/app_event.h"
 #include "../scan/app_scan.h"
 #include "../common/app_debug_print.h"
@@ -24,10 +25,12 @@
 static app_ble_conn_info_t s_conn;
 static u8 s_adv_scan_started;
 static u8 s_adv_update_error_log_count;
+static app_ble_debug_t s_debug;
 
 void app_ble_init(void)
 {
     memset(&s_conn, 0, sizeof(s_conn));
+    memset(&s_debug, 0, sizeof(s_debug));
     s_adv_scan_started = 0;
     s_adv_update_error_log_count = 0;
 }
@@ -39,7 +42,11 @@ app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
     ble_sts_t scan_st = BLE_SUCCESS;
 
     (void)params;
+#if PENDANT_EXT_ADV_ENABLE
+    adv0_st = blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_APP_ADV_HANDLE, 0, 0);
+#else
     adv0_st = blc_ll_setAdvEnable(BLC_ADV_ENABLE);
+#endif
 #if PENDANT_EXT_ADV_ENABLE
     adv1_st = blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
 #else
@@ -49,6 +56,9 @@ app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
     scan_st = blc_ll_setExtScanEnable(BLC_SCAN_ENABLE, DUP_FILTER_DISABLE, SCAN_DURATION_CONTINUOUS, SCAN_WINDOW_CONTINUOUS);
 #endif
+    s_debug.adv0_status = adv0_st;
+    s_debug.adv1_status = adv1_st;
+    s_debug.scan_status = scan_st;
     u_printf("[BLE] start\r\n");
     u_printf(" adv0=");
     u_printf("%x\r\n", adv0_st);
@@ -61,7 +71,11 @@ app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
 
 app_status_t app_ble_stop_adv_scan(void)
 {
+#if PENDANT_EXT_ADV_ENABLE
+    blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, APP_BLE_APP_ADV_HANDLE, 0, 0);
+#else
     blc_ll_setAdvEnable(BLC_ADV_DISABLE);
+#endif
 #if PENDANT_EXT_ADV_ENABLE
     blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
 #endif
@@ -86,6 +100,7 @@ app_status_t app_ble_update_ext_adv_data(const u8 *data, u8 len)
     return APP_OK;
 #else
     st = blc_ll_setExtAdvData(APP_BLE_PENDANT_ADV_HANDLE, len, data);
+    s_debug.last_adv_update_status = st;
     if (st != BLE_SUCCESS && s_adv_scan_started) {
         ble_sts_t retry_st;
         blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
@@ -100,11 +115,14 @@ app_status_t app_ble_update_ext_adv_data(const u8 *data, u8 len)
             s_adv_update_error_log_count++;
         }
         st = retry_st;
+        s_debug.last_adv_update_status = st;
     }
 
     if (st != BLE_SUCCESS) {
+        s_debug.adv_update_fail++;
         return APP_ERR_STATE;
     }
+    s_debug.adv_update_ok++;
     return APP_OK;
 #endif
 }
@@ -129,6 +147,14 @@ void app_ble_get_conn_info(app_ble_conn_info_t *info)
     }
 }
 
+void app_ble_get_debug(app_ble_debug_t *debug)
+{
+    if (debug) {
+        *debug = s_debug;
+        debug->connected = s_conn.connected;
+    }
+}
+
 void app_ble_poll(void)
 {
 }
@@ -136,6 +162,7 @@ void app_ble_poll(void)
 void app_ble_on_connected(const u8 *peer_addr, u16 conn_handle)
 {
     s_conn.connected = 1;
+    s_debug.connected = 1;
     s_conn.conn_handle = conn_handle;
     if (peer_addr) {
         memcpy(s_conn.peer_addr, peer_addr, sizeof(s_conn.peer_addr));
@@ -145,8 +172,19 @@ void app_ble_on_connected(const u8 *peer_addr, u16 conn_handle)
 
 void app_ble_on_disconnected(u8 reason)
 {
+    ble_sts_t adv_st;
+
     s_conn.connected = 0;
+    s_debug.connected = 0;
     s_conn.conn_handle = 0;
+    if (s_adv_scan_started) {
+#if PENDANT_EXT_ADV_ENABLE
+        adv_st = blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_APP_ADV_HANDLE, 0, 0);
+#else
+        adv_st = blc_ll_setAdvEnable(BLC_ADV_ENABLE);
+#endif
+        s_debug.adv0_status = adv_st;
+    }
     app_event_post(APP_EVT_APP_DISCONNECTED, &reason, sizeof(reason));
 }
 
