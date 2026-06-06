@@ -67,7 +67,14 @@ powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1
 - 调试器设备号：`1`
 - 写入地址：`0x000000`
 - 固件：`tc_ble_multi_sdk\build\B85\pendant\pendant.bin`
+- 烧录前先执行 BDT `ac` 激活 MCU，避免芯片休眠或 Swire 未同步导致下载失败
 - 烧录成功后自动复位 MCU
+
+如果确认目标芯片已经处于可下载状态，也可以跳过激活：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -SkipActivate
+```
 
 如果 BDT 路径不同：
 
@@ -106,6 +113,15 @@ powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -Device
 ```powershell
 C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe 1 B85 rst -f
 ```
+
+当前命令行烧录使用 Burning EVK / Swire 方式，实测有效流程是：
+
+```powershell
+C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe 1 B85 ac
+C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe 1 B85 wf 0 -i .\tc_ble_multi_sdk\build\B85\pendant\pendant.bin
+```
+
+注意：当前环境下 `wf ... -u` 会报 `Write core error`，因此脚本没有默认添加 `-u`。
 
 ## 串口验证
 

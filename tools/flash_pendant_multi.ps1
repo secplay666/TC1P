@@ -3,6 +3,7 @@ param(
     [string]$Chip = "B85",
     [string]$BdtConfigPath = "C:\TelinkIoTStudio\tools\TBD_release\config",
     [string]$BinPath = "",
+    [switch]$SkipActivate,
     [switch]$NoReset
 )
 
@@ -21,6 +22,13 @@ if (!(Test-Path -LiteralPath $bdt)) {
 
 if (!(Test-Path -LiteralPath $BinPath)) {
     throw "Firmware bin not found: $BinPath"
+}
+
+if (!$SkipActivate) {
+    & $bdt $DeviceId $Chip ac
+    if ($LASTEXITCODE -ne 0) {
+        throw "BDT activate failed with exit code $LASTEXITCODE"
+    }
 }
 
 & $bdt $DeviceId $Chip wf 0 -i $BinPath
