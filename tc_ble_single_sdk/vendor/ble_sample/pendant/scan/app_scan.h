@@ -13,5 +13,6 @@ typedef struct {
 void app_scan_init(void);
 void app_scan_on_report(const app_scan_report_t *report);
 void app_scan_poll(void);
+void app_scan_debug_reset(void);
 
 #endif

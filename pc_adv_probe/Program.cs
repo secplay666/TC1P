@@ -26,6 +26,7 @@ internal static class Program
                 "scan" => await RunScanAsync(args),
                 "info" => await RunInfoAsync(args),
                 "send" => await RunSendAsync(args),
+                "legacy-ping" => await RunLegacyPingAsync(args),
                 "selftest" => RunSelfTest(),
                 _ => UnknownCommand(command),
             };
@@ -131,6 +132,39 @@ internal static class Program
         int listenSeconds = args.Length >= 5 ? int.Parse(args[4]) : 10;
 
         return await SendAndListenAsync(eid, cmd, payload, listenSeconds);
+    }
+
+    private static async Task<int> RunLegacyPingAsync(string[] args)
+    {
+        int repeat = args.Length >= 2 ? int.Parse(args[1]) : 10;
+        byte[] payload = new byte[] { 0x50, 0x49, 0x4E, 0x47, 0x01, 0x02, 0x03, 0x04 };
+
+        Console.WriteLine($"TX legacy-ping repeat={repeat} company=0x{PendantAdvProtocol.CompanyId:X4} data_len={payload.Length}");
+        for (int i = 0; i < repeat; i++)
+        {
+            var publisher = new BluetoothLEAdvertisementPublisher
+            {
+                UseExtendedAdvertisement = false,
+            };
+            publisher.Advertisement.ManufacturerData.Add(
+                new BluetoothLEManufacturerData(PendantAdvProtocol.CompanyId, ToBuffer(payload)));
+
+            var statusChanged = new TaskCompletionSource<BluetoothLEAdvertisementPublisherStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+            publisher.StatusChanged += (_, args) =>
+            {
+                Console.WriteLine($"  legacy status={args.Status} error={args.Error}");
+                statusChanged.TrySetResult(args.Status);
+            };
+
+            publisher.Start();
+            await Task.WhenAny(statusChanged.Task, Task.Delay(600));
+            await Task.Delay(220);
+            publisher.Stop();
+            await Task.Delay(120);
+        }
+
+        Console.WriteLine("legacy-ping done");
+        return 0;
     }
 
     private static int RunSelfTest()

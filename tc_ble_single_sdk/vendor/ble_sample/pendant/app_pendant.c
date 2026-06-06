@@ -21,6 +21,7 @@
 #include "host_cmd/app_host_cmd.h"
 #include "host_gatt/app_host_gatt.h"
 #include "host_transport/app_host_transport.h"
+#include "debug_shell/app_debug_shell.h"
 #include "system/app_system.h"
 #include "drivers.h"
 #include "timer.h"
@@ -49,11 +50,13 @@ void app_pendant_init(void)
     app_host_cmd_init();
     app_host_transport_init();
     app_system_init();
+    app_debug_shell_init();
 }
 
 void app_pendant_poll(void)
 {
     u32 now = clock_time();
+    app_debug_shell_poll();
     app_ble_poll();
     app_system_poll();
     app_scan_poll();

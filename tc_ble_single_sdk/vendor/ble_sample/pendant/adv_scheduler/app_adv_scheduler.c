@@ -14,6 +14,7 @@ static u8 s_adv_dirty;
 static u32 s_last_update_tick;
 static u8 s_adv_buf[APP_ADV_FRAME_MAX_LEN];
 static u8 s_payload_buf[32];
+static u8 s_tx_log_count;
 
 #define APP_ADV_SCHED_QUEUE_SIZE 8
 #define APP_ADV_DEBUG_NAME "PENDANT"
@@ -35,6 +36,7 @@ void app_adv_scheduler_init(void)
     s_frame_seq = 0;
     s_adv_dirty = 1;
     s_last_update_tick = 0;
+    s_tx_log_count = 0;
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;
@@ -45,6 +47,12 @@ app_status_t app_adv_scheduler_request_beacon_update(void)
 {
     s_adv_dirty = 1;
     return APP_OK;
+}
+
+void app_adv_scheduler_debug_reset(void)
+{
+    s_tx_log_count = 0;
+    s_adv_dirty = 1;
 }
 
 app_status_t app_adv_scheduler_enqueue_frame(const app_adv_frame_t *frame)
@@ -174,6 +182,11 @@ void app_adv_scheduler_poll(void)
     u32 update_interval_us = s_q_count ? 50000 : 200000;
     if (!s_last_update_tick || clock_time_exceed(s_last_update_tick, update_interval_us) || s_adv_dirty) {
         if (app_adv_scheduler_build_next_adv_data(s_adv_buf, sizeof(s_adv_buf), &len) == APP_OK) {
+            if (s_tx_log_count < 5) {
+                u_printf("[ADV-TX] len=");
+                u_printf("%x\r\n", len);
+                s_tx_log_count++;
+            }
             app_ble_update_ext_adv_data(s_adv_buf, len);
         }
         s_last_update_tick = clock_time();

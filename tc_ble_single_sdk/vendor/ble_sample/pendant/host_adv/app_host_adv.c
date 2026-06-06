@@ -12,6 +12,7 @@
 #define APP_HOST_ADV_TX_REPEAT           3
 #define APP_HOST_ADV_ACTIVE_TIMEOUT_US   30000000
 #define APP_HOST_ADV_DUP_TIMEOUT_US      5000000
+#define APP_HOST_ADV_DEBUG_LOG_MAX       40
 
 typedef struct {
     u8 in_use;
@@ -52,6 +53,28 @@ static u8 s_last_rx_cmd;
 static u16 s_last_rx_len;
 static u16 s_last_rx_crc;
 static u32 s_last_rx_tick;
+static u8 s_debug_log_count;
+
+static void host_adv_debug_u8(const char *label, u8 value)
+{
+    u_printf(label);
+    u_printf("%x\r\n", value);
+}
+
+static void host_adv_debug(const char *tag, u8 a, u8 b, u8 c, u8 d)
+{
+    if (s_debug_log_count >= APP_HOST_ADV_DEBUG_LOG_MAX) {
+        return;
+    }
+    u_printf("[HADV] ");
+    u_printf(tag);
+    u_printf("\r\n");
+    host_adv_debug_u8(" a=", a);
+    host_adv_debug_u8(" b=", b);
+    host_adv_debug_u8(" c=", c);
+    host_adv_debug_u8(" d=", d);
+    s_debug_log_count++;
+}
 
 static void wr16(u8 *p, u16 v)
 {
@@ -95,6 +118,7 @@ void app_host_adv_init(void)
     s_message_id = 1;
     s_tx_seq = 1;
     s_last_rx_valid = 0;
+    s_debug_log_count = 0;
 }
 
 u8 app_host_adv_is_ready(void)
@@ -117,14 +141,21 @@ void app_host_adv_on_adv_frame(const app_adv_frame_t *frame, s8 rssi)
         return;
     }
     if (!host_adv_payload_looks_valid(frame->payload, frame->payload_len)) {
+        host_adv_debug("not-host", frame->payload_len,
+                       frame->payload_len > 0 ? frame->payload[0] : 0,
+                       frame->payload_len > 1 ? frame->payload[1] : 0,
+                       frame->payload_len > 2 ? frame->payload[2] : 0);
         return;
     }
 
     own_eid = app_identity_get_eid();
     if (!app_eid_is_zero(&frame->dst_eid) && !app_eid_equal(&frame->dst_eid, own_eid)) {
+        host_adv_debug("dst-miss", frame->dst_eid.bytes[0], frame->dst_eid.bytes[1],
+                       own_eid->bytes[0], own_eid->bytes[1]);
         return;
     }
     if (s_rx_count >= APP_HOST_ADV_RX_QUEUE_SIZE) {
+        host_adv_debug("rx-full", s_rx_count, frame->payload_len, 0, 0);
         return;
     }
 
@@ -136,6 +167,7 @@ void app_host_adv_on_adv_frame(const app_adv_frame_t *frame, s8 rssi)
     memcpy(item->payload, frame->payload, frame->payload_len);
     s_rx_tail = (u8)((s_rx_tail + 1) % APP_HOST_ADV_RX_QUEUE_SIZE);
     s_rx_count++;
+    host_adv_debug("queued", frame->payload_len, (u8)rssi, s_rx_count, frame->frame_seq);
 }
 
 static void reset_rx_assembly(void)
@@ -159,6 +191,7 @@ static void process_rx_item(const app_host_adv_rx_item_t *item)
     u8 complete_mask;
 
     if (!item || !item->in_use || !host_adv_payload_looks_valid(item->payload, item->payload_len)) {
+        host_adv_debug("bad-item", item ? item->payload_len : 0, 0, 0, 0);
         return;
     }
 
@@ -174,19 +207,25 @@ static void process_rx_item(const app_host_adv_rx_item_t *item)
     chunk_len = p[13];
 
     if (!frag_count || frag_count > 8 || frag_index >= frag_count) {
+        host_adv_debug("bad-frag", frag_index, frag_count, seq, cmd);
         return;
     }
     if (item->payload_len != (u8)(APP_HOST_ADV_HEADER_LEN + chunk_len)) {
+        host_adv_debug("bad-len", item->payload_len, chunk_len, seq, cmd);
         return;
     }
     if (total_len > APP_HOST_MESSAGE_MAX_LEN) {
+        host_adv_debug("too-long", (u8)total_len, (u8)(total_len >> 8), seq, cmd);
         return;
     }
 
     offset = (u16)frag_index * APP_HOST_ADV_CHUNK_MAX_LEN;
     if ((u32)offset + chunk_len > total_len) {
+        host_adv_debug("bad-off", (u8)offset, chunk_len, (u8)total_len, seq);
         return;
     }
+
+    host_adv_debug("rx-frag", type, seq, cmd, frag_index);
 
     if (!s_rx.active || s_rx.type != type || s_rx.seq != seq || s_rx.cmd != cmd ||
         s_rx.frag_count != frag_count || s_rx.total_len != total_len ||
@@ -213,6 +252,7 @@ static void process_rx_item(const app_host_adv_rx_item_t *item)
     }
 
     if (app_crc16(s_rx.data, s_rx.total_len) != s_rx.message_crc) {
+        host_adv_debug("crc-fail", s_rx.seq, s_rx.cmd, (u8)s_rx.total_len, s_rx.frag_count);
         reset_rx_assembly();
         return;
     }
@@ -228,6 +268,7 @@ static void process_rx_item(const app_host_adv_rx_item_t *item)
         s_last_rx_len == s_rx.total_len &&
         s_last_rx_crc == s_rx.message_crc &&
         !clock_time_exceed(s_last_rx_tick, APP_HOST_ADV_DUP_TIMEOUT_US)) {
+        host_adv_debug("dup", s_rx.seq, s_rx.cmd, (u8)s_rx.total_len, 0);
         reset_rx_assembly();
         return;
     }
@@ -240,6 +281,7 @@ static void process_rx_item(const app_host_adv_rx_item_t *item)
     s_last_rx_crc = s_rx.message_crc;
     s_last_rx_tick = clock_time();
 
+    host_adv_debug("dispatch", s_rx.type, s_rx.seq, s_rx.cmd, (u8)s_rx.total_len);
     app_host_cmd_on_rx_message(s_rx.type, s_rx.seq, s_rx.cmd, s_rx.status, s_rx.data, s_rx.total_len);
     reset_rx_assembly();
 }
@@ -277,6 +319,7 @@ app_status_t app_host_adv_send_message_with_seq(app_host_frame_type_t type, u8 s
         return APP_ERR_NO_MEM;
     }
     if (!app_host_adv_is_ready()) {
+        host_adv_debug("tx-not-ready", type, seq, cmd, (u8)len);
         return APP_ERR_STATE;
     }
 
@@ -285,6 +328,8 @@ app_status_t app_host_adv_send_message_with_seq(app_host_frame_type_t type, u8 s
     if (!frag_count) {
         frag_count = 1;
     }
+
+    host_adv_debug("tx-msg", type, seq, cmd, frag_count);
 
     for (repeat = 0; repeat < APP_HOST_ADV_TX_REPEAT; repeat++) {
         offset = 0;
@@ -325,6 +370,7 @@ app_status_t app_host_adv_send_message_with_seq(app_host_frame_type_t type, u8 s
 
             st = app_adv_scheduler_enqueue_frame(&frame);
             if (st != APP_OK) {
+                host_adv_debug("tx-enq-fail", st, frag_index, repeat, cmd);
                 return st;
             }
             offset = (u16)(offset + chunk_len);

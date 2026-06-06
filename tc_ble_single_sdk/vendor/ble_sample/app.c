@@ -56,6 +56,43 @@ static u8 tbl_advData[] = {
 #define DUP_FILTER_DISABLE 0
 #endif
 
+static u8 s_adv_log_count;
+
+static void adv_debug_u8(const char *label, u8 value)
+{
+	u_printf(label);
+	u_printf("%x\r\n", value);
+}
+
+static void adv_debug_s8(const char *label, s8 value)
+{
+	u_printf(label);
+	u_printf("%d\r\n", value);
+}
+
+static void log_adv_report(const char *kind, const u8 *adv_data, u8 data_len, s8 rssi, u16 event_type)
+{
+	if (s_adv_log_count >= 30) {
+		return;
+	}
+
+	u_printf("[ADV] ");
+	u_printf(kind);
+	u_printf("\r\n");
+	adv_debug_u8(" evt_lo=", (u8)event_type);
+	adv_debug_u8(" evt_hi=", (u8)(event_type >> 8));
+	adv_debug_u8(" len=", data_len);
+	adv_debug_s8(" rssi=", rssi);
+	adv_debug_u8(" b0=", data_len > 0 ? adv_data[0] : 0);
+	adv_debug_u8(" b1=", data_len > 1 ? adv_data[1] : 0);
+	s_adv_log_count++;
+}
+
+void app_debug_reset_adv_report_log(void)
+{
+	s_adv_log_count = 0;
+}
+
 static void handle_legacy_adv_report(const u8 *p, int n)
 {
 	u8 num_reports;
@@ -110,6 +147,7 @@ static void handle_extended_adv_report(const u8 *p, int n)
 	for (i = 0; i < num_reports; i++) {
 		const u8 *addr;
 		const u8 *adv_data;
+		u16 event_type;
 		u8 data_len;
 		s8 rssi;
 
@@ -117,6 +155,7 @@ static void handle_extended_adv_report(const u8 *p, int n)
 			return;
 		}
 
+		event_type = (u16)p[idx] | ((u16)p[idx + 1] << 8);
 		idx += 2;
 		idx += 1;
 		addr = &p[idx];
@@ -135,6 +174,7 @@ static void handle_extended_adv_report(const u8 *p, int n)
 		adv_data = &p[idx];
 		idx += data_len;
 
+		log_adv_report("ext", adv_data, data_len, rssi, event_type);
 		app_pendant_on_adv_report(adv_data, data_len, rssi, addr);
 	}
 }

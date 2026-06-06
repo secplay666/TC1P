@@ -1,23 +1,19 @@
-# 蓝牙吊坠 WinRT 扩展广播验证工具
+# PendantAdvProbe
 
-这是一个最小 C# + WinRT 命令行验证程序，用于验证 Windows 官方 BLE Advertisement API 是否能满足吊坠无连接上位机通信需求。
+`PendantAdvProbe` 是一个 C# + WinRT 命令行验证工具，用于测试 Windows 官方 BLE Advertisement API 是否适合蓝牙吊坠的无连接上位机通信方案。
+
+当前工具只做最小验证，不是最终上位机。
 
 ## 环境
 
-当前已在本机验证：
+已在当前电脑验证：
 
 ```text
 .NET SDK 9.0.300
-Windows 10.0.26200
+TargetFramework net9.0-windows10.0.19041.0
 ```
 
-项目目标框架：
-
-```text
-net9.0-windows10.0.19041.0
-```
-
-Windows 10 2004 之后才有 WinRT 扩展广播相关 API。
+Windows 10 2004 之后才具备本工具使用的 WinRT 扩展广播相关 API。
 
 ## 构建
 
@@ -47,10 +43,16 @@ dotnet run --project pc_adv_probe\PendantAdvProbe.csproj -c Release -- info
 dotnet run --project pc_adv_probe\PendantAdvProbe.csproj -c Release -- info 00112233445566778899AABBCCDDEEFF
 ```
 
-向指定 EID 发送任意命令：
+向指定 EID 发送任意 HOST-ADV 命令：
 
 ```powershell
 dotnet run --project pc_adv_probe\PendantAdvProbe.csproj -c Release -- send 00112233445566778899AABBCCDDEEFF 0x02
+```
+
+发送短 legacy manufacturer data，用于验证下位机 legacy scan 是否能收到 Windows 发出的普通广播：
+
+```powershell
+dotnet run --project pc_adv_probe\PendantAdvProbe.csproj -c Release -- legacy-ping 10
 ```
 
 协议自测：
@@ -65,34 +67,17 @@ dotnet run --project pc_adv_probe\PendantAdvProbe.csproj -c Release -- selftest
 
 - 项目编译通过。
 - `selftest` 通过。
-- `scan 3` 可以启动 WinRT watcher，未报权限或 API 错误。
+- `scan` 可以扫描到 PENDANT 扩展广播 Beacon。
+- PC 端 `BluetoothLEAdvertisementPublisher` 能进入 `Started` 状态并发送扩展广播请求。
 
-尚未验证：
+待验证：
 
-- Windows 是否能真正发送足够长的扩展广播 Manufacturer Data。
-- 吊坠固件是否能收到 WinRT Publisher 发出的 HOST-ADV 命令。
-- 吊坠响应是否能被 WinRT Watcher 稳定接收。
+- 下位机是否能接收到 Windows 发出的 legacy 广播。
+- 下位机当前 SDK 是否能接收到 Windows 发出的 extended advertising 二级数据。
+- 下位机响应广播是否能被 WinRT watcher 稳定接收。
 
-## 实现说明
+## 重要限制
 
-使用的 WinRT API：
+根据当前 SDK 头文件和 `doc/AN-21112301-C_Telink B85m BLE Single Connection SDK Developer Handbook.pdf` 第 3 章，B85m Single Connection SDK 对发送 Extended Advertising 的 API 支持明确，但当前工程没有发现对应的 Link Layer Extended Scanning 接收 API。
 
-- `BluetoothLEAdvertisementWatcher`
-- `BluetoothLEAdvertisementWatcher.AllowExtendedAdvertisements = true`
-- `BluetoothLEAdvertisementPublisher`
-- `BluetoothLEAdvertisementPublisher.UseExtendedAdvertisement = true`
-- `BluetoothLEManufacturerData`
-
-`BluetoothLEManufacturerData` 的 `CompanyId` 使用当前开发测试值 `0xFFFF`，Data 部分放入 `PENDANT-ADV` Vendor Payload。
-
-## 风险
-
-Windows Publisher 是系统调度的 best effort 行为，实际能否稳定发送扩展广播取决于：
-
-- Windows 版本。
-- 蓝牙适配器芯片。
-- 蓝牙驱动。
-- 系统蓝牙资源占用。
-- 是否允许同时扫描和广播。
-
-如果实测不稳定，后续建议切换到 USB-BLE 广播网关方案。
+这意味着：PC 能扫描到吊坠的扩展广播，不等价于吊坠也能扫描到 PC 发出的长扩展广播。下一步需要用 `legacy-ping` 和串口日志先验证 Windows -> 吊坠的 legacy 广播接收链路。

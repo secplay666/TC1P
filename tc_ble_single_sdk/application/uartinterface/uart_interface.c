@@ -34,14 +34,13 @@ volatile u8 rec_buff[BUFF_DATA_LEN] __attribute__((aligned(4))) = {0};
 
 void UARTIF_uartinit(void)
 {
-	//note: dma addr must be set first before any other uart initialization!
-	uart_recbuff_init( (u8 *)rec_buff, BUFF_DATA_LEN);
-
 	uart_gpio_set(UART_TX_PB1, UART_RX_PB0); // Debug board UART pins
 	// uart_gpio_set(UART_TX_PC2, UART_RX_PC3); // dangle UART pins
 
 
 	uart_reset();  //will reset uart digital registers from 0x90 ~ 0x9f, so uart setting must set after this reset
+	uart_ndma_clear_tx_index();
+	uart_ndma_clear_rx_index();
 
 	//baud rate: 115200
 	// #if (CLOCK_SYS_CLOCK_HZ == 16000000)
@@ -54,7 +53,7 @@ void UARTIF_uartinit(void)
 	// 	uart_init(25, 15, PARITY_NONE, STOP_BIT_ONE);
 	// #endif
 
-	// uart_dma_enable(1, 1); 	//uart data in hardware buffer moved by dma, so we need enable them first
+	uart_dma_enable(0, 0); 	//debug shell uses polling NDMA RX/TX
 
 	// irq_set_mask(FLD_IRQ_DMA_EN);
 	// dma_chn_irq_enable(FLD_DMA_CHN_UART_RX | FLD_DMA_CHN_UART_TX, 1);   	//uart Rx/Tx dma irq enable
