@@ -4,3 +4,5 @@ __pycache__/
 pc_debug_tool/.venv/
 pc_debug_tool/provisioning.db
 pc_debug_tool/provisioning.db-*
+pc_adv_probe/bin/
+pc_adv_probe/obj/
