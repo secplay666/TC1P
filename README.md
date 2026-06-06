@@ -19,6 +19,14 @@
 powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1
 ```
 
+默认是增量构建，只重新编译发生变化的源码文件。日常开发推荐使用这个命令。
+
+如果需要全量清理后重新构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -Clean
+```
+
 构建成功后输出：
 
 ```text
@@ -35,6 +43,12 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -Telink
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -Headless
+```
+
+Headless 模式默认也是增量构建；如需全量重编，可使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -Headless -Clean
 ```
 
 当前推荐默认构建方式，即不加 `-Headless`。该方式直接调用已验证的 `make.exe` 和 TC32 工具链。
@@ -71,6 +85,26 @@ powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -Device
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -NoReset
+```
+
+## 复位芯片
+
+如果只需要通过 BDT 复位目标芯片，不重新烧录固件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1
+```
+
+如果有多个调试器，可指定设备号：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -DeviceId 2
+```
+
+该脚本等价于直接调用：
+
+```powershell
+C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe 1 B85 rst -f
 ```
 
 ## 串口验证

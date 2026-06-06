@@ -2,7 +2,8 @@ param(
     [string]$TelinkStudioPath = "C:\TelinkIoTStudio",
     [string]$WorkspacePath = ".telink_workspace",
     [switch]$KeepWorkspace,
-    [switch]$Headless
+    [switch]$Headless,
+    [switch]$Clean
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,7 +27,7 @@ if ($Headless) {
         throw "TelinkIoTStudioc.exe not found: $studioConsole"
     }
 
-    if (!$KeepWorkspace -and (Test-Path -LiteralPath $workspace)) {
+    if ($Clean -and !$KeepWorkspace -and (Test-Path -LiteralPath $workspace)) {
         $resolvedWorkspace = (Resolve-Path -LiteralPath $workspace).Path
         if (!$resolvedWorkspace.StartsWith($repoRoot)) {
             throw "Refusing to delete workspace outside repo: $resolvedWorkspace"
@@ -34,13 +35,14 @@ if ($Headless) {
         Remove-Item -LiteralPath $resolvedWorkspace -Recurse -Force
     }
 
+    $headlessBuildAction = if ($Clean) { "-cleanBuild" } else { "-build" }
     & $studioConsole `
         -nosplash `
         -no-indexer `
         -application org.eclipse.cdt.managedbuilder.core.headlessbuild `
         -data $workspace `
         -import $projectDir `
-        -cleanBuild "tc_ble_multi_sdk_B85/pendant"
+        $headlessBuildAction "tc_ble_multi_sdk_B85/pendant"
 
     if ($LASTEXITCODE -ne 0) {
         throw "Telink headless build failed with exit code $LASTEXITCODE"
@@ -59,7 +61,11 @@ if ($Headless) {
     $env:Path = "$toolchainBin;$studioBin;" + $env:Path
     Push-Location -LiteralPath $buildDir
     try {
-        & $makePath MAKE=make -j1 clean all
+        if ($Clean) {
+            & $makePath MAKE=make -j1 clean all
+        } else {
+            & $makePath MAKE=make -j1 all
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "make failed with exit code $LASTEXITCODE"
         }
