@@ -1,4 +1,5 @@
 .project
+!tc_ble_multi_sdk/build/B85/.project
 __pycache__/
 *.pyc
 pc_debug_tool/.venv/
@@ -6,3 +7,5 @@ pc_debug_tool/provisioning.db
 pc_debug_tool/provisioning.db-*
 pc_adv_probe/bin/
 pc_adv_probe/obj/
+.telink_workspace/
+tc_ble_multi_sdk/build/B85/pendant/
