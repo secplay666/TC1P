@@ -48,7 +48,6 @@ void app_pendant_init(void)
     app_discovery_init();
     app_scan_init();
     app_host_cmd_init();
-    app_host_gatt_init();
     app_host_transport_init();
     app_system_init();
     app_debug_shell_init();
@@ -82,7 +81,6 @@ void app_pendant_on_app_connected(const u8 *peer_addr, u16 conn_handle)
 {
     app_ble_on_connected(peer_addr, conn_handle);
     app_host_gatt_on_connected(conn_handle);
-    app_host_cmd_log_text(1, "BLE", "app connected");
 }
 
 void app_pendant_on_app_disconnected(u8 reason)

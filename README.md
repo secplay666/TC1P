@@ -1,152 +1,159 @@
-# 蓝牙吊坠固件构建与烧录
+# 蓝牙吊坠固件构建与下载
 
-当前下位机主工程位于 `tc_ble_multi_sdk/`，目标芯片为 Telink B85 / TLSR8258。旧 `tc_ble_single_sdk/` 暂时保留作对照，后续确认 Multi SDK 扩展广播互扫无误后再删除。
+当前下位机主工程位于 `tc_ble_multi_sdk/`，目标芯片为 Telink B85 / TLSR8258。`tc_ble_single_sdk/` 仍保留作历史对照，后续确认 Multi SDK 路线稳定后再删除。
 
 ## 环境要求
 
 - Windows PowerShell
-- Telink IoT Studio，默认安装路径：
-  - `C:\TelinkIoTStudio`
-- Telink BDT 下载工具，当前脚本默认路径：
-  - `C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe`
-- B85 调试器已连接目标板
+- Telink IoT Studio，默认路径：`C:\TelinkIoTStudio`
+- BDT 命令行工具，默认路径：`C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe`
+- TC32 工具链由 `tools/build_pendant_multi.ps1` 自动从 Telink IoT Studio 路径下查找
 
 ## 构建固件
 
-在仓库根目录执行：
+日常增量构建：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1
 ```
 
-默认是增量构建，只重新编译发生变化的源码文件。日常开发推荐使用这个命令。
-
-如果需要全量清理后重新构建：
+全量清理后构建：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -Clean
 ```
 
-构建成功后输出：
+输出固件：
 
 ```text
 tc_ble_multi_sdk\build\B85\pendant\pendant.bin
 ```
 
-如果 Telink IoT Studio 不在默认路径，可以指定：
+如果 Telink IoT Studio 不在默认路径：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -TelinkStudioPath "C:\TelinkIoTStudio"
 ```
 
-如需尝试 Telink IDE headless build：
+## 查看 BDT 设备
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -Headless
+powershell -ExecutionPolicy Bypass -File .\tools\list_bdt_devices.ps1
 ```
 
-Headless 模式默认也是增量构建；如需全量重编，可使用：
+常见设备：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1 -Headless -Clean
-```
+- `vid_248a&pid_8266`：Telink Debugger / Burning EVK
+- `vid_248a&pid_8801`：当前 PENDANT 固件启用的 B85 USB 下载接口
 
-当前推荐默认构建方式，即不加 `-Headless`。该方式直接调用已验证的 `make.exe` 和 TC32 工具链。
+## EVK / Swire 下载
 
-## 烧录固件
-
-构建完成后，在仓库根目录执行：
+默认使用 EVK / Swire：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1
 ```
 
-默认行为：
+如果有多个调试器，指定 BDT `Device ID`：
 
-- 芯片：`B85`
-- 调试器设备号：`1`
-- 写入地址：`0x000000`
-- 固件：`tc_ble_multi_sdk\build\B85\pendant\pendant.bin`
-- 烧录前先执行 BDT `ac` 激活 MCU，避免芯片休眠或 Swire 未同步导致下载失败
-- 烧录成功后自动复位 MCU
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -DeviceId 1
+```
 
-如果确认目标芯片已经处于可下载状态，也可以跳过激活：
+脚本会先尝试执行 BDT `ac` 激活 MCU。实测有些状态下 `ac` 会返回失败但后续 `wf` 仍能正常下载，所以当前脚本只给 warning，不再直接中断。要跳过 `ac`：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -SkipActivate
 ```
 
-如果 BDT 路径不同：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -BdtConfigPath "你的BDT\config路径"
-```
-
-如果有多个调试器，可指定设备号：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -DeviceId 2
-```
-
-如果只烧录不复位：
+只下载不复位：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -NoReset
 ```
 
-## 复位芯片
+## USB 下载
 
-如果只需要通过 BDT 复位目标芯片，不重新烧录固件：
+当前固件已启用 B85 USB 下载功能，但为了避免 USB 运行态影响 BLE/GATT 调试，策略如下：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1
-```
+- 上电或复位后，USB 下载窗口默认开启 15 秒。
+- 15 秒内，BDT 可以看到 `Telink PENDANT`，可使用 USB 下载。
+- 15 秒后，固件自动关闭 USB pull-up，BLE/GATT 正常工作。
+- 串口 shell 可用 `usb on` / `usb off` / `usb` 手动打开、关闭、查看 USB 状态。
 
-如果有多个调试器，可指定设备号：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -DeviceId 2
-```
-
-该脚本等价于直接调用：
+上电后 15 秒内，或串口执行 `usb on` 后，使用：
 
 ```powershell
-C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe 1 B85 rst -f
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -Transport USB -DeviceId 2
 ```
 
-当前命令行烧录使用 Burning EVK / Swire 方式，实测有效流程是：
+如果只验证 USB 下载，不希望 BDT USB reset 影响应用启动，可加 `-NoReset`：
 
 ```powershell
-C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe 1 B85 ac
-C:\TelinkIoTStudio\tools\TBD_release\config\Cmd_download_tool.exe 1 B85 wf 0 -i .\tc_ble_multi_sdk\build\B85\pendant\pendant.bin
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -Transport USB -DeviceId 2 -NoReset
 ```
 
-注意：当前环境下 `wf ... -u` 会报 `Write core error`，因此脚本没有默认添加 `-u`。
+注意：当前实测 BDT 的 USB reset 能返回成功，但不一定触发完整应用启动日志。需要稳定重启应用时，优先用 EVK reset 或重新上电。
 
-## 串口验证
+## 复位
 
-当前固件 UART 配置：
+EVK / Swire 复位：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -Transport EVK -DeviceId 1
+```
+
+USB 复位：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -Transport USB -DeviceId 2
+```
+
+## 串口调试
+
+当前 dangle 串口配置：
 
 - 波特率：`115200`
 - 数据位：`8`
 - 校验：`None`
 - 停止位：`1`
 
-复位后应看到类似日志：
+常用 shell 命令：
 
 ```text
-Pendant boot
-[ADV-TX] len=5b
-```
-
-串口调试 shell 支持常用命令：
-
-```text
+help
 ping
 info
-beacon
 peers
+beacon
+send
+clear
 logs
+disc
+usb
+usb on
+usb off
 ```
 
-例如输入 `info`，正常会返回设备状态、`short_id`、邻近设备数量和 EID 前几个字节。
+当前调试建议：
+
+- 需要 USB 下载时：复位后 15 秒内下载，或串口输入 `usb on` 后下载。
+- 需要 BLE/GATT 调试时：等待 15 秒 USB 自动关闭，或串口输入 `usb off`。
+- 如果 PC BLE 连接超时后设备不再广播，可用串口 `disc` 主动断开，或用 EVK reset。
+
+## 当前 BLE 调试配置
+
+为先恢复 PC GATT 调试稳定性，当前固件做了以下临时取舍：
+
+- `ACL_PERIPHR_SMP_ENABLE = 0`，调试 GATT 不走配对/加密。
+- `PENDANT_EXT_ADV_ENABLE = 0`，暂时关闭扩展广播发送调度。
+- `APP_HOST_ENABLE_ADV_TRANSPORT = 0`，暂时关闭广播上位机 transport。
+- BLE 连接调试服务 UUID 仍为当前实测版本：
+
+```text
+Service 01000056-4544-3159-4b45-000150544e44
+Cmd     01000056-4544-3159-4b45-000250544e44
+Rsp     01000056-4544-3159-4b45-000350544e44
+Log     01000056-4544-3159-4b45-000450544e44
+Evt     01000056-4544-3159-4b45-000550544e44
+```

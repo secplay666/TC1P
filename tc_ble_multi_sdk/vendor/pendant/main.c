@@ -26,6 +26,7 @@
 #include "stack/ble/ble.h"
 #include "app_config.h"
 #include "app.h"
+#include "application/usbstd/usb.h"
 
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
 
@@ -73,6 +74,10 @@ _attribute_ram_code_ int main(void)
 	rf_drv_ble_init();
 
 	gpio_init(!deepRetWakeUp);
+
+#if (PENDANT_USB_ENABLE)
+	usb_init();
+#endif
 
 
 	if(deepRetWakeUp){ //MCU wake_up from deepSleep retention mode

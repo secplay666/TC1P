@@ -31,16 +31,35 @@
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
 
 
-#define ACL_CENTRAL_MAX_NUM								1
+#define ACL_CENTRAL_MAX_NUM								0
 #define ACL_PERIPHR_MAX_NUM								1
 #define MASTER_ACL_PERIPHR_MAX_NUM						(ACL_CENTRAL_MAX_NUM+ACL_PERIPHR_MAX_NUM)
+
+#define PENDANT_USB_ENABLE                             1
+#define PENDANT_USB_POLL_INTERVAL_US                  2000
+#define PENDANT_USB_AUTO_OFF_MS                       15000
+#define PENDANT_EXT_ADV_ENABLE                        0
+#define APP_HOST_ENABLE_ADV_TRANSPORT                 0
+
+#if (PENDANT_USB_ENABLE)
+#define MODULE_USB_ENABLE                              1
+#define USB_PRINTER_ENABLE                             1
+#define USB_MOUSE_ENABLE                               0
+#define USB_KEYBOARD_ENABLE                            0
+#define USB_CUSTOM_HID_REPORT                          0
+#define ID_VENDOR                                      0x248a
+#define ID_PRODUCT_BASE                                0x8800
+#define STRING_VENDOR                                  L"Telink"
+#define STRING_PRODUCT                                 L"PENDANT"
+#define STRING_SERIAL                                  L"TLSR8258"
+#endif
 
 
 
 
 ///////////////////////// Feature Configuration////////////////////////////////////////////////
-#define ACL_PERIPHR_SMP_ENABLE						1   //1 for smp,  0 no security
-#define ACL_CENTRAL_SMP_ENABLE						1   //1 for smp,  0 no security
+#define ACL_PERIPHR_SMP_ENABLE						0   //1 for smp,  0 no security
+#define ACL_CENTRAL_SMP_ENABLE						0   //1 for smp,  0 no security
 
 
 ///////////////////////// DEBUG  Configuration ////////////////////////////////////////////////

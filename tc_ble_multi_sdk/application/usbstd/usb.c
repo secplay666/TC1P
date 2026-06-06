@@ -41,6 +41,7 @@
 #include "usb.h"
 #include "usbdesc.h"
 #include "application/usbstd/StdRequestType.h"
+#include "application/app/usbkb.h"
 
 
 #if (USB_MOUSE_ENABLE)

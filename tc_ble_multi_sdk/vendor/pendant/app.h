@@ -90,6 +90,9 @@ int app_gatt_data_handler(u16 connHandle, u8 *pkt);
 
 void app_debug_reset_adv_report_log(void);
 
+void app_usb_download_set_enabled(u8 enable);
+u8 app_usb_download_is_enabled(void);
+
 
 #endif
 #endif /* VENDOR_APP_H_ */

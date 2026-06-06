@@ -27,6 +27,8 @@
 #include "application/usbstd/usbkeycode.h"
 #include "application/rf_frame.h"
 
+#if (USB_KEYBOARD_ENABLE || USB_MOUSE_ENABLE || USB_CUSTOM_HID_REPORT)
+
 u8 usb_fifo[USB_FIFO_NUM][USB_FIFO_SIZE];
 u8 usb_ff_rptr = 0;
 u8 usb_ff_wptr = 0;
@@ -368,3 +370,11 @@ int usb_hid_report_fifo_proc(void)
 	return 0;
 }
 
+#else
+
+int usb_hid_report_fifo_proc(void)
+{
+	return 0;
+}
+
+#endif

@@ -31,14 +31,87 @@
 #include "default_att.h"
 #include "app_ui.h"
 #include "app_pendant.h"
+#include "host_gatt/app_host_gatt.h"
 #include "common/app_debug_print.h"
 #include "application/uartinterface/uart_interface.h"
 #include "application/usbstd/usbkeycode.h"
+#include "application/usbstd/usb.h"
 
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
 
 
 int	central_smp_pending = 0; 		// SMP: security & encryption;
+
+#if (PENDANT_USB_ENABLE)
+static u8 s_usb_download_enabled;
+static u32 s_usb_poll_tick;
+static u32 s_usb_start_tick;
+
+static void app_usb_download_init(void)
+{
+	usb_set_pin_en();
+
+	REG_ADDR8(0x74) = 0x62;
+	REG_ADDR16(0x7e) = 0x08d0;
+	REG_ADDR8(0x74) = 0x00;
+
+	reg_usb_ep6_buf_addr = 0x80;
+	reg_usb_ep7_buf_addr = 0x60;
+	reg_usb_ep_max_size = (256 >> 3);
+
+	usb_dp_pullup_en(1);
+	s_usb_download_enabled = 1;
+	s_usb_poll_tick = 0;
+	s_usb_start_tick = clock_time();
+}
+
+void app_usb_download_set_enabled(u8 enable)
+{
+	if(enable){
+		usb_set_pin_en();
+		usb_dp_pullup_en(1);
+		s_usb_download_enabled = 1;
+		s_usb_poll_tick = 0;
+		s_usb_start_tick = clock_time();
+	}
+	else{
+		usb_dp_pullup_en(0);
+		s_usb_download_enabled = 0;
+	}
+}
+
+u8 app_usb_download_is_enabled(void)
+{
+	return s_usb_download_enabled;
+}
+
+static void app_usb_download_poll(void)
+{
+	if(!s_usb_download_enabled){
+		return;
+	}
+#if (PENDANT_USB_AUTO_OFF_MS)
+	if(clock_time_exceed(s_usb_start_tick, PENDANT_USB_AUTO_OFF_MS * 1000)){
+		app_usb_download_set_enabled(0);
+		return;
+	}
+#endif
+	if(!s_usb_poll_tick || clock_time_exceed(s_usb_poll_tick, PENDANT_USB_POLL_INTERVAL_US)){
+		s_usb_poll_tick = clock_time();
+		usb_handle_irq();
+	}
+}
+#else
+void app_usb_download_set_enabled(u8 enable)
+{
+	(void)enable;
+}
+
+u8 app_usb_download_is_enabled(void)
+{
+	return 0;
+}
+#endif
 
 
 
@@ -320,6 +393,7 @@ int app_le_enhanced_connection_complete_event_handle(u8 *p)
 
 		if( pConnEvt->role == ACL_ROLE_PERIPHERAL )
 		{
+			u_printf("[APP][EVT] connect\r\n");
 			app_pendant_on_app_connected(pConnEvt->PeerAddr, pConnEvt->connHandle);
 		}
 
@@ -330,6 +404,22 @@ int app_le_enhanced_connection_complete_event_handle(u8 *p)
 			#else
 
 			#endif
+		}
+	}
+
+	return 0;
+}
+
+int app_le_connection_complete_event_handle(u8 *p)
+{
+	hci_le_connectionCompleteEvt_t *pConnEvt = (hci_le_connectionCompleteEvt_t *)p;
+
+	if(pConnEvt->status == BLE_SUCCESS){
+		dev_char_info_insert_by_conn_event(pConnEvt);
+		if( pConnEvt->role == ACL_ROLE_PERIPHERAL )
+		{
+			u_printf("[APP][EVT] connect\r\n");
+			app_pendant_on_app_connected(pConnEvt->peerAddr, pConnEvt->connHandle);
 		}
 	}
 
@@ -375,6 +465,7 @@ int 	app_disconnect_event_handle(u8 *p)
 	}
 
 	if(dev_char_get_conn_role_by_connhandle(pCon->connHandle) == ACL_ROLE_PERIPHERAL){
+		u_printf("[APP][EVT] disconnect\r\n");
 		app_pendant_on_app_disconnected(pCon->reason);
 	}
 
@@ -416,8 +507,7 @@ int app_controller_event_callback(u32 h, u8 *p, int n)
 			//------hci le event: le connection complete event---------------------------------
 			if (subEvt_code == HCI_SUB_EVT_LE_CONNECTION_COMPLETE)	// connection complete
 			{
-				/* when enhanced connection complete event enable, connection complete event should never come */
-				// while(1);
+				app_le_connection_complete_event_handle(p);
 			}
 			//------hci le event: le enhanced_connection complete event---------------------------------
 			if (subEvt_code == HCI_SUB_EVT_LE_ENHANCED_CONNECTION_COMPLETE)	// connection complete
@@ -667,6 +757,10 @@ _attribute_no_inline_ void user_init_normal(void)
 	/* attention that this function must be called after "blc_readFlashSize_autoConfigCustomFlashSector" !!!*/
 	blc_app_loadCustomizedParameters_normal();
 
+#if (PENDANT_USB_ENABLE)
+	app_usb_download_init();
+#endif
+
 //////////////////////////// basic hardware Initialization  End //////////////////////////////////
 
 //////////////////////////// BLE stack Initialization  Begin //////////////////////////////////
@@ -682,20 +776,28 @@ _attribute_no_inline_ void user_init_normal(void)
 
 	blc_ll_initStandby_module(mac_public);						   //mandatory
 
+	blc_ll_initLegacyAdvertising_module();
+
     blc_ll_initExtendedAdvertising_module();
     blc_ll_initExtendedAdvSetBuffer(app_advSet_buffer, APP_ADV_SETS_NUMBER);
     blc_ll_initExtendedAdvDataBuffer(app_advData_buffer, APP_MAX_LENGTH_ADV_DATA);
     blc_ll_initExtendedScanRspDataBuffer(app_scanRspData_buffer, APP_MAX_LENGTH_SCAN_RESPONSE_DATA);
 
     blc_ll_initLegacyScanning_module();
+#if (ACL_CENTRAL_MAX_NUM)
     blc_ll_initLegacyInitiating_module();			//initiate module: 	 mandatory for BLE master
+#endif
 
     blc_ll_initExtendedScanning_module();	//extended scan module
+#if (ACL_CENTRAL_MAX_NUM)
     blc_ll_initExtendedInitiating_module();
+#endif
 
 
 	blc_ll_initAclConnection_module();
+#if (ACL_CENTRAL_MAX_NUM)
 	blc_ll_initAclCentralRole_module();
+#endif
 	blc_ll_initAclPeriphrRole_module();
 
 	blc_ll_setMaxConnectionNumber(ACL_CENTRAL_MAX_NUM, ACL_PERIPHR_MAX_NUM);
@@ -705,13 +807,16 @@ _attribute_no_inline_ void user_init_normal(void)
 	/* all ACL connection share same RX FIFO */
 	blc_ll_initAclConnRxFifo(app_acl_rxfifo, ACL_RX_FIFO_SIZE, ACL_RX_FIFO_NUM);
 	/* ACL Master TX FIFO */
+#if (ACL_CENTRAL_MAX_NUM)
 	blc_ll_initAclCentralTxFifo(app_acl_mstTxfifo, ACL_MASTER_TX_FIFO_SIZE, ACL_MASTER_TX_FIFO_NUM, ACL_CENTRAL_MAX_NUM);
+#endif
 	/* ACL Slave TX FIFO */
 	blc_ll_initAclPeriphrTxFifo(app_acl_slvTxfifo, ACL_SLAVE_TX_FIFO_SIZE, ACL_SLAVE_TX_FIFO_NUM, ACL_PERIPHR_MAX_NUM);
 
 
-
+#if (ACL_CENTRAL_MAX_NUM)
 	blc_ll_setAclCentralBaseConnectionInterval(CONN_INTERVAL_31P25MS);
+#endif
 
 	rf_set_power_level_index (RF_POWER_P3dBm);
 
@@ -744,14 +849,19 @@ _attribute_no_inline_ void user_init_normal(void)
 	blc_gap_init();
 
 	/* L2CAP Initialization */
+#if (ACL_CENTRAL_MAX_NUM)
 	blc_l2cap_initAclConnMasterMtuBuffer(mtu_m_rx_fifo, MTU_M_BUFF_SIZE_MAX, 			0,					 0);
+#endif
 	blc_l2cap_initAclConnSlaveMtuBuffer(mtu_s_rx_fifo, MTU_S_BUFF_SIZE_MAX, mtu_s_tx_fifo, MTU_S_BUFF_SIZE_MAX);
 
+#if (ACL_CENTRAL_MAX_NUM)
 	blc_att_setMasterRxMTUSize(ATT_MTU_MASTER_RX_MAX_SIZE); ///must be placed after "blc_gap_init"
+#endif
 	blc_att_setSlaveRxMTUSize(ATT_MTU_SLAVE_RX_MAX_SIZE);   ///must be placed after "blc_gap_init"
 
 	/* GATT attribute table is registered by app_host_gatt_init(). */
 	blc_gatt_register_data_handler(app_gatt_data_handler);
+	app_host_gatt_init();
 
 	/* SMP Initialization */
 	#if (ACL_PERIPHR_SMP_ENABLE || ACL_CENTRAL_SMP_ENABLE)
@@ -789,20 +899,20 @@ _attribute_no_inline_ void user_init_normal(void)
 
 
 //////////////////////////// User Configuration for BLE application ////////////////////////////
-	blc_ll_setExtAdvParam(ADV_HANDLE0, ADV_EVT_PROP_LEGACY_CONNECTABLE_SCANNABLE_UNDIRECTED,
-						   ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, BLT_ENABLE_ADV_ALL,
-						   OWN_ADDRESS_PUBLIC, BLE_ADDR_PUBLIC, NULL, ADV_FP_NONE,
-						   TX_POWER_3dBm, BLE_PHY_1M, 0, BLE_PHY_1M, ADV_SID_0, 0);
-	blc_ll_setExtAdvData(ADV_HANDLE0, sizeof(tbl_advData), tbl_advData);
-	blc_ll_setExtScanRspData(ADV_HANDLE0, sizeof(tbl_scanRsp), tbl_scanRsp);
+	blc_ll_setAdvData((u8 *)tbl_advData, sizeof(tbl_advData));
+	blc_ll_setScanRspData((u8 *)tbl_scanRsp, sizeof(tbl_scanRsp));
+	blc_ll_setAdvParam(ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, ADV_TYPE_CONNECTABLE_UNDIRECTED,
+					   OWN_ADDRESS_PUBLIC, 0, NULL, BLT_ENABLE_ADV_ALL, ADV_FP_NONE);
 
+#if (PENDANT_EXT_ADV_ENABLE)
 	blc_ll_setExtAdvParam(ADV_HANDLE1, ADV_EVT_PROP_EXTENDED_NON_CONNECTABLE_NON_SCANNABLE_UNDIRECTED,
 						   ADV_INTERVAL_100MS, ADV_INTERVAL_100MS, BLT_ENABLE_ADV_ALL,
 						   OWN_ADDRESS_PUBLIC, BLE_ADDR_PUBLIC, NULL, ADV_FP_NONE,
 						   TX_POWER_3dBm, BLE_PHY_1M, 0, BLE_PHY_1M, ADV_SID_1, 0);
+#endif
 
 	blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M,
-						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
+						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_30MS,
 						   0, 0, 0);
 
 	app_pendant_init();
@@ -838,6 +948,10 @@ int main_idle_loop(void)
 
 	////////////////////////////////////// BLE entry /////////////////////////////////
 	blc_sdk_main_loop();
+
+#if (PENDANT_USB_ENABLE)
+	app_usb_download_poll();
+#endif
 
 
 	////////////////////////////////////// UI entry /////////////////////////////////

@@ -4,6 +4,7 @@
 #include "../identity/app_identity.h"
 #include "../peer_table/app_peer_table.h"
 #include "../scan/app_scan.h"
+#include "../ble/app_ble.h"
 #include "../system/app_system.h"
 #include "../app.h"
 #include "../common/app_debug_print.h"
@@ -67,6 +68,10 @@ static void print_help(void)
     u_printf(" send\r\n");
     u_printf(" clear\r\n");
     u_printf(" logs\r\n");
+    u_printf(" disc\r\n");
+    u_printf(" usb\r\n");
+    u_printf(" usb on\r\n");
+    u_printf(" usb off\r\n");
 }
 
 static void print_info(void)
@@ -164,6 +169,18 @@ static void handle_line(void)
         app_scan_debug_reset();
         app_adv_scheduler_debug_reset();
         u_printf("[DBG] logs reset\r\n");
+    } else if (cmd_eq("disc")) {
+        app_ble_disconnect_app(0x13);
+        u_printf("[DBG] disconnect\r\n");
+    } else if (cmd_eq("usb")) {
+        u_printf("[DBG] usb\r\n");
+        dbg_print_u8(" en=", app_usb_download_is_enabled());
+    } else if (cmd_eq("usb on")) {
+        app_usb_download_set_enabled(1);
+        u_printf("[DBG] usb on\r\n");
+    } else if (cmd_eq("usb off")) {
+        app_usb_download_set_enabled(0);
+        u_printf("[DBG] usb off\r\n");
     } else {
         u_printf("[DBG] unknown\r\n");
         print_help();
