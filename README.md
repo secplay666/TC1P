@@ -43,21 +43,17 @@ powershell -ExecutionPolicy Bypass -File .\tools\list_bdt_devices.ps1
 
 常见设备：
 
-- `vid_248a&pid_8266`：Telink Debugger / Burning EVK
+- `vid_248a&pid_8266`：Telink Debugger / Burning EVK，当前已验证命令行可控制
+- `vid_248a&pid_5320`：曾实测枚举为 `Telink Semiconductor USB DevSys`，不是可用的 EVK / Swire 命令行下载器
+- `vid_248a&pid_826a`：曾实测出现过，PID 会随插拔/状态变化，不能作为固定板子身份
 - `vid_248a&pid_8801`：当前 PENDANT 固件启用的 B85 USB 下载接口
 
 ## EVK / Swire 下载
 
-默认使用 EVK / Swire：
+推荐调试方式是电脑只接入一个 Telink Debugger，并把它接到当前要调试的 dangle 板。默认使用 EVK / Swire 下载：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1
-```
-
-如果有多个调试器，指定 BDT `Device ID`：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -DeviceId 1
 ```
 
 脚本会先尝试执行 BDT `ac` 激活 MCU。实测有些状态下 `ac` 会返回失败但后续 `wf` 仍能正常下载，所以当前脚本只给 warning，不再直接中断。要跳过 `ac`：
@@ -71,6 +67,22 @@ powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -SkipAc
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -NoReset
 ```
+
+如果临时接入多个 BDT 设备，先查看当前 BDT 编号，再用 `-DeviceId` 指定：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\list_bdt_devices.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -DeviceId 1
+```
+
+脚本会连续读取两次 BDT `all`，确认同一个 `Device ID` 的 `VID/PID/PortNum/HubNum` 稳定后才执行下载/复位，避免 BDT 枚举抖动时误刷到另一块板。也可以手动指定当前枚举中的 PID 或 USB 物理位置：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -DebuggerPid 8266
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -PortNum 4 -HubNum 6
+```
+
+注意：PID 不是固定板子身份，重新插拔、目标 USB 下载口打开、Burning EVK 状态变化后都可能变化。当前不建议同时插两套 Telink Debugger 做命令行烧录。
 
 ## USB 下载
 
@@ -100,13 +112,13 @@ powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -Transp
 EVK / Swire 复位：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -Transport EVK -DeviceId 1
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1
 ```
 
 USB 复位：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -Transport USB -DeviceId 2
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -Transport USB -DeviceId 1
 ```
 
 ## 串口调试
