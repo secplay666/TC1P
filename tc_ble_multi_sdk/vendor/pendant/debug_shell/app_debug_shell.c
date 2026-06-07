@@ -1,23 +1,21 @@
 #include "app_debug_shell.h"
-#include "../adv_proto/app_adv_proto.h"
-#include "../adv_scheduler/app_adv_scheduler.h"
-#include "../identity/app_identity.h"
-#include "../peer_table/app_peer_table.h"
-#include "../scan/app_scan.h"
-#include "../ble/app_ble.h"
-#include "../system/app_system.h"
-#include "../app.h"
-#include "../common/app_debug_print.h"
+#include "app_debug_shell_cmd.h"
 #include "common/string.h"
 #include "drivers.h"
 #include "uart.h"
 
 #define DBG_LINE_MAX 40
+#define DBG_PROMPT "pendant> "
+#define DBG_BOOT_PROMPT_DELAY_US 1200000
 
 static char s_line[DBG_LINE_MAX];
+static char s_last_line[DBG_LINE_MAX];
 static u8 s_line_len;
-static u32 s_dbg_msg_id;
-static u16 s_dbg_frame_seq;
+static u8 s_last_line_len;
+static u8 s_skip_lf;
+static u8 s_esc_state;
+static u8 s_prompt_pending;
+static u32 s_prompt_tick;
 
 static void dbg_puts(const char *text)
 {
@@ -27,133 +25,46 @@ static void dbg_puts(const char *text)
     }
 }
 
-static void dbg_print_u8(const char *label, u8 value)
+static void shell_prompt(void)
 {
-    u_printf(label);
-    u_printf("%x\r\n", value);
+    s_prompt_pending = 0;
+    dbg_puts(DBG_PROMPT);
 }
 
-static void dbg_print_s8(const char *label, s8 value)
+static void clear_line(void)
 {
-    u_printf(label);
-    u_printf("%d\r\n", value);
+    memset(s_line, 0, sizeof(s_line));
+    s_line_len = 0;
 }
 
-static void dbg_print_u32(const char *label, u32 value)
+static void erase_input_on_terminal(void)
 {
-    u_printf(label);
-    u_printf("%x\r\n", value);
-}
-
-static u8 cmd_eq(const char *cmd)
-{
-    u8 i = 0;
-    while (cmd[i] && s_line[i]) {
-        if (cmd[i] != s_line[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return cmd[i] == 0 && s_line[i] == 0;
-}
-
-static void print_help(void)
-{
-    u_printf("[DBG] commands\r\n");
-    u_printf(" help\r\n");
-    u_printf(" ping\r\n");
-    u_printf(" info\r\n");
-    u_printf(" peers\r\n");
-    u_printf(" beacon\r\n");
-    u_printf(" send\r\n");
-    u_printf(" clear\r\n");
-    u_printf(" logs\r\n");
-    u_printf(" radio\r\n");
-    u_printf(" disc\r\n");
-    u_printf(" usb\r\n");
-    u_printf(" usb on\r\n");
-    u_printf(" usb off\r\n");
-}
-
-static void print_info(void)
-{
-    const app_eid_t *eid = app_identity_get_eid();
-    u_printf("[DBG] info\r\n");
-    dbg_print_u8(" state=", (u8)app_system_get_state());
-    dbg_print_u32(" short=", app_identity_get_short_id());
-    dbg_print_u8(" peer_count=", app_peer_table_count());
-    dbg_print_u8(" eid0=", eid->bytes[0]);
-    dbg_print_u8(" eid1=", eid->bytes[1]);
-    dbg_print_u8(" eid2=", eid->bytes[2]);
-    dbg_print_u8(" eid3=", eid->bytes[3]);
-}
-
-static void print_peers(void)
-{
-    app_peer_record_t peers[APP_PEER_MAX_COUNT];
-    u8 count;
-    u8 i;
-
-    count = app_peer_table_copy(peers, APP_PEER_MAX_COUNT);
-    u_printf("[DBG] peers\r\n");
-    dbg_print_u8(" count=", count);
-    for (i = 0; i < count; i++) {
-        u_printf("[DBG] peer\r\n");
-        dbg_print_u8(" idx=", i);
-        dbg_print_u8(" eid0=", peers[i].eid.bytes[0]);
-        dbg_print_u8(" eid1=", peers[i].eid.bytes[1]);
-        dbg_print_s8(" rssi=", peers[i].rssi);
-        dbg_print_s8(" avg=", peers[i].rssi_avg);
-        dbg_print_u8(" level=", (u8)peers[i].level);
+    while (s_line_len) {
+        dbg_puts("\b \b");
+        s_line_len--;
+        s_line[s_line_len] = 0;
     }
 }
 
-static void print_radio(void)
+static void save_history(void)
 {
-    app_ble_debug_t ble;
-
-    app_ble_get_debug(&ble);
-    u_printf("[DBG] radio\r\n");
-    dbg_print_u8(" conn=", ble.connected);
-    dbg_print_u8(" adv0=", ble.adv0_status);
-    dbg_print_u8(" adv1=", ble.adv1_status);
-    dbg_print_u8(" scan=", ble.scan_status);
-    dbg_print_u8(" upd_st=", ble.last_adv_update_status);
-    dbg_print_u32(" upd_ok=", ble.adv_update_ok);
-    dbg_print_u32(" upd_fail=", ble.adv_update_fail);
-    dbg_print_u32(" rpt_leg=", app_radio_debug_legacy_reports());
-    dbg_print_u32(" rpt_ext=", app_radio_debug_ext_reports());
-    dbg_print_u32(" rpt_aux=", app_radio_debug_aux_reports());
+    if (!s_line_len) {
+        return;
+    }
+    memcpy(s_last_line, s_line, sizeof(s_last_line));
+    s_last_line_len = s_line_len;
 }
 
-static void send_test_frame(void)
+static void recall_history(void)
 {
-    static const u8 payload[] = {
-        'B', '8', '5', 'D', 'B', 'G', 0x01, 0x02,
-    };
-    app_adv_frame_t frame;
-    app_eid_t zero;
-    app_status_t st;
+    if (!s_last_line_len) {
+        return;
+    }
 
-    memset(&zero, 0, sizeof(zero));
-    memset(&frame, 0, sizeof(frame));
-    frame.type = ADV_FRAME_DATA;
-    frame.flags = 0;
-    frame.key_id = app_identity_get_key_id();
-    frame.device_state = (u8)app_system_get_state();
-    frame.frame_seq = s_dbg_frame_seq++;
-    frame.src_eid = *app_identity_get_eid();
-    frame.dst_eid = zero;
-    frame.message_id = s_dbg_msg_id++;
-    frame.fragment_index = 0;
-    frame.fragment_count = 1;
-    frame.payload = payload;
-    frame.payload_len = (u8)sizeof(payload);
-
-    st = app_adv_scheduler_enqueue_frame(&frame);
-    u_printf("[DBG] send\r\n");
-    dbg_print_u8(" st=", (u8)st);
-    dbg_print_u8(" payload=", frame.payload_len);
+    erase_input_on_terminal();
+    memcpy(s_line, s_last_line, sizeof(s_line));
+    s_line_len = s_last_line_len;
+    dbg_puts(s_line);
 }
 
 static void handle_line(void)
@@ -162,62 +73,63 @@ static void handle_line(void)
         return;
     }
 
-    u_printf("[DBG] cmd ");
-    dbg_puts(s_line);
-    u_printf("\r\n");
-
-    if (cmd_eq("help") || cmd_eq("?")) {
-        print_help();
-    } else if (cmd_eq("ping")) {
-        u_printf("[DBG] pong\r\n");
-    } else if (cmd_eq("info")) {
-        print_info();
-    } else if (cmd_eq("peers")) {
-        print_peers();
-    } else if (cmd_eq("beacon")) {
-        app_status_t st = app_adv_scheduler_request_beacon_update();
-        u_printf("[DBG] beacon\r\n");
-        dbg_print_u8(" st=", (u8)st);
-    } else if (cmd_eq("send")) {
-        send_test_frame();
-    } else if (cmd_eq("clear")) {
-        app_peer_table_clear();
-        u_printf("[DBG] peers cleared\r\n");
-    } else if (cmd_eq("logs")) {
-        app_debug_reset_adv_report_log();
-        app_scan_debug_reset();
-        app_adv_scheduler_debug_reset();
-        u_printf("[DBG] logs reset\r\n");
-    } else if (cmd_eq("radio")) {
-        print_radio();
-    } else if (cmd_eq("disc")) {
-        app_ble_disconnect_app(0x13);
-        u_printf("[DBG] disconnect\r\n");
-    } else if (cmd_eq("usb")) {
-        u_printf("[DBG] usb\r\n");
-        dbg_print_u8(" en=", app_usb_download_is_enabled());
-    } else if (cmd_eq("usb on")) {
-        app_usb_download_set_enabled(1);
-        u_printf("[DBG] usb on\r\n");
-    } else if (cmd_eq("usb off")) {
-        app_usb_download_set_enabled(0);
-        u_printf("[DBG] usb off\r\n");
-    } else {
-        u_printf("[DBG] unknown\r\n");
-        print_help();
-    }
+    save_history();
+    app_debug_shell_cmd_execute(s_line);
 }
 
 static void push_char(u8 ch)
 {
-    if (ch == '\r' || ch == '\n') {
-        s_line[s_line_len] = 0;
-        handle_line();
-        s_line_len = 0;
-        memset(s_line, 0, sizeof(s_line));
+    u8 echo_ch;
+
+    if (s_esc_state) {
+        if (s_esc_state == 1) {
+            s_esc_state = (ch == '[') ? 2 : 0;
+            return;
+        }
+
+        s_esc_state = 0;
+        if (ch == 'A') {
+            recall_history();
+        }
         return;
     }
 
+    if (ch == 0x1b) {
+        s_esc_state = 1;
+        return;
+    }
+
+    if (s_skip_lf && ch == '\n') {
+        s_skip_lf = 0;
+        return;
+    }
+    s_skip_lf = 0;
+
+    if (ch == '\r' || ch == '\n') {
+        if (ch == '\r') {
+            s_skip_lf = 1;
+        }
+        dbg_puts("\r\n");
+        s_line[s_line_len] = 0;
+        handle_line();
+        clear_line();
+        shell_prompt();
+        return;
+    }
+
+    if (ch == 0x03) {
+        dbg_puts("^C\r\n");
+        clear_line();
+        shell_prompt();
+        return;
+    }
+
+    if (ch == 0x15) {
+        erase_input_on_terminal();
+        return;
+    }
+
+    echo_ch = ch;
     if (ch >= 'A' && ch <= 'Z') {
         ch = (u8)(ch + ('a' - 'A'));
     }
@@ -226,6 +138,7 @@ static void push_char(u8 ch)
         if (s_line_len) {
             s_line_len--;
             s_line[s_line_len] = 0;
+            dbg_puts("\b \b");
         }
         return;
     }
@@ -236,24 +149,35 @@ static void push_char(u8 ch)
 
     if (s_line_len < DBG_LINE_MAX - 1) {
         s_line[s_line_len++] = (char)ch;
+        uart_ndma_send_byte(echo_ch);
     } else {
-        s_line_len = 0;
-        memset(s_line, 0, sizeof(s_line));
-        u_printf("[DBG] line overflow\r\n");
+        dbg_puts("\r\n[DBG] line overflow\r\n");
+        clear_line();
+        shell_prompt();
     }
 }
 
 void app_debug_shell_init(void)
 {
-    memset(s_line, 0, sizeof(s_line));
-    s_line_len = 0;
-    s_dbg_msg_id = 1;
-    s_dbg_frame_seq = 1;
+    clear_line();
+    memset(s_last_line, 0, sizeof(s_last_line));
+    s_last_line_len = 0;
+    s_skip_lf = 0;
+    s_esc_state = 0;
+    s_prompt_pending = 1;
+    s_prompt_tick = clock_time();
+    app_debug_shell_cmd_init();
+    dbg_puts("[DBG] shell ready\r\n");
 }
 
 void app_debug_shell_poll(void)
 {
     u8 guard = 16;
+
+    if (s_prompt_pending && clock_time_exceed(s_prompt_tick, DBG_BOOT_PROMPT_DELAY_US)) {
+        shell_prompt();
+    }
+
     while ((reg_uart_buf_cnt & FLD_UART_RX_BUF_CNT) && guard) {
         push_char((u8)uart_ndma_read_byte());
         guard--;
