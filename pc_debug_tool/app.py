@@ -274,6 +274,7 @@ class PendantDebugApp:
         self.devices: list[dict] = []
         self.connected = False
         self.connected_address: Optional[str] = None
+        self.shell_pending = False
         self.provision_db = ProvisionDatabase()
         self.provision_flow: Optional[dict] = None
 
@@ -513,7 +514,11 @@ class PendantDebugApp:
         line = self.shell_var.get().strip()
         if not line:
             return
+        if self.shell_pending:
+            self._append_shell("[PC] wait for previous shell response")
+            return
         self.shell_var.set("")
+        self.shell_pending = True
         self._append_shell(f"pendant> {line}")
         self.worker.send_shell(line)
         self._log(f"TX SHELL_EXEC {line}")
@@ -816,16 +821,19 @@ class PendantDebugApp:
         elif kind == "connected":
             self.connected = True
             self.connected_address = event.get("address")
+            self.shell_pending = False
             self.status_var.set("已连接" if event.get("debug_ready") else "已连接，但未找到调试服务")
             self._log(f"CONNECTED {event.get('address')} debug_ready={event.get('debug_ready')}")
         elif kind == "disconnected":
             self.connected = False
             self.connected_address = None
+            self.shell_pending = False
             self.provision_flow = None
             self._log("DISCONNECTED")
         elif kind == "services":
             self._set_text(self.service_text, event["text"])
         elif kind == "error":
+            self.shell_pending = False
             self._log("ERROR " + event["message"])
             self.status_var.set("错误: " + event["message"])
         elif kind == "rx_error":
@@ -855,6 +863,7 @@ class PendantDebugApp:
             summary = proto.format_response(message)
             self._log("RSP " + summary)
             if message.cmd == proto.CMD_SHELL_EXEC:
+                self.shell_pending = False
                 text = message.payload.decode("utf-8", errors="replace").rstrip()
                 if text:
                     self._append_shell(text)
