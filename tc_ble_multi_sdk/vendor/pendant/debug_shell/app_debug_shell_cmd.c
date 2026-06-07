@@ -6,7 +6,10 @@
 #include "../scan/app_scan.h"
 #include "../ble/app_ble.h"
 #include "../system/app_system.h"
+#include "../board/app_board.h"
+#include "../build_info/app_build_info.h"
 #include "../app.h"
+#include "../app_config.h"
 #include "../common/app_debug_print.h"
 #include "common/string.h"
 #include "drivers.h"
@@ -44,6 +47,33 @@ void app_debug_shell_cmd_print_u32(const char *label, u32 value)
 {
     u_printf(label);
     u_printf("%x\r\n", value);
+}
+
+static void print_kv_text(const char *label, const char *value)
+{
+    app_debug_shell_cmd_puts(label);
+    app_debug_shell_cmd_puts(value);
+    app_debug_shell_cmd_puts("\r\n");
+}
+
+void app_debug_shell_cmd_print_boot_info(void)
+{
+    const app_board_info_t *board = app_board_get_info();
+
+    u_printf("[DBG] build\r\n");
+    print_kv_text(" fw=", APP_BUILD_FW_NAME);
+    print_kv_text(" ver=", APP_BUILD_FW_VERSION);
+    print_kv_text(" board=", APP_BUILD_BOARD_NAME);
+    print_kv_text(" chip=", APP_BUILD_CHIP_NAME);
+    print_kv_text(" git=", APP_BUILD_GIT_DESC);
+    print_kv_text(" branch=", APP_BUILD_GIT_BRANCH);
+    print_kv_text(" date=", APP_BUILD_COMPILE_DATE);
+    print_kv_text(" time=", APP_BUILD_COMPILE_TIME);
+    app_debug_shell_cmd_print_u8(" dirty=", (u8)APP_BUILD_GIT_DIRTY);
+    app_debug_shell_cmd_print_u8(" hw_rev=", (u8)board->hw_rev);
+    app_debug_shell_cmd_print_u8(" usb=", (u8)PENDANT_USB_ENABLE);
+    app_debug_shell_cmd_print_u8(" ext_adv=", (u8)PENDANT_EXT_ADV_ENABLE);
+    app_debug_shell_cmd_print_u8(" scan=", (u8)APP_BLE_ENABLE_DISCOVERY_SCAN);
 }
 
 static u8 str_eq(const char *a, const char *b)
@@ -154,6 +184,13 @@ static void cmd_info(u8 argc, char **argv)
     app_debug_shell_cmd_print_u8(" eid1=", eid->bytes[1]);
     app_debug_shell_cmd_print_u8(" eid2=", eid->bytes[2]);
     app_debug_shell_cmd_print_u8(" eid3=", eid->bytes[3]);
+}
+
+static void cmd_build(u8 argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    app_debug_shell_cmd_print_boot_info();
 }
 
 static void cmd_peers(u8 argc, char **argv)
@@ -331,6 +368,7 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("help", "help", "show commands", cmd_help);
     app_debug_shell_cmd_register("?", "?", "show commands", cmd_help);
     app_debug_shell_cmd_register("ping", "ping", "check shell", cmd_ping);
+    app_debug_shell_cmd_register("build", "build", "show build info", cmd_build);
     app_debug_shell_cmd_register("info", "info", "show device info", cmd_info);
     app_debug_shell_cmd_register("peers", "peers", "show peer table", cmd_peers);
     app_debug_shell_cmd_register("beacon", "beacon", "request beacon update", cmd_beacon);

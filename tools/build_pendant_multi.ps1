@@ -17,9 +17,18 @@ $makePath = Join-Path $TelinkStudioPath "bin\make.exe"
 $toolchainBin = Join-Path $TelinkStudioPath "opt\tc32\bin"
 $studioBin = Join-Path $TelinkStudioPath "bin"
 $outputBin = Join-Path $projectDir "pendant\pendant.bin"
+$buildInfoScript = Join-Path $PSScriptRoot "update_pendant_build_info.ps1"
 
 if (!(Test-Path -LiteralPath (Join-Path $projectDir ".project"))) {
     throw "Telink project not found: $projectDir"
+}
+
+if (Test-Path -LiteralPath $buildInfoScript) {
+    & $buildInfoScript -RepoRoot $repoRoot
+    $buildInfoUser = Join-Path $buildDir "vendor\pendant\debug_shell\app_debug_shell_cmd.o"
+    if (Test-Path -LiteralPath $buildInfoUser) {
+        Remove-Item -LiteralPath $buildInfoUser -Force
+    }
 }
 
 if ($Headless) {

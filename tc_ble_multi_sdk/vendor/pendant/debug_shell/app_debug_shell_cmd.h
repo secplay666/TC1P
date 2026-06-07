@@ -13,6 +13,7 @@ typedef struct {
 } app_debug_shell_cmd_entry_t;
 
 void app_debug_shell_cmd_init(void);
+void app_debug_shell_cmd_print_boot_info(void);
 
 /* Register after app_debug_shell_cmd_init(); argv[0] is the command name. */
 u8 app_debug_shell_cmd_register(const char *name, const char *usage, const char *help,

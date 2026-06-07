@@ -168,6 +168,7 @@ void app_debug_shell_init(void)
     s_prompt_tick = clock_time();
     app_debug_shell_cmd_init();
     dbg_puts("[DBG] shell ready\r\n");
+    app_debug_shell_cmd_print_boot_info();
 }
 
 void app_debug_shell_poll(void)
