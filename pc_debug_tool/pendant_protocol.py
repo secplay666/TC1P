@@ -34,6 +34,7 @@ CMD_WRITE_IDENTITY = 0x0C
 CMD_LOCK_IDENTITY = 0x0D
 CMD_GET_FACTORY_INFO = 0x0E
 CMD_RUN_FACTORY_TEST = 0x0F
+CMD_SHELL_EXEC = 0x10
 
 EVENT_PEER_LEVEL = 0x81
 EVENT_SYSTEM = 0x82
@@ -55,6 +56,7 @@ CMD_NAMES = {
     CMD_LOCK_IDENTITY: "LOCK_IDENTITY",
     CMD_GET_FACTORY_INFO: "GET_FACTORY_INFO",
     CMD_RUN_FACTORY_TEST: "RUN_FACTORY_TEST",
+    CMD_SHELL_EXEC: "SHELL_EXEC",
 }
 
 STATUS_NAMES = {
@@ -270,6 +272,10 @@ def make_motor_test(seq: int, pattern: int) -> list[bytes]:
 def make_rssi_config(seq: int, t1: int, t2: int, t3: int, tin_ms: int, tout_ms: int) -> list[bytes]:
     payload = struct.pack("<bbbHH", t1, t2, t3, tin_ms, tout_ms)
     return encode_message(TYPE_CMD, seq, CMD_SET_RSSI_CONFIG, 0, payload)
+
+
+def make_shell_exec(seq: int, line: str) -> list[bytes]:
+    return encode_message(TYPE_CMD, seq, CMD_SHELL_EXEC, 0, line.encode("utf-8")[:MESSAGE_MAX_LEN])
 
 
 def build_unique_id(product_sn: int, terminal_sn: int, random_value: int, reserved: int = 0) -> bytes:
@@ -530,6 +536,8 @@ def format_response(message: HostMessage) -> str:
                 f"{name}: test_mask=0x{u32le(message.payload, 1):08X}, "
                 f"result=0x{u32le(message.payload, 5):08X}"
             )
+        if message.cmd == CMD_SHELL_EXEC:
+            return message.payload.decode("utf-8", errors="replace").rstrip()
     except Exception as exc:
         return f"{name}: parse error: {exc}; raw={hex_bytes(message.payload)}"
 

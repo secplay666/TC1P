@@ -123,17 +123,22 @@ powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi.ps1 -Transp
 ```text
 help
 ping
+build
 info
 peers
 beacon
 send
 clear
 logs
+radio
 disc
+reset
 usb
 usb on
 usb off
 ```
+
+PC 上位机 `pc_debug_tool` 也可以在连接 Debug Service 后使用 `Shell` 页签远程执行同一组 shell 命令。当前 BLE shell 单次返回最多 72 字节，长输出会带 `[truncated]` 标记；后续如需要完整长输出，再扩展为分页或流式返回。
 
 当前调试建议：
 
@@ -143,11 +148,13 @@ usb off
 
 ## 当前 BLE 调试配置
 
-为先恢复 PC GATT 调试稳定性，当前固件做了以下临时取舍：
+当前固件的 BLE 调试配置：
 
 - `ACL_PERIPHR_SMP_ENABLE = 0`，调试 GATT 不走配对/加密。
-- `PENDANT_EXT_ADV_ENABLE = 0`，暂时关闭扩展广播发送调度。
+- `PENDANT_EXT_ADV_ENABLE = 1`，启用扩展广播发送调度。
+- `APP_BLE_ENABLE_DISCOVERY_SCAN = 1`，启用扩展扫描。
 - `APP_HOST_ENABLE_ADV_TRANSPORT = 0`，暂时关闭广播上位机 transport。
+- GATT Debug Service 可连接 PC 调试工具，并支持 `Shell` 页签远程执行下位机 shell 命令。
 - BLE 连接调试服务 UUID 仍为当前实测版本：
 
 ```text

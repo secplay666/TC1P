@@ -3,6 +3,7 @@
 
 #include "common/types.h"
 
+typedef void (*app_debug_shell_cmd_write_fn_t)(void *ctx, const char *text, u16 len);
 typedef void (*app_debug_shell_cmd_handler_t)(u8 argc, char **argv);
 
 typedef struct {
@@ -19,6 +20,7 @@ void app_debug_shell_cmd_print_boot_info(void);
 u8 app_debug_shell_cmd_register(const char *name, const char *usage, const char *help,
                                 app_debug_shell_cmd_handler_t handler);
 void app_debug_shell_cmd_execute(char *line);
+void app_debug_shell_cmd_execute_with_writer(char *line, app_debug_shell_cmd_write_fn_t writer, void *ctx);
 
 void app_debug_shell_cmd_puts(const char *text);
 void app_debug_shell_cmd_print_u8(const char *label, u8 value);

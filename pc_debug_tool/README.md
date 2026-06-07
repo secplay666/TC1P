@@ -41,6 +41,10 @@ python app.py
   - 日志开关
   - 清统计
   - 进入休眠
+- 支持 `Shell` 页签，通过 BLE Debug Service 远程执行下位机串口 shell 命令。
+  - 当前首版单次返回最多 72 字节，超出时返回内容末尾会带 `[truncated]`。
+  - 适合执行 `ping`、`info`、`radio`、`peers`、`usb`、`disc` 等短调试命令。
+  - `reset` 会先返回 `[DBG] reset`，再延迟执行软件复位。
 - 显示完整 GATT 服务列表，便于排查 Debug Service 是否注册成功。
 - 支持发送 Raw Command Frame Hex。
 

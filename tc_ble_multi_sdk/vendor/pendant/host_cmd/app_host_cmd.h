@@ -20,6 +20,7 @@ typedef enum {
     HOST_CMD_LOCK_IDENTITY = 0x0D,
     HOST_CMD_GET_FACTORY_INFO = 0x0E,
     HOST_CMD_RUN_FACTORY_TEST = 0x0F,
+    HOST_CMD_SHELL_EXEC = 0x10,
 } app_host_cmd_id_t;
 
 typedef enum {

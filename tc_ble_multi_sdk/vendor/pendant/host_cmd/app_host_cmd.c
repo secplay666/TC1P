@@ -13,7 +13,12 @@
 #include "../peer_table/app_peer_table.h"
 #include "../motor/app_motor.h"
 #include "../pm/app_pm.h"
+#include "../debug_shell/app_debug_shell_cmd.h"
 #include "common/string.h"
+#include "drivers.h"
+
+#define HOST_SHELL_RSP_MAX_LEN 72
+#define HOST_SHELL_RSP_BODY_MAX_LEN 57
 
 #define HOST_LOG_LEVEL_INFO  1
 #define HOST_LOG_LEVEL_ERROR 2
@@ -36,6 +41,15 @@ static u16 s_cmd_count;
 static u16 s_crc_error_count;
 static u8 s_rsp_buf[APP_ADV_FRAME_MAX_LEN];
 static app_peer_record_t s_peer_snapshot[APP_PEER_MAX_COUNT];
+static u8 s_reboot_pending;
+static u32 s_reboot_tick;
+
+typedef struct {
+    u8 *buf;
+    u16 len;
+    u16 max;
+    u8 truncated;
+} host_shell_capture_t;
 
 static void wr16(u8 *p, u16 v)
 {
@@ -59,6 +73,70 @@ static u16 rd16(const u8 *p)
 static u32 rd32(const u8 *p)
 {
     return ((u32)p[0]) | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+static u8 chr_lower(u8 ch)
+{
+    if (ch >= 'A' && ch <= 'Z') {
+        return (u8)(ch + ('a' - 'A'));
+    }
+    return ch;
+}
+
+static u8 bytes_eq_word_ci(const u8 *payload, u16 len, const char *word)
+{
+    u16 start = 0;
+    u16 end = len;
+    u16 i = 0;
+
+    if (!payload || !word) {
+        return 0;
+    }
+    while (start < end && (payload[start] == ' ' || payload[start] == '\t' || payload[start] == '\r' || payload[start] == '\n')) {
+        start++;
+    }
+    while (end > start && (payload[end - 1] == ' ' || payload[end - 1] == '\t' || payload[end - 1] == '\r' || payload[end - 1] == '\n')) {
+        end--;
+    }
+
+    while (word[i]) {
+        if (start + i >= end || chr_lower(payload[start + i]) != (u8)word[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return start + i == end;
+}
+
+static void shell_capture_write(void *ctx, const char *text, u16 len)
+{
+    host_shell_capture_t *cap = (host_shell_capture_t *)ctx;
+    u16 i;
+
+    if (!cap || !text) {
+        return;
+    }
+
+    for (i = 0; i < len; i++) {
+        if (cap->len < cap->max) {
+            cap->buf[cap->len++] = (u8)text[i];
+        } else {
+            cap->truncated = 1;
+            return;
+        }
+    }
+}
+
+static void shell_capture_puts(host_shell_capture_t *cap, const char *text)
+{
+    u16 len = 0;
+    if (!text) {
+        return;
+    }
+    while (text[len]) {
+        len++;
+    }
+    shell_capture_write(cap, text, len);
 }
 
 static u8 host_status_from_app(app_status_t st)
@@ -372,6 +450,59 @@ static void handle_run_factory_test(u8 seq, const u8 *payload, u16 len)
     send_rsp(seq, HOST_CMD_RUN_FACTORY_TEST, host_status_from_app(st), s_rsp_buf, st == APP_OK ? 9 : 0);
 }
 
+static void handle_shell_exec(u8 seq, const u8 *payload, u16 len)
+{
+    char line[64];
+    host_shell_capture_t cap;
+    u16 i;
+
+    if (len >= sizeof(line)) {
+        send_rsp(seq, HOST_CMD_SHELL_EXEC, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
+    }
+
+    if (bytes_eq_word_ci(payload, len, "reset")) {
+        s_rsp_buf[0] = '[';
+        s_rsp_buf[1] = 'D';
+        s_rsp_buf[2] = 'B';
+        s_rsp_buf[3] = 'G';
+        s_rsp_buf[4] = ']';
+        s_rsp_buf[5] = ' ';
+        s_rsp_buf[6] = 'r';
+        s_rsp_buf[7] = 'e';
+        s_rsp_buf[8] = 's';
+        s_rsp_buf[9] = 'e';
+        s_rsp_buf[10] = 't';
+        s_rsp_buf[11] = '\r';
+        s_rsp_buf[12] = '\n';
+        send_rsp(seq, HOST_CMD_SHELL_EXEC, HOST_STATUS_OK, s_rsp_buf, 13);
+        s_reboot_pending = 1;
+        s_reboot_tick = clock_time();
+        return;
+    }
+
+    for (i = 0; i < len; i++) {
+        if (payload[i] == '\r' || payload[i] == '\n') {
+            break;
+        }
+        line[i] = (char)payload[i];
+    }
+    line[i] = 0;
+
+    cap.buf = s_rsp_buf;
+    cap.len = 0;
+    cap.max = HOST_SHELL_RSP_BODY_MAX_LEN;
+    cap.truncated = 0;
+    memset(s_rsp_buf, 0, APP_HOST_MESSAGE_MAX_LEN);
+
+    app_debug_shell_cmd_execute_with_writer(line, shell_capture_write, &cap);
+    if (cap.truncated) {
+        cap.max = HOST_SHELL_RSP_MAX_LEN;
+        shell_capture_puts(&cap, "\r\n[truncated]\r\n");
+    }
+    send_rsp(seq, HOST_CMD_SHELL_EXEC, HOST_STATUS_OK, s_rsp_buf, cap.len);
+}
+
 static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
 {
     s_cmd_count++;
@@ -421,6 +552,9 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
     case HOST_CMD_RUN_FACTORY_TEST:
         handle_run_factory_test(seq, payload, len);
         break;
+    case HOST_CMD_SHELL_EXEC:
+        handle_shell_exec(seq, payload, len);
+        break;
     default:
         send_rsp(seq, cmd, HOST_STATUS_ERR_UNSUPPORTED, 0, 0);
         break;
@@ -435,10 +569,15 @@ void app_host_cmd_init(void)
     s_log_count = 0;
     s_cmd_count = 0;
     s_crc_error_count = 0;
+    s_reboot_pending = 0;
+    s_reboot_tick = 0;
 }
 
 void app_host_cmd_poll(void)
 {
+    if (s_reboot_pending && clock_time_exceed(s_reboot_tick, 300000)) {
+        start_reboot();
+    }
 }
 
 u8 app_host_cmd_next_tx_seq(void)

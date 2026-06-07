@@ -10,7 +10,6 @@
 #include "../build_info/app_build_info.h"
 #include "../app.h"
 #include "../app_config.h"
-#include "../common/app_debug_print.h"
 #include "common/string.h"
 #include "drivers.h"
 #include "uart.h"
@@ -22,31 +21,105 @@ static app_debug_shell_cmd_entry_t s_cmds[APP_DEBUG_SHELL_CMD_MAX_COUNT];
 static u8 s_cmd_count;
 static u32 s_dbg_msg_id;
 static u16 s_dbg_frame_seq;
+static app_debug_shell_cmd_write_fn_t s_writer;
+static void *s_writer_ctx;
+
+static void uart_writer(void *ctx, const char *text, u16 len)
+{
+    u16 i;
+    (void)ctx;
+
+    for (i = 0; i < len; i++) {
+        uart_ndma_send_byte((u8)text[i]);
+    }
+}
+
+static u16 str_len16(const char *text)
+{
+    u16 len = 0;
+
+    if (!text) {
+        return 0;
+    }
+    while (text[len]) {
+        len++;
+    }
+    return len;
+}
 
 void app_debug_shell_cmd_puts(const char *text)
 {
-    while (text && *text) {
-        uart_ndma_send_byte((u8)*text);
-        text++;
+    if (!s_writer) {
+        s_writer = uart_writer;
+    }
+    s_writer(s_writer_ctx, text, str_len16(text));
+}
+
+static void print_hex_u32(u32 value)
+{
+    char buf[9];
+    u8 started = 0;
+    u8 i;
+    u8 nibble;
+    u8 out = 0;
+
+    for (i = 0; i < 8; i++) {
+        nibble = (u8)((value >> ((7 - i) * 4)) & 0x0f);
+        if (nibble || started || i == 7) {
+            started = 1;
+            buf[out++] = (char)(nibble < 10 ? ('0' + nibble) : ('a' + nibble - 10));
+        }
+    }
+    buf[out] = 0;
+    app_debug_shell_cmd_puts(buf);
+}
+
+static void print_dec_s32(s32 value)
+{
+    char buf[12];
+    u8 i = 0;
+    u8 j;
+    u32 v;
+
+    if (value < 0) {
+        app_debug_shell_cmd_puts("-");
+        v = (u32)(-value);
+    } else {
+        v = (u32)value;
+    }
+
+    do {
+        buf[i++] = (char)('0' + (v % 10));
+        v /= 10;
+    } while (v && i < sizeof(buf));
+
+    for (j = 0; j < i; j++) {
+        char c[2];
+        c[0] = buf[i - 1 - j];
+        c[1] = 0;
+        app_debug_shell_cmd_puts(c);
     }
 }
 
 void app_debug_shell_cmd_print_u8(const char *label, u8 value)
 {
-    u_printf(label);
-    u_printf("%x\r\n", value);
+    app_debug_shell_cmd_puts(label);
+    print_hex_u32(value);
+    app_debug_shell_cmd_puts("\r\n");
 }
 
 void app_debug_shell_cmd_print_s8(const char *label, s8 value)
 {
-    u_printf(label);
-    u_printf("%d\r\n", value);
+    app_debug_shell_cmd_puts(label);
+    print_dec_s32(value);
+    app_debug_shell_cmd_puts("\r\n");
 }
 
 void app_debug_shell_cmd_print_u32(const char *label, u32 value)
 {
-    u_printf(label);
-    u_printf("%x\r\n", value);
+    app_debug_shell_cmd_puts(label);
+    print_hex_u32(value);
+    app_debug_shell_cmd_puts("\r\n");
 }
 
 static void print_kv_text(const char *label, const char *value)
@@ -60,7 +133,7 @@ void app_debug_shell_cmd_print_boot_info(void)
 {
     const app_board_info_t *board = app_board_get_info();
 
-    u_printf("[DBG] build\r\n");
+    app_debug_shell_cmd_puts("[DBG] build\r\n");
     print_kv_text(" fw=", APP_BUILD_FW_NAME);
     print_kv_text(" ver=", APP_BUILD_FW_VERSION);
     print_kv_text(" board=", APP_BUILD_BOARD_NAME);
@@ -150,7 +223,7 @@ static void cmd_help(u8 argc, char **argv)
     (void)argc;
     (void)argv;
 
-    u_printf("[DBG] commands\r\n");
+    app_debug_shell_cmd_puts("[DBG] commands\r\n");
     for (i = 0; i < s_cmd_count; i++) {
         app_debug_shell_cmd_puts(" ");
         app_debug_shell_cmd_puts(s_cmds[i].usage ? s_cmds[i].usage : s_cmds[i].name);
@@ -166,7 +239,7 @@ static void cmd_ping(u8 argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    u_printf("[DBG] pong\r\n");
+    app_debug_shell_cmd_puts("[DBG] pong\r\n");
 }
 
 static void cmd_info(u8 argc, char **argv)
@@ -176,7 +249,7 @@ static void cmd_info(u8 argc, char **argv)
     (void)argv;
 
     eid = app_identity_get_eid();
-    u_printf("[DBG] info\r\n");
+    app_debug_shell_cmd_puts("[DBG] info\r\n");
     app_debug_shell_cmd_print_u8(" state=", (u8)app_system_get_state());
     app_debug_shell_cmd_print_u32(" short=", app_identity_get_short_id());
     app_debug_shell_cmd_print_u8(" peer_count=", app_peer_table_count());
@@ -202,10 +275,10 @@ static void cmd_peers(u8 argc, char **argv)
     (void)argv;
 
     count = app_peer_table_copy(peers, APP_PEER_MAX_COUNT);
-    u_printf("[DBG] peers\r\n");
+    app_debug_shell_cmd_puts("[DBG] peers\r\n");
     app_debug_shell_cmd_print_u8(" count=", count);
     for (i = 0; i < count; i++) {
-        u_printf("[DBG] peer\r\n");
+        app_debug_shell_cmd_puts("[DBG] peer\r\n");
         app_debug_shell_cmd_print_u8(" idx=", i);
         app_debug_shell_cmd_print_u8(" eid0=", peers[i].eid.bytes[0]);
         app_debug_shell_cmd_print_u8(" eid1=", peers[i].eid.bytes[1]);
@@ -222,7 +295,7 @@ static void cmd_beacon(u8 argc, char **argv)
     (void)argv;
 
     st = app_adv_scheduler_request_beacon_update();
-    u_printf("[DBG] beacon\r\n");
+    app_debug_shell_cmd_puts("[DBG] beacon\r\n");
     app_debug_shell_cmd_print_u8(" st=", (u8)st);
 }
 
@@ -253,7 +326,7 @@ static void cmd_send(u8 argc, char **argv)
     frame.payload_len = (u8)sizeof(payload);
 
     st = app_adv_scheduler_enqueue_frame(&frame);
-    u_printf("[DBG] send\r\n");
+    app_debug_shell_cmd_puts("[DBG] send\r\n");
     app_debug_shell_cmd_print_u8(" st=", (u8)st);
     app_debug_shell_cmd_print_u8(" payload=", frame.payload_len);
 }
@@ -263,7 +336,7 @@ static void cmd_clear(u8 argc, char **argv)
     (void)argc;
     (void)argv;
     app_peer_table_clear();
-    u_printf("[DBG] peers cleared\r\n");
+    app_debug_shell_cmd_puts("[DBG] peers cleared\r\n");
 }
 
 static void cmd_logs(u8 argc, char **argv)
@@ -273,7 +346,7 @@ static void cmd_logs(u8 argc, char **argv)
     app_debug_reset_adv_report_log();
     app_scan_debug_reset();
     app_adv_scheduler_debug_reset();
-    u_printf("[DBG] logs reset\r\n");
+    app_debug_shell_cmd_puts("[DBG] logs reset\r\n");
 }
 
 static void cmd_radio(u8 argc, char **argv)
@@ -283,7 +356,7 @@ static void cmd_radio(u8 argc, char **argv)
     (void)argv;
 
     app_ble_get_debug(&ble);
-    u_printf("[DBG] radio\r\n");
+    app_debug_shell_cmd_puts("[DBG] radio\r\n");
     app_debug_shell_cmd_print_u8(" conn=", ble.connected);
     app_debug_shell_cmd_print_u8(" adv0=", ble.adv0_status);
     app_debug_shell_cmd_print_u8(" adv1=", ble.adv1_status);
@@ -301,7 +374,7 @@ static void cmd_disc(u8 argc, char **argv)
     (void)argc;
     (void)argv;
     app_ble_disconnect_app(0x13);
-    u_printf("[DBG] disconnect\r\n");
+    app_debug_shell_cmd_puts("[DBG] disconnect\r\n");
 }
 
 static void cmd_reset(u8 argc, char **argv)
@@ -316,32 +389,43 @@ static void cmd_reset(u8 argc, char **argv)
 static void cmd_usb(u8 argc, char **argv)
 {
     if (argc == 1) {
-        u_printf("[DBG] usb\r\n");
+        app_debug_shell_cmd_puts("[DBG] usb\r\n");
         app_debug_shell_cmd_print_u8(" en=", app_usb_download_is_enabled());
         return;
     }
 
     if (argc == 2 && str_eq(argv[1], "on")) {
         app_usb_download_set_enabled(1);
-        u_printf("[DBG] usb on\r\n");
+        app_debug_shell_cmd_puts("[DBG] usb on\r\n");
         return;
     }
 
     if (argc == 2 && str_eq(argv[1], "off")) {
         app_usb_download_set_enabled(0);
-        u_printf("[DBG] usb off\r\n");
+        app_debug_shell_cmd_puts("[DBG] usb off\r\n");
         return;
     }
 
-    u_printf("[DBG] usage: usb [on|off]\r\n");
+    app_debug_shell_cmd_puts("[DBG] usage: usb [on|off]\r\n");
 }
 
-void app_debug_shell_cmd_execute(char *line)
+static void lower_command_name(char *text)
+{
+    while (*text && *text != ' ' && *text != '\t') {
+        if (*text >= 'A' && *text <= 'Z') {
+            *text = (char)(*text + ('a' - 'A'));
+        }
+        text++;
+    }
+}
+
+static void execute_line(char *line)
 {
     char *argv[APP_DEBUG_SHELL_ARG_MAX];
     u8 argc;
     u8 i;
 
+    lower_command_name(line);
     argc = split_args(line, argv, APP_DEBUG_SHELL_ARG_MAX);
     if (!argc) {
         return;
@@ -354,8 +438,25 @@ void app_debug_shell_cmd_execute(char *line)
         }
     }
 
-    u_printf("[DBG] unknown\r\n");
+    app_debug_shell_cmd_puts("[DBG] unknown\r\n");
     cmd_help(0, 0);
+}
+
+void app_debug_shell_cmd_execute(char *line)
+{
+    execute_line(line);
+}
+
+void app_debug_shell_cmd_execute_with_writer(char *line, app_debug_shell_cmd_write_fn_t writer, void *ctx)
+{
+    app_debug_shell_cmd_write_fn_t old_writer = s_writer;
+    void *old_ctx = s_writer_ctx;
+
+    s_writer = writer ? writer : uart_writer;
+    s_writer_ctx = ctx;
+    execute_line(line);
+    s_writer = old_writer;
+    s_writer_ctx = old_ctx;
 }
 
 void app_debug_shell_cmd_init(void)
@@ -364,6 +465,8 @@ void app_debug_shell_cmd_init(void)
     s_cmd_count = 0;
     s_dbg_msg_id = 1;
     s_dbg_frame_seq = 1;
+    s_writer = uart_writer;
+    s_writer_ctx = 0;
 
     app_debug_shell_cmd_register("help", "help", "show commands", cmd_help);
     app_debug_shell_cmd_register("?", "?", "show commands", cmd_help);

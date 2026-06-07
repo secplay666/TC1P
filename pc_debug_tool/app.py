@@ -114,6 +114,9 @@ class BleWorker:
     def send_command(self, cmd: int, payload: bytes = b"") -> None:
         self.submit(self._send_packets(proto.encode_message(proto.TYPE_CMD, self._next_seq(), cmd, 0, payload)))
 
+    def send_shell(self, line: str) -> None:
+        self.submit(self._send_packets(proto.make_shell_exec(self._next_seq(), line)))
+
     def send_packets(self, packets: list[bytes]) -> None:
         self.submit(self._send_packets(packets))
 
@@ -316,17 +319,20 @@ class PendantDebugApp:
         self.control_tab = ttk.Frame(notebook, padding=8)
         self.identity_tab = ttk.Frame(notebook, padding=8)
         self.message_tab = ttk.Frame(notebook, padding=8)
+        self.shell_tab = ttk.Frame(notebook, padding=8)
         self.peer_tab = ttk.Frame(notebook, padding=8)
         self.service_tab = ttk.Frame(notebook, padding=8)
         notebook.add(self.control_tab, text="控制")
         notebook.add(self.identity_tab, text="身份")
         notebook.add(self.message_tab, text="消息")
+        notebook.add(self.shell_tab, text="Shell")
         notebook.add(self.peer_tab, text="发现设备")
         notebook.add(self.service_tab, text="GATT")
 
         self._build_control_tab()
         self._build_identity_tab()
         self._build_message_tab()
+        self._build_shell_tab()
         self._build_peer_tab()
         self._build_service_tab()
 
@@ -446,6 +452,20 @@ class PendantDebugApp:
         ttk.Entry(raw, textvariable=self.raw_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         ttk.Button(raw, text="发送", command=self._send_raw).pack(side=tk.LEFT)
 
+    def _build_shell_tab(self) -> None:
+        self.shell_text = scrolledtext.ScrolledText(self.shell_tab, wrap=tk.WORD)
+        self.shell_text.pack(fill=tk.BOTH, expand=True)
+
+        bar = ttk.Frame(self.shell_tab)
+        bar.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(bar, text="pendant>").pack(side=tk.LEFT)
+        self.shell_var = tk.StringVar()
+        entry = ttk.Entry(bar, textvariable=self.shell_var)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        entry.bind("<Return>", lambda _event: self._send_shell())
+        ttk.Button(bar, text="发送", command=self._send_shell).pack(side=tk.LEFT)
+        ttk.Button(bar, text="清空", command=lambda: self._set_text(self.shell_text, "")).pack(side=tk.LEFT, padx=(6, 0))
+
     def _build_peer_tab(self) -> None:
         columns = ("short_id", "level", "rssi", "rssi_avg", "flags")
         self.peer_tree = ttk.Treeview(self.peer_tab, columns=columns, show="headings")
@@ -488,6 +508,15 @@ class PendantDebugApp:
     def _send_empty(self, cmd: int) -> None:
         self.worker.send_command(cmd)
         self._log(f"TX {proto.CMD_NAMES.get(cmd, hex(cmd))}")
+
+    def _send_shell(self) -> None:
+        line = self.shell_var.get().strip()
+        if not line:
+            return
+        self.shell_var.set("")
+        self._append_shell(f"pendant> {line}")
+        self.worker.send_shell(line)
+        self._log(f"TX SHELL_EXEC {line}")
 
     def _send_log_enable(self) -> None:
         payload = bytes([1 if self.log_enable_var.get() else 0])
@@ -825,6 +854,14 @@ class PendantDebugApp:
         if message.frame_type == proto.TYPE_RSP:
             summary = proto.format_response(message)
             self._log("RSP " + summary)
+            if message.cmd == proto.CMD_SHELL_EXEC:
+                text = message.payload.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    self._append_shell(text)
+                if text.lower().startswith("[dbg] reset"):
+                    self._log("SHELL reset acknowledged; disconnecting local BLE client")
+                    self.worker.disconnect()
+                return
             self._append_info(summary)
             if message.cmd == proto.CMD_GET_PEER_TABLE and message.status == 0:
                 self._update_peer_table(proto.parse_peer_table(message.payload))
@@ -939,6 +976,10 @@ class PendantDebugApp:
     def _append_identity(self, text: str) -> None:
         self.identity_text.insert(tk.END, f"[{now_text()}] {text}\n")
         self.identity_text.see(tk.END)
+
+    def _append_shell(self, text: str) -> None:
+        self.shell_text.insert(tk.END, text + "\n")
+        self.shell_text.see(tk.END)
 
     def _log(self, text: str) -> None:
         self.log_text.insert(tk.END, f"[{now_text()}] {text}\n")
