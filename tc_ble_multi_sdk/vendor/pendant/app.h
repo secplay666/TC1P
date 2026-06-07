@@ -110,6 +110,10 @@ u32 app_radio_debug_aux_vendor_b0(void);
 u32 app_radio_debug_aux_vendor_b1(void);
 u32 app_radio_debug_aux_vendor_b2(void);
 u32 app_radio_debug_aux_vendor_b3(void);
+void app_radio_debug_set_rx_decode_enabled(u8 enable);
+u8 app_radio_debug_rx_decode_enabled(void);
+u8 app_radio_debug_public_mac_byte(u8 index);
+u8 app_radio_debug_random_mac_byte(u8 index);
 
 void app_usb_download_set_enabled(u8 enable);
 u8 app_usb_download_is_enabled(void);

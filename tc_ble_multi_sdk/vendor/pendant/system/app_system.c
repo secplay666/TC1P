@@ -7,6 +7,7 @@
 #include "../identity/app_identity.h"
 #include "../ble/app_ble.h"
 #include "../pm/app_pm.h"
+#include "../app_config.h"
 #include "drivers.h"
 #include "timer.h"
 
@@ -61,12 +62,21 @@ void app_system_init(void)
     s_system.wakeup_reason = app_pm_get_wakeup_reason();
     s_system.uptime_s = 0;
     s_boot_tick = clock_time();
+#if (PENDANT_WATCHDOG_ENABLE)
+    wd_set_interval_ms(PENDANT_WATCHDOG_TIMEOUT_MS, CLOCK_SYS_CLOCK_HZ / 1000);
+    wd_clear();
+    wd_start();
+#endif
     app_event_post(APP_EVT_BOOT_DONE, 0, 0);
 }
 
 void app_system_poll(void)
 {
     app_event_t evt;
+
+#if (PENDANT_WATCHDOG_ENABLE)
+    wd_clear();
+#endif
 
     if (clock_time_exceed(s_boot_tick, 1000000)) {
         s_system.uptime_s++;
@@ -95,7 +105,9 @@ void app_system_handle_event(const app_event_t *event)
         break;
 
     case APP_EVT_SELF_CHECK_OK:
+#if (PENDANT_BLE_AUTO_START)
         app_ble_start_adv_scan(0);
+#endif
         app_system_set_state(SYS_STATE_ADV_SCAN);
         break;
 

@@ -41,6 +41,10 @@
 #define PENDANT_EXT_ADV_ENABLE                        1
 #define APP_BLE_ENABLE_DISCOVERY_SCAN                 1
 #define APP_HOST_ENABLE_ADV_TRANSPORT                 0
+#define PENDANT_BLE_AUTO_START                        0
+#define PENDANT_WATCHDOG_ENABLE                       1
+#define PENDANT_WATCHDOG_TIMEOUT_MS                   3000
+#define PENDANT_DEMO_CENTRAL_CONNECT_ENABLE           0
 
 #if (PENDANT_USB_ENABLE)
 #define MODULE_USB_ENABLE                              1

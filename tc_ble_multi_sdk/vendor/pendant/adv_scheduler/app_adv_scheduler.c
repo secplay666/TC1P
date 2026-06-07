@@ -13,11 +13,13 @@
 static u16 s_frame_seq;
 static u8 s_adv_dirty;
 static u32 s_last_update_tick;
+static u8 s_data_hold_active;
 static u8 s_adv_buf[APP_ADV_FRAME_MAX_LEN];
 static u8 s_payload_buf[32];
 static app_adv_scheduler_debug_t s_debug;
 
-#define APP_ADV_SCHED_QUEUE_SIZE 4
+#define APP_ADV_SCHED_QUEUE_SIZE 3
+#define APP_ADV_DATA_HOLD_US     3000000
 
 typedef struct {
     app_adv_frame_t frame;
@@ -34,6 +36,7 @@ void app_adv_scheduler_init(void)
     s_frame_seq = 0;
     s_adv_dirty = 1;
     s_last_update_tick = 0;
+    s_data_hold_active = 0;
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;
@@ -52,6 +55,7 @@ void app_adv_scheduler_debug_reset(void)
     memset(&s_debug, 0, sizeof(s_debug));
     s_debug.queue_count = s_q_count;
     s_adv_dirty = 1;
+    s_data_hold_active = 0;
 }
 
 void app_adv_scheduler_get_debug(app_adv_scheduler_debug_t *debug)
@@ -193,6 +197,12 @@ void app_adv_scheduler_poll(void)
     u8 len;
     app_status_t st;
     u32 update_interval_us = s_q_count ? 50000 : 200000;
+
+    if (s_data_hold_active && !s_q_count && !s_adv_dirty &&
+        !clock_time_exceed(s_last_update_tick, APP_ADV_DATA_HOLD_US)) {
+        return;
+    }
+
     if (!s_last_update_tick || clock_time_exceed(s_last_update_tick, update_interval_us) || s_adv_dirty) {
         st = app_adv_scheduler_build_next_adv_data(s_adv_buf, sizeof(s_adv_buf), &len);
         s_debug.last_status = (u8)st;
@@ -200,12 +210,17 @@ void app_adv_scheduler_poll(void)
             s_debug.build_ok++;
             if (s_debug.last_type == ADV_FRAME_DATA) {
                 s_debug.data_build_ok++;
+                s_data_hold_active = 1;
             } else if (s_debug.last_type == ADV_FRAME_BEACON) {
                 s_debug.beacon_build_ok++;
+                s_data_hold_active = 0;
+            } else {
+                s_data_hold_active = 0;
             }
             app_ble_update_ext_adv_data(s_adv_buf, len);
         } else {
             s_debug.build_fail++;
+            s_data_hold_active = 0;
         }
         s_last_update_tick = clock_time();
         s_adv_dirty = 0;

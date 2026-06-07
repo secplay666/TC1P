@@ -144,7 +144,24 @@ function Resolve-BdtEvkPortNum {
         throw "BDT DeviceId=$BoardId not found or has no PortNum.`n$($list.Raw)"
     }
     if ($ordinalMatch[0].Pid -eq "8801") {
-        throw "BDT DeviceId=$BoardId is pid_8801 USB download interface, not an EVK debugger. Use another BDT DeviceId."
+        $evkMatches = @($list.Devices | Where-Object {
+                $_.Vid -eq "248a" -and $_.Pid -ne "8801" -and $null -ne $_.PortNum
+            })
+        if ($evkMatches.Count -eq 1) {
+            return [pscustomobject]@{
+                BoardId     = $BoardId
+                DebuggerPid = $evkMatches[0].Pid
+                PortNum     = $evkMatches[0].PortNum
+                HubNum      = $evkMatches[0].HubNum
+                BdtDeviceId = $evkMatches[0].DeviceId
+                Source      = "AutoEvkFallback"
+                List        = $list
+            }
+        }
+        $found = ($list.Devices | ForEach-Object {
+                "DeviceId=$($_.DeviceId) pid=$($_.Pid) PortNum=$($_.PortNum) HubNum=$($_.HubNum)"
+            }) -join "`n"
+        throw "BDT DeviceId=$BoardId is pid_8801 USB download interface, and EVK auto fallback found $($evkMatches.Count) candidates.`n$found`nRaw BDT output:`n$($list.Raw)"
     }
 
     return [pscustomobject]@{

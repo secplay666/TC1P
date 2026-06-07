@@ -16,6 +16,7 @@
 #include "adv_proto/app_adv_proto.h"
 #include "adv_scheduler/app_adv_scheduler.h"
 #include "peer_table/app_peer_table.h"
+#include "peer_transport/app_peer_transport.h"
 #include "discovery/app_discovery.h"
 #include "scan/app_scan.h"
 #include "host_cmd/app_host_cmd.h"
@@ -45,6 +46,7 @@ void app_pendant_init(void)
     app_adv_proto_init();
     app_adv_scheduler_init();
     app_peer_table_init();
+    app_peer_transport_init();
     app_discovery_init();
     app_scan_init();
     app_host_cmd_init();
@@ -63,6 +65,7 @@ void app_pendant_poll(void)
     app_host_cmd_poll();
     app_host_transport_poll();
     app_host_gatt_poll();
+    app_peer_transport_poll();
     app_discovery_poll(now);
     app_adv_scheduler_poll();
     app_battery_poll(now);

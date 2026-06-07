@@ -3,6 +3,7 @@
 #include "../adv_scheduler/app_adv_scheduler.h"
 #include "../identity/app_identity.h"
 #include "../peer_table/app_peer_table.h"
+#include "../peer_transport/app_peer_transport.h"
 #include "../scan/app_scan.h"
 #include "../ble/app_ble.h"
 #include "../system/app_system.h"
@@ -148,6 +149,7 @@ void app_debug_shell_cmd_print_boot_info(void)
     app_debug_shell_cmd_print_u8(" usb=", (u8)PENDANT_USB_ENABLE);
     app_debug_shell_cmd_print_u8(" ext_adv=", (u8)PENDANT_EXT_ADV_ENABLE);
     app_debug_shell_cmd_print_u8(" scan=", (u8)APP_BLE_ENABLE_DISCOVERY_SCAN);
+    app_debug_shell_cmd_print_u8(" wdt=", (u8)PENDANT_WATCHDOG_ENABLE);
     app_debug_shell_cmd_print_u32(" adv_max=", APP_ADV_FRAME_MAX_LEN);
     app_debug_shell_cmd_print_u32(" payload_max=", APP_ADV_PAYLOAD_MAX_LEN);
 }
@@ -211,6 +213,55 @@ static u8 parse_u16_arg(const char *text, u16 *value)
     }
 
     *value = (u16)v;
+    return 1;
+}
+
+static s8 hex_value(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return (s8)(c - '0');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return (s8)(c - 'a' + 10);
+    }
+    if (c >= 'A' && c <= 'F') {
+        return (s8)(c - 'A' + 10);
+    }
+    return -1;
+}
+
+static u8 parse_mac_arg(const char *text, u8 *addr)
+{
+    u8 nibbles[12];
+    u8 count = 0;
+    u8 i;
+
+    if (!text || !addr) {
+        return 0;
+    }
+
+    while (*text) {
+        s8 v;
+        if (*text == ':' || *text == '-') {
+            text++;
+            continue;
+        }
+        v = hex_value(*text++);
+        if (v < 0 || count >= sizeof(nibbles)) {
+            return 0;
+        }
+        nibbles[count++] = (u8)v;
+    }
+
+    if (count != sizeof(nibbles)) {
+        return 0;
+    }
+
+    for (i = 0; i < 6; i++) {
+        u8 hi = nibbles[i * 2];
+        u8 lo = nibbles[i * 2 + 1];
+        addr[5 - i] = (u8)((hi << 4) | lo);
+    }
     return 1;
 }
 
@@ -463,6 +514,71 @@ static void cmd_rxstat(u8 argc, char **argv)
     app_debug_shell_cmd_print_u8(" src1=", scan.last_src1);
 }
 
+static void cmd_p2pstat(u8 argc, char **argv)
+{
+    app_peer_transport_debug_t debug;
+    (void)argc;
+    (void)argv;
+    app_peer_transport_get_debug(&debug);
+    app_debug_shell_cmd_puts("[DBG] p2pstat\r\n");
+    app_debug_shell_cmd_print_u32(" tx_ok=", debug.tx_ok);
+    app_debug_shell_cmd_print_u32(" tx_fail=", debug.tx_fail);
+    app_debug_shell_cmd_print_u32(" rx_total=", debug.rx_total);
+    app_debug_shell_cmd_print_u32(" rx_accept=", debug.rx_accept);
+    app_debug_shell_cmd_print_u32(" rx_drop=", debug.rx_drop);
+    app_debug_shell_cmd_print_u32(" rx_dup=", debug.rx_dup);
+    app_debug_shell_cmd_print_u32(" rx_bc=", debug.rx_broadcast);
+    app_debug_shell_cmd_print_u32(" rx_dir=", debug.rx_direct);
+    app_debug_shell_cmd_print_u32(" tx_seq=", debug.last_tx_seq);
+    app_debug_shell_cmd_print_u32(" rx_seq=", debug.last_rx_seq);
+    app_debug_shell_cmd_print_u8(" st=", debug.last_status);
+    app_debug_shell_cmd_print_u8(" tx_type=", debug.last_tx_type);
+    app_debug_shell_cmd_print_u8(" tx_len=", debug.last_tx_len);
+    app_debug_shell_cmd_print_u8(" rx_type=", debug.last_rx_type);
+    app_debug_shell_cmd_print_u8(" rx_len=", debug.last_rx_len);
+    app_debug_shell_cmd_print_s8(" rssi=", debug.last_rssi);
+    app_debug_shell_cmd_print_u8(" src0=", debug.last_rx_src0);
+    app_debug_shell_cmd_print_u8(" src1=", debug.last_rx_src1);
+    app_debug_shell_cmd_print_u8(" max=", debug.max_payload_len);
+}
+
+static void cmd_p2psend(u8 argc, char **argv)
+{
+    u16 len = APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN;
+    u16 i;
+    app_status_t st;
+
+    if (argc > 1) {
+        if (!parse_u16_arg(argv[1], &len)) {
+            app_debug_shell_cmd_puts("[DBG] usage: p2psend [len]\r\n");
+            app_debug_shell_cmd_print_u8(" max=", APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN);
+            return;
+        }
+    }
+    if (len > APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN) {
+        app_debug_shell_cmd_puts("[DBG] usage: p2psend [len]\r\n");
+        app_debug_shell_cmd_print_u8(" max=", APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN);
+        return;
+    }
+
+    for (i = 0; i < len; i++) {
+        s_dbg_payload[i] = (u8)(i + 0x30);
+    }
+    st = app_peer_transport_send(0, APP_PEER_MSG_TEST, s_dbg_payload, (u8)len);
+    app_debug_shell_cmd_puts("[DBG] p2psend\r\n");
+    app_debug_shell_cmd_print_u8(" st=", (u8)st);
+    app_debug_shell_cmd_print_u8(" payload=", (u8)len);
+    app_debug_shell_cmd_print_u32(" adv_payload=", APP_PEER_TRANSPORT_HEADER_LEN + len);
+}
+
+static void cmd_p2pclear(u8 argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    app_peer_transport_debug_reset();
+    app_debug_shell_cmd_puts("[DBG] p2p cleared\r\n");
+}
+
 static void cmd_txstat(u8 argc, char **argv)
 {
     app_adv_scheduler_debug_t adv;
@@ -496,9 +612,20 @@ static void cmd_radio(u8 argc, char **argv)
     app_ble_get_debug(&ble);
     app_debug_shell_cmd_puts("[DBG] radio\r\n");
     app_debug_shell_cmd_print_u8(" conn=", ble.connected);
+    app_debug_shell_cmd_print_u8(" started=", ble.started);
+    app_debug_shell_cmd_print_u8(" adv0_en=", ble.adv0_enabled);
+    app_debug_shell_cmd_print_u8(" adv1_en=", ble.adv1_enabled);
+    app_debug_shell_cmd_print_u8(" scan_en=", ble.scan_enabled);
     app_debug_shell_cmd_print_u8(" adv0=", ble.adv0_status);
     app_debug_shell_cmd_print_u8(" adv1=", ble.adv1_status);
+    app_debug_shell_cmd_print_u8(" adv1_param=", ble.adv1_param_status);
+    app_debug_shell_cmd_print_u8(" adv1_sid=", ble.adv1_sid);
+    app_debug_shell_cmd_print_u8(" adv1_a0=", ble.adv1_addr0);
+    app_debug_shell_cmd_print_u8(" adv1_a5=", ble.adv1_addr5);
     app_debug_shell_cmd_print_u8(" scan=", ble.scan_status);
+    app_debug_shell_cmd_print_u8(" scan_param=", ble.scan_param_status);
+    app_debug_shell_cmd_print_u8(" scan_fp=", ble.scan_filter_policy);
+    app_debug_shell_cmd_print_u8(" rx_decode=", app_radio_debug_rx_decode_enabled());
     app_debug_shell_cmd_print_u8(" upd_st=", ble.last_adv_update_status);
     app_debug_shell_cmd_print_u32(" upd_ok=", ble.adv_update_ok);
     app_debug_shell_cmd_print_u32(" upd_fail=", ble.adv_update_fail);
@@ -531,6 +658,153 @@ static void cmd_disc(u8 argc, char **argv)
     (void)argv;
     app_ble_disconnect_app(0x13);
     app_debug_shell_cmd_puts("[DBG] disconnect\r\n");
+}
+
+static void cmd_ble(u8 argc, char **argv)
+{
+    app_status_t st;
+
+    if (argc == 2 && str_eq(argv[1], "start")) {
+        st = app_ble_start_adv_scan(0);
+        app_debug_shell_cmd_puts("[DBG] ble start\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "stop")) {
+        st = app_ble_stop_adv_scan();
+        app_debug_shell_cmd_puts("[DBG] ble stop\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "adv0-on")) {
+        st = app_ble_set_adv0_enabled(1);
+        app_debug_shell_cmd_puts("[DBG] adv0 on\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "adv0-off")) {
+        st = app_ble_set_adv0_enabled(0);
+        app_debug_shell_cmd_puts("[DBG] adv0 off\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "adv1-on")) {
+        st = app_ble_set_adv1_enabled(1);
+        app_debug_shell_cmd_puts("[DBG] adv1 on\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "adv1-off")) {
+        st = app_ble_set_adv1_enabled(0);
+        app_debug_shell_cmd_puts("[DBG] adv1 off\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "scan-on")) {
+        st = app_ble_set_scan_enabled(1);
+        app_debug_shell_cmd_puts("[DBG] scan on\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "scan-off")) {
+        st = app_ble_set_scan_enabled(0);
+        app_debug_shell_cmd_puts("[DBG] scan off\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    app_debug_shell_cmd_puts("[DBG] usage: ble [start|stop|adv0-on|adv0-off|adv1-on|adv1-off|scan-on|scan-off]\r\n");
+}
+
+static void cmd_rx(u8 argc, char **argv)
+{
+    if (argc == 2 && str_eq(argv[1], "on")) {
+        app_radio_debug_set_rx_decode_enabled(1);
+        app_debug_shell_cmd_puts("[DBG] rx on\r\n");
+        return;
+    }
+
+    if (argc == 2 && str_eq(argv[1], "off")) {
+        app_radio_debug_set_rx_decode_enabled(0);
+        app_debug_shell_cmd_puts("[DBG] rx off\r\n");
+        return;
+    }
+
+    app_debug_shell_cmd_puts("[DBG] rx\r\n");
+    app_debug_shell_cmd_print_u8(" decode=", app_radio_debug_rx_decode_enabled());
+}
+
+static void cmd_wl(u8 argc, char **argv)
+{
+    app_ble_debug_t ble;
+    app_status_t st_clear;
+    app_status_t st_add = APP_OK;
+    u8 addr[6];
+
+    if (argc == 1) {
+        app_ble_get_debug(&ble);
+        app_debug_shell_cmd_puts("[DBG] wl\r\n");
+        app_debug_shell_cmd_print_u8(" fp=", ble.scan_filter_policy);
+        return;
+    }
+
+    app_ble_get_debug(&ble);
+    if (ble.scan_enabled) {
+        app_ble_set_scan_enabled(0);
+    }
+
+    if (argc == 2 && (str_eq(argv[1], "off") || str_eq(argv[1], "clear"))) {
+        st_clear = app_ble_whitelist_clear();
+        app_ble_set_scan_whitelist_enabled(0);
+        app_debug_shell_cmd_puts("[DBG] wl off\r\n");
+        app_debug_shell_cmd_print_u8(" clear=", (u8)st_clear);
+        app_debug_shell_cmd_puts("[DBG] run: ble scan-on\r\n");
+        return;
+    }
+
+    if (argc == 3 && str_eq(argv[1], "add")) {
+        if (!parse_mac_arg(argv[2], addr)) {
+            app_debug_shell_cmd_puts("[DBG] usage: wl add a4c1389e9882\r\n");
+            return;
+        }
+        st_clear = app_ble_whitelist_clear();
+        if (st_clear == APP_OK) {
+            st_add = app_ble_whitelist_add_public(addr);
+        }
+        if (st_clear == APP_OK && st_add == APP_OK) {
+            app_ble_set_scan_whitelist_enabled(1);
+        }
+        app_debug_shell_cmd_puts("[DBG] wl add\r\n");
+        app_debug_shell_cmd_print_u8(" clear=", (u8)st_clear);
+        app_debug_shell_cmd_print_u8(" add=", (u8)st_add);
+        app_debug_shell_cmd_puts("[DBG] run: ble scan-on\r\n");
+        return;
+    }
+
+    app_debug_shell_cmd_puts("[DBG] usage: wl [off|clear|add <mac>]\r\n");
+}
+
+static void cmd_mac(u8 argc, char **argv)
+{
+    u8 i;
+    (void)argc;
+    (void)argv;
+
+    app_debug_shell_cmd_puts("[DBG] mac public\r\n");
+    for (i = 0; i < 6; i++) {
+        app_debug_shell_cmd_print_u8(" b=", app_radio_debug_public_mac_byte(i));
+    }
+    app_debug_shell_cmd_puts("[DBG] mac random\r\n");
+    for (i = 0; i < 6; i++) {
+        app_debug_shell_cmd_print_u8(" b=", app_radio_debug_random_mac_byte(i));
+    }
 }
 
 static void cmd_reset(u8 argc, char **argv)
@@ -636,8 +910,15 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("clear", "clear", "clear peer table", cmd_clear);
     app_debug_shell_cmd_register("logs", "logs", "reset debug counters", cmd_logs);
     app_debug_shell_cmd_register("rxstat", "rxstat", "show scan decode counters", cmd_rxstat);
+    app_debug_shell_cmd_register("p2pstat", "p2pstat", "show peer transport counters", cmd_p2pstat);
+    app_debug_shell_cmd_register("p2psend", "p2psend [len]", "send peer test message", cmd_p2psend);
+    app_debug_shell_cmd_register("p2pclear", "p2pclear", "clear peer transport counters", cmd_p2pclear);
     app_debug_shell_cmd_register("txstat", "txstat", "show adv scheduler counters", cmd_txstat);
     app_debug_shell_cmd_register("radio", "radio", "show BLE radio state", cmd_radio);
+    app_debug_shell_cmd_register("mac", "mac", "show BLE MAC address bytes", cmd_mac);
+    app_debug_shell_cmd_register("ble", "ble [start|stop|adv0-on|adv1-on|scan-on]", "control BLE radio", cmd_ble);
+    app_debug_shell_cmd_register("rx", "rx [on|off]", "control RX decode path", cmd_rx);
+    app_debug_shell_cmd_register("wl", "wl [off|add <mac>]", "control scan whitelist", cmd_wl);
     app_debug_shell_cmd_register("disc", "disc", "disconnect GATT", cmd_disc);
     app_debug_shell_cmd_register("reset", "reset", "software reset", cmd_reset);
     app_debug_shell_cmd_register("usb", "usb [on|off]", "show or switch USB", cmd_usb);

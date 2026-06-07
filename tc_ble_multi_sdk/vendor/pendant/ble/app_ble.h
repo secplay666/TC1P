@@ -18,9 +18,19 @@ typedef struct {
 
 typedef struct {
     u8 connected;
+    u8 started;
+    u8 adv0_enabled;
+    u8 adv1_enabled;
+    u8 scan_enabled;
     u8 adv0_status;
     u8 adv1_status;
+    u8 adv1_param_status;
+    u8 adv1_sid;
+    u8 adv1_addr0;
+    u8 adv1_addr5;
     u8 scan_status;
+    u8 scan_param_status;
+    u8 scan_filter_policy;
     u8 last_adv_update_status;
     u16 adv_update_ok;
     u16 adv_update_fail;
@@ -29,6 +39,12 @@ typedef struct {
 void app_ble_init(void);
 app_status_t app_ble_start_adv_scan(const app_ble_params_t *params);
 app_status_t app_ble_stop_adv_scan(void);
+app_status_t app_ble_set_adv0_enabled(u8 enable);
+app_status_t app_ble_set_adv1_enabled(u8 enable);
+app_status_t app_ble_set_scan_enabled(u8 enable);
+app_status_t app_ble_set_scan_whitelist_enabled(u8 enable);
+app_status_t app_ble_whitelist_clear(void);
+app_status_t app_ble_whitelist_add_public(const u8 *addr);
 app_status_t app_ble_update_ext_adv_data(const u8 *data, u8 len);
 app_status_t app_ble_disconnect_app(u8 reason);
 u8 app_ble_is_app_connected(void);

@@ -135,7 +135,7 @@ const u8 tbl_extAdvInitData[] = {
 };
 
 #define APP_ADV_SETS_NUMBER                    2
-#define APP_MAX_LENGTH_ADV_DATA                256
+#define APP_MAX_LENGTH_ADV_DATA                80
 #define APP_MAX_LENGTH_SCAN_RESPONSE_DATA      31
 
 _attribute_ble_data_retention_ static u8 app_advSet_buffer[ADV_SET_PARAM_LENGTH * APP_ADV_SETS_NUMBER];
@@ -169,6 +169,9 @@ static u8 s_ext_adv_aux_vendor_b2 = 0;
 static u8 s_ext_adv_aux_vendor_b3 = 0;
 static u32 s_ext_adv_aux_reasm_ok = 0;
 static u32 s_ext_adv_aux_reasm_drop = 0;
+static u8 s_ext_adv_rx_decode_enabled = 1;
+static u8 s_app_mac_public[6] = {0};
+static u8 s_app_mac_random_static[6] = {0};
 
 static u8 s_ext_adv_reasm_active = 0;
 static u8 s_ext_adv_reasm_addr_type = 0;
@@ -314,6 +317,31 @@ u32 app_radio_debug_aux_vendor_b3(void)
 	return s_ext_adv_aux_vendor_b3;
 }
 
+void app_radio_debug_set_rx_decode_enabled(u8 enable)
+{
+	s_ext_adv_rx_decode_enabled = enable ? 1 : 0;
+	if(!s_ext_adv_rx_decode_enabled){
+		s_ext_adv_reasm_active = 0;
+		s_ext_adv_reasm_expected_len = 0;
+		s_ext_adv_reasm_len = 0;
+	}
+}
+
+u8 app_radio_debug_rx_decode_enabled(void)
+{
+	return s_ext_adv_rx_decode_enabled;
+}
+
+u8 app_radio_debug_public_mac_byte(u8 index)
+{
+	return index < 6 ? s_app_mac_public[index] : 0;
+}
+
+u8 app_radio_debug_random_mac_byte(u8 index)
+{
+	return index < 6 ? s_app_mac_random_static[index] : 0;
+}
+
 static u8 app_ext_adv_reasm_same_source(extAdvEvt_info_t *info)
 {
 	if(!s_ext_adv_reasm_active){
@@ -435,6 +463,7 @@ int app_le_adv_report_event_handle(u8 *p)
 #if 1
 	event_adv_report_t *pa = (event_adv_report_t *)p;
 	s8 rssi = pa->data[pa->len];
+	(void)rssi;
 
 	AA_dbg_adv_rpt ++;
 
@@ -448,6 +477,7 @@ int app_le_adv_report_event_handle(u8 *p)
 
 
 	/*********************** Master Create connection demo: Key press or ADV pair packet triggers pair  ********************/
+#if (ACL_CENTRAL_MAX_NUM && PENDANT_DEMO_CENTRAL_CONNECT_ENABLE)
 	if(central_smp_pending ){ 	 //if previous connection SMP not finish, can not create a new connection
 		return 1;
 	}
@@ -484,6 +514,7 @@ int app_le_adv_report_event_handle(u8 *p)
 
 		}
 	}
+#endif
 	/*********************** Master Create connection demo code end  *******************************************************/
 
 #endif
@@ -508,6 +539,10 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 
 	extAdvEvt_info_t *pExtAdvInfo = NULL;
 
+	if(!p || evt_data_len < 2){
+		s_ext_adv_aux_reasm_drop++;
+		return 0;
+	}
 
 	if(pExtAdvRpt->num_reports != 1){
 		//tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]rpt evt combine", &pExtAdvRpt->num_reports, 1);
@@ -520,9 +555,20 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 
 	for(int i=0; i<pExtAdvRpt->num_reports ; i++)
 	{
+		int data_avail_len;
+		int remaining = evt_data_len - 2 - offset;
+
+		if(remaining < EXTADV_INFO_LENGTH){
+			s_ext_adv_aux_reasm_drop++;
+			break;
+		}
 
 		pExtAdvInfo = (extAdvEvt_info_t *)(pExtAdvRpt->advEvtInfo + offset);
-		int data_avail_len = evt_data_len - 2 - offset - EXTADV_INFO_LENGTH;
+		data_avail_len = remaining - EXTADV_INFO_LENGTH;
+		if(pExtAdvInfo->data_length > data_avail_len){
+			s_ext_adv_aux_reasm_drop++;
+			break;
+		}
 		offset += (EXTADV_INFO_LENGTH + pExtAdvInfo->data_length);
 		s8 rssi = pExtAdvInfo->rssi;
 		const u8 *report_data = pExtAdvInfo->data;
@@ -571,10 +617,15 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 			s_ext_adv_aux_last_b1 = pExtAdvInfo->data_length > 1 ? pExtAdvInfo->data[1] : 0;
 			s_ext_adv_aux_last_b2 = pExtAdvInfo->data_length > 2 ? pExtAdvInfo->data[2] : 0;
 			s_ext_adv_aux_last_b3 = pExtAdvInfo->data_length > 3 ? pExtAdvInfo->data[3] : 0;
-			report_ready = app_ext_adv_reasm_report(pExtAdvInfo, &report_data, &report_len);
+			if(s_ext_adv_rx_decode_enabled){
+				report_ready = app_ext_adv_reasm_report(pExtAdvInfo, &report_data, &report_len);
+			}
+			else{
+				report_ready = 0;
+			}
 		}
 
-		if(report_ready){
+		if(report_ready && s_ext_adv_rx_decode_enabled){
 			app_pendant_on_adv_report(report_data, report_len, rssi, pExtAdvInfo->address);
 		}
 
@@ -618,6 +669,7 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 
 		if(conn_adv_flag)
 		{
+#if (ACL_CENTRAL_MAX_NUM && PENDANT_DEMO_CENTRAL_CONNECT_ENABLE)
 				/*********************** Master Create connection demo: Key press or ADV pair packet triggers pair  ********************/
 				if(central_smp_pending ){ 	 //if previous connection SMP not finish, can not create a new connection
 					return 1;
@@ -675,6 +727,7 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 						tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]ext init ok", &status, 1);
 					}
 				}
+#endif
 		}
 
 
@@ -1077,6 +1130,10 @@ _attribute_no_inline_ void user_init_normal(void)
 	u8  mac_random_static[6];
 	/* for 512K Flash, flash_sector_mac_address equals to 0x76000, for 1M  Flash, flash_sector_mac_address equals to 0xFF000 */
 	blc_initMacAddress(flash_sector_mac_address, mac_public, mac_random_static);
+	for(int i = 0; i < 6; i++){
+		s_app_mac_public[i] = mac_public[i];
+		s_app_mac_random_static[i] = mac_random_static[i];
+	}
 
 
 	//////////// LinkLayer Initialization  Begin /////////////////////////
@@ -1234,7 +1291,7 @@ _attribute_no_inline_ void user_init_normal(void)
 
 #if (APP_BLE_ENABLE_DISCOVERY_SCAN)
 	blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M,
-						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
+						   SCAN_TYPE_ACTIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
 						   0, 0, 0);
 #endif
 
