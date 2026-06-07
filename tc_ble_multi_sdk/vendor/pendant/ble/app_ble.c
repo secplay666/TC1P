@@ -99,7 +99,13 @@ app_status_t app_ble_update_ext_adv_data(const u8 *data, u8 len)
 #if !PENDANT_EXT_ADV_ENABLE
     return APP_OK;
 #else
-    st = blc_ll_setExtAdvData(APP_BLE_PENDANT_ADV_HANDLE, len, data);
+    if (s_adv_scan_started) {
+        blc_ll_setExtAdvEnable(BLC_ADV_DISABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
+        st = blc_ll_setExtAdvData(APP_BLE_PENDANT_ADV_HANDLE, len, data);
+        blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_PENDANT_ADV_HANDLE, 0, 0);
+    } else {
+        st = blc_ll_setExtAdvData(APP_BLE_PENDANT_ADV_HANDLE, len, data);
+    }
     s_debug.last_adv_update_status = st;
     if (st != BLE_SUCCESS && s_adv_scan_started) {
         ble_sts_t retry_st;

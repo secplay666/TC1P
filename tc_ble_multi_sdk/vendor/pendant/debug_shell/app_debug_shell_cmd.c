@@ -21,6 +21,7 @@ static app_debug_shell_cmd_entry_t s_cmds[APP_DEBUG_SHELL_CMD_MAX_COUNT];
 static u8 s_cmd_count;
 static u32 s_dbg_msg_id;
 static u16 s_dbg_frame_seq;
+static u8 s_dbg_payload[APP_ADV_PAYLOAD_MAX_LEN];
 static app_debug_shell_cmd_write_fn_t s_writer;
 static void *s_writer_ctx;
 
@@ -147,6 +148,8 @@ void app_debug_shell_cmd_print_boot_info(void)
     app_debug_shell_cmd_print_u8(" usb=", (u8)PENDANT_USB_ENABLE);
     app_debug_shell_cmd_print_u8(" ext_adv=", (u8)PENDANT_EXT_ADV_ENABLE);
     app_debug_shell_cmd_print_u8(" scan=", (u8)APP_BLE_ENABLE_DISCOVERY_SCAN);
+    app_debug_shell_cmd_print_u32(" adv_max=", APP_ADV_FRAME_MAX_LEN);
+    app_debug_shell_cmd_print_u32(" payload_max=", APP_ADV_PAYLOAD_MAX_LEN);
 }
 
 static u8 str_eq(const char *a, const char *b)
@@ -164,6 +167,51 @@ static u8 str_eq(const char *a, const char *b)
         i++;
     }
     return a[i] == 0 && b[i] == 0;
+}
+
+static u8 parse_u16_arg(const char *text, u16 *value)
+{
+    u32 v = 0;
+    u8 base = 10;
+    u8 i = 0;
+
+    if (!text || !text[0] || !value) {
+        return 0;
+    }
+
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        base = 16;
+        i = 2;
+        if (!text[i]) {
+            return 0;
+        }
+    }
+
+    while (text[i]) {
+        u8 digit;
+        char c = text[i++];
+
+        if (c >= '0' && c <= '9') {
+            digit = (u8)(c - '0');
+        } else if (base == 16 && c >= 'a' && c <= 'f') {
+            digit = (u8)(c - 'a' + 10);
+        } else if (base == 16 && c >= 'A' && c <= 'F') {
+            digit = (u8)(c - 'A' + 10);
+        } else {
+            return 0;
+        }
+
+        if (digit >= base) {
+            return 0;
+        }
+        v = v * base + digit;
+        if (v > 0xffff) {
+            return 0;
+        }
+    }
+
+    *value = (u16)v;
+    return 1;
 }
 
 u8 app_debug_shell_cmd_register(const char *name, const char *usage, const char *help,
@@ -331,6 +379,48 @@ static void cmd_send(u8 argc, char **argv)
     app_debug_shell_cmd_print_u8(" payload=", frame.payload_len);
 }
 
+static void cmd_sendmax(u8 argc, char **argv)
+{
+    app_adv_frame_t frame;
+    app_eid_t zero;
+    app_status_t st;
+    u16 len = APP_ADV_PAYLOAD_MAX_LEN;
+    u16 i;
+
+    if (argc > 2 || (argc == 2 && !parse_u16_arg(argv[1], &len)) ||
+        len == 0 || len > APP_ADV_PAYLOAD_MAX_LEN) {
+        app_debug_shell_cmd_puts("[DBG] usage: sendmax [len]\r\n");
+        app_debug_shell_cmd_print_u32(" max_payload=", APP_ADV_PAYLOAD_MAX_LEN);
+        app_debug_shell_cmd_print_u32(" max_adv=", APP_ADV_FRAME_MAX_LEN);
+        return;
+    }
+
+    for (i = 0; i < len; i++) {
+        s_dbg_payload[i] = (u8)(i ^ 0x5a);
+    }
+
+    memset(&zero, 0, sizeof(zero));
+    memset(&frame, 0, sizeof(frame));
+    frame.type = ADV_FRAME_DATA;
+    frame.flags = 0;
+    frame.key_id = app_identity_get_key_id();
+    frame.device_state = (u8)app_system_get_state();
+    frame.frame_seq = s_dbg_frame_seq++;
+    frame.src_eid = *app_identity_get_eid();
+    frame.dst_eid = zero;
+    frame.message_id = s_dbg_msg_id++;
+    frame.fragment_index = 0;
+    frame.fragment_count = 1;
+    frame.payload = s_dbg_payload;
+    frame.payload_len = (u8)len;
+
+    st = app_adv_scheduler_enqueue_frame(&frame);
+    app_debug_shell_cmd_puts("[DBG] sendmax\r\n");
+    app_debug_shell_cmd_print_u8(" st=", (u8)st);
+    app_debug_shell_cmd_print_u8(" payload=", frame.payload_len);
+    app_debug_shell_cmd_print_u32(" adv_len=", APP_ADV_AD_OVERHEAD_LEN + APP_ADV_HEADER_LEN + frame.payload_len + APP_ADV_FRAME_CRC_LEN);
+}
+
 static void cmd_clear(u8 argc, char **argv)
 {
     (void)argc;
@@ -347,6 +437,54 @@ static void cmd_logs(u8 argc, char **argv)
     app_scan_debug_reset();
     app_adv_scheduler_debug_reset();
     app_debug_shell_cmd_puts("[DBG] logs reset\r\n");
+}
+
+static void cmd_rxstat(u8 argc, char **argv)
+{
+    app_scan_debug_t scan;
+    (void)argc;
+    (void)argv;
+
+    app_scan_get_debug(&scan);
+    app_debug_shell_cmd_puts("[DBG] rxstat\r\n");
+    app_debug_shell_cmd_print_u32(" reports=", scan.reports);
+    app_debug_shell_cmd_print_u32(" ok=", scan.decode_ok);
+    app_debug_shell_cmd_print_u32(" fail=", scan.decode_fail);
+    app_debug_shell_cmd_print_u32(" vendor_fail=", scan.vendor_decode_fail);
+    app_debug_shell_cmd_print_u32(" self=", scan.self_ignored);
+    app_debug_shell_cmd_print_u32(" beacon=", scan.beacon_rx);
+    app_debug_shell_cmd_print_u32(" data=", scan.data_rx);
+    app_debug_shell_cmd_print_u32(" other=", scan.other_rx);
+    app_debug_shell_cmd_print_u8(" adv_len=", scan.last_adv_len);
+    app_debug_shell_cmd_print_u8(" type=", scan.last_type);
+    app_debug_shell_cmd_print_u8(" payload=", scan.last_payload_len);
+    app_debug_shell_cmd_print_s8(" rssi=", scan.last_rssi);
+    app_debug_shell_cmd_print_u8(" src0=", scan.last_src0);
+    app_debug_shell_cmd_print_u8(" src1=", scan.last_src1);
+}
+
+static void cmd_txstat(u8 argc, char **argv)
+{
+    app_adv_scheduler_debug_t adv;
+    (void)argc;
+    (void)argv;
+
+    app_adv_scheduler_get_debug(&adv);
+    app_debug_shell_cmd_puts("[DBG] txstat\r\n");
+    app_debug_shell_cmd_print_u32(" build_ok=", adv.build_ok);
+    app_debug_shell_cmd_print_u32(" build_fail=", adv.build_fail);
+    app_debug_shell_cmd_print_u32(" beacon_ok=", adv.beacon_build_ok);
+    app_debug_shell_cmd_print_u32(" data_ok=", adv.data_build_ok);
+    app_debug_shell_cmd_print_u32(" enq_ok=", adv.enqueue_ok);
+    app_debug_shell_cmd_print_u32(" enq_full=", adv.enqueue_full);
+    app_debug_shell_cmd_print_u8(" queue=", adv.queue_count);
+    app_debug_shell_cmd_print_u8(" st=", adv.last_status);
+    app_debug_shell_cmd_print_u8(" adv_len=", adv.last_adv_len);
+    app_debug_shell_cmd_print_u8(" max_len=", adv.max_adv_len);
+    app_debug_shell_cmd_print_u8(" type=", adv.last_type);
+    app_debug_shell_cmd_print_u8(" payload=", adv.last_payload_len);
+    app_debug_shell_cmd_print_u8(" data_len=", adv.last_data_adv_len);
+    app_debug_shell_cmd_print_u8(" data_payload=", adv.last_data_payload_len);
 }
 
 static void cmd_radio(u8 argc, char **argv)
@@ -367,6 +505,24 @@ static void cmd_radio(u8 argc, char **argv)
     app_debug_shell_cmd_print_u32(" rpt_leg=", app_radio_debug_legacy_reports());
     app_debug_shell_cmd_print_u32(" rpt_ext=", app_radio_debug_ext_reports());
     app_debug_shell_cmd_print_u32(" rpt_aux=", app_radio_debug_aux_reports());
+    app_debug_shell_cmd_print_u32(" aux_max=", app_radio_debug_aux_max_len());
+    app_debug_shell_cmd_print_u32(" aux_len=", app_radio_debug_aux_last_len());
+    app_debug_shell_cmd_print_u32(" aux_evt=", app_radio_debug_aux_last_evt());
+    app_debug_shell_cmd_print_u32(" aux_st=", app_radio_debug_aux_last_status());
+    app_debug_shell_cmd_print_u32(" aux_evt_len=", app_radio_debug_aux_evt_len());
+    app_debug_shell_cmd_print_u32(" aux_avail=", app_radio_debug_aux_avail_len());
+    app_debug_shell_cmd_print_u32(" aux_vstart=", app_radio_debug_aux_vendor_start());
+    app_debug_shell_cmd_print_u32(" aux_svc=", app_radio_debug_aux_service_start());
+    app_debug_shell_cmd_print_u32(" aux_reasm=", app_radio_debug_aux_reasm_ok());
+    app_debug_shell_cmd_print_u32(" aux_drop=", app_radio_debug_aux_reasm_drop());
+    app_debug_shell_cmd_print_u8(" aux_b0=", (u8)app_radio_debug_aux_last_b0());
+    app_debug_shell_cmd_print_u8(" aux_b1=", (u8)app_radio_debug_aux_last_b1());
+    app_debug_shell_cmd_print_u8(" aux_b2=", (u8)app_radio_debug_aux_last_b2());
+    app_debug_shell_cmd_print_u8(" aux_b3=", (u8)app_radio_debug_aux_last_b3());
+    app_debug_shell_cmd_print_u8(" aux_vb0=", (u8)app_radio_debug_aux_vendor_b0());
+    app_debug_shell_cmd_print_u8(" aux_vb1=", (u8)app_radio_debug_aux_vendor_b1());
+    app_debug_shell_cmd_print_u8(" aux_vb2=", (u8)app_radio_debug_aux_vendor_b2());
+    app_debug_shell_cmd_print_u8(" aux_vb3=", (u8)app_radio_debug_aux_vendor_b3());
 }
 
 static void cmd_disc(u8 argc, char **argv)
@@ -476,8 +632,11 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("peers", "peers", "show peer table", cmd_peers);
     app_debug_shell_cmd_register("beacon", "beacon", "request beacon update", cmd_beacon);
     app_debug_shell_cmd_register("send", "send", "enqueue test frame", cmd_send);
+    app_debug_shell_cmd_register("sendmax", "sendmax [len]", "enqueue max-size test frame", cmd_sendmax);
     app_debug_shell_cmd_register("clear", "clear", "clear peer table", cmd_clear);
     app_debug_shell_cmd_register("logs", "logs", "reset debug counters", cmd_logs);
+    app_debug_shell_cmd_register("rxstat", "rxstat", "show scan decode counters", cmd_rxstat);
+    app_debug_shell_cmd_register("txstat", "txstat", "show adv scheduler counters", cmd_txstat);
     app_debug_shell_cmd_register("radio", "radio", "show BLE radio state", cmd_radio);
     app_debug_shell_cmd_register("disc", "disc", "disconnect GATT", cmd_disc);
     app_debug_shell_cmd_register("reset", "reset", "software reset", cmd_reset);

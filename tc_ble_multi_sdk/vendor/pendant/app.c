@@ -151,6 +151,32 @@ u32	tick_legadv_rpt = 0;
 static u32 s_ext_adv_rpt_count = 0;
 static u32 s_ext_adv_aux_count = 0;
 static u32 s_ext_adv_legacy_count = 0;
+static u8 s_ext_adv_aux_max_len = 0;
+static u8 s_ext_adv_aux_last_len = 0;
+static u16 s_ext_adv_aux_last_evt = 0;
+static u8 s_ext_adv_aux_last_status = 0;
+static u8 s_ext_adv_aux_evt_len = 0;
+static u8 s_ext_adv_aux_avail_len = 0;
+static u8 s_ext_adv_aux_last_b0 = 0;
+static u8 s_ext_adv_aux_last_b1 = 0;
+static u8 s_ext_adv_aux_last_b2 = 0;
+static u8 s_ext_adv_aux_last_b3 = 0;
+static u32 s_ext_adv_aux_vendor_start = 0;
+static u32 s_ext_adv_aux_service_start = 0;
+static u8 s_ext_adv_aux_vendor_b0 = 0;
+static u8 s_ext_adv_aux_vendor_b1 = 0;
+static u8 s_ext_adv_aux_vendor_b2 = 0;
+static u8 s_ext_adv_aux_vendor_b3 = 0;
+static u32 s_ext_adv_aux_reasm_ok = 0;
+static u32 s_ext_adv_aux_reasm_drop = 0;
+
+static u8 s_ext_adv_reasm_active = 0;
+static u8 s_ext_adv_reasm_addr_type = 0;
+static u8 s_ext_adv_reasm_addr[6] = {0};
+static u8 s_ext_adv_reasm_sid = 0;
+static u8 s_ext_adv_reasm_expected_len = 0;
+static u8 s_ext_adv_reasm_len = 0;
+static u8 s_ext_adv_reasm_buf[APP_ADV_FRAME_MAX_LEN];
 
 void app_debug_reset_adv_report_log(void)
 {
@@ -160,6 +186,27 @@ void app_debug_reset_adv_report_log(void)
 	s_ext_adv_rpt_count = 0;
 	s_ext_adv_aux_count = 0;
 	s_ext_adv_legacy_count = 0;
+	s_ext_adv_aux_max_len = 0;
+	s_ext_adv_aux_last_len = 0;
+	s_ext_adv_aux_last_evt = 0;
+	s_ext_adv_aux_last_status = 0;
+	s_ext_adv_aux_evt_len = 0;
+	s_ext_adv_aux_avail_len = 0;
+	s_ext_adv_aux_last_b0 = 0;
+	s_ext_adv_aux_last_b1 = 0;
+	s_ext_adv_aux_last_b2 = 0;
+	s_ext_adv_aux_last_b3 = 0;
+	s_ext_adv_aux_vendor_start = 0;
+	s_ext_adv_aux_service_start = 0;
+	s_ext_adv_aux_vendor_b0 = 0;
+	s_ext_adv_aux_vendor_b1 = 0;
+	s_ext_adv_aux_vendor_b2 = 0;
+	s_ext_adv_aux_vendor_b3 = 0;
+	s_ext_adv_aux_reasm_ok = 0;
+	s_ext_adv_aux_reasm_drop = 0;
+	s_ext_adv_reasm_active = 0;
+	s_ext_adv_reasm_expected_len = 0;
+	s_ext_adv_reasm_len = 0;
 }
 
 u32 app_radio_debug_legacy_reports(void)
@@ -175,6 +222,207 @@ u32 app_radio_debug_ext_reports(void)
 u32 app_radio_debug_aux_reports(void)
 {
 	return s_ext_adv_aux_count;
+}
+
+u32 app_radio_debug_aux_max_len(void)
+{
+	return s_ext_adv_aux_max_len;
+}
+
+u32 app_radio_debug_aux_last_len(void)
+{
+	return s_ext_adv_aux_last_len;
+}
+
+u32 app_radio_debug_aux_last_evt(void)
+{
+	return s_ext_adv_aux_last_evt;
+}
+
+u32 app_radio_debug_aux_last_status(void)
+{
+	return s_ext_adv_aux_last_status;
+}
+
+u32 app_radio_debug_aux_evt_len(void)
+{
+	return s_ext_adv_aux_evt_len;
+}
+
+u32 app_radio_debug_aux_avail_len(void)
+{
+	return s_ext_adv_aux_avail_len;
+}
+
+u32 app_radio_debug_aux_reasm_ok(void)
+{
+	return s_ext_adv_aux_reasm_ok;
+}
+
+u32 app_radio_debug_aux_reasm_drop(void)
+{
+	return s_ext_adv_aux_reasm_drop;
+}
+
+u32 app_radio_debug_aux_last_b0(void)
+{
+	return s_ext_adv_aux_last_b0;
+}
+
+u32 app_radio_debug_aux_last_b1(void)
+{
+	return s_ext_adv_aux_last_b1;
+}
+
+u32 app_radio_debug_aux_last_b2(void)
+{
+	return s_ext_adv_aux_last_b2;
+}
+
+u32 app_radio_debug_aux_last_b3(void)
+{
+	return s_ext_adv_aux_last_b3;
+}
+
+u32 app_radio_debug_aux_vendor_start(void)
+{
+	return s_ext_adv_aux_vendor_start;
+}
+
+u32 app_radio_debug_aux_service_start(void)
+{
+	return s_ext_adv_aux_service_start;
+}
+
+u32 app_radio_debug_aux_vendor_b0(void)
+{
+	return s_ext_adv_aux_vendor_b0;
+}
+
+u32 app_radio_debug_aux_vendor_b1(void)
+{
+	return s_ext_adv_aux_vendor_b1;
+}
+
+u32 app_radio_debug_aux_vendor_b2(void)
+{
+	return s_ext_adv_aux_vendor_b2;
+}
+
+u32 app_radio_debug_aux_vendor_b3(void)
+{
+	return s_ext_adv_aux_vendor_b3;
+}
+
+static u8 app_ext_adv_reasm_same_source(extAdvEvt_info_t *info)
+{
+	if(!s_ext_adv_reasm_active){
+		return 0;
+	}
+	if(info->address_type != s_ext_adv_reasm_addr_type || info->advertising_sid != s_ext_adv_reasm_sid){
+		return 0;
+	}
+	for(int i = 0; i < 6; i++){
+		if(info->address[i] != s_ext_adv_reasm_addr[i]){
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static void app_ext_adv_reasm_start(extAdvEvt_info_t *info)
+{
+	s_ext_adv_reasm_active = 1;
+	s_ext_adv_reasm_addr_type = info->address_type;
+	s_ext_adv_reasm_sid = info->advertising_sid;
+	for(int i = 0; i < 6; i++){
+		s_ext_adv_reasm_addr[i] = info->address[i];
+	}
+	s_ext_adv_reasm_expected_len = (u8)(info->data[0] + 1);
+	s_ext_adv_reasm_len = 0;
+}
+
+static void app_ext_adv_reasm_append(const u8 *data, u8 len)
+{
+	u8 copy_len;
+	if(!s_ext_adv_reasm_active || !data || !len){
+		return;
+	}
+	if(s_ext_adv_reasm_len >= s_ext_adv_reasm_expected_len){
+		return;
+	}
+	copy_len = (u8)(s_ext_adv_reasm_expected_len - s_ext_adv_reasm_len);
+	if(copy_len > len){
+		copy_len = len;
+	}
+	memcpy(&s_ext_adv_reasm_buf[s_ext_adv_reasm_len], data, copy_len);
+	s_ext_adv_reasm_len = (u8)(s_ext_adv_reasm_len + copy_len);
+}
+
+static u8 app_ext_adv_reasm_report(extAdvEvt_info_t *info, const u8 **out_data, u8 *out_len)
+{
+	u8 expected_len;
+	u8 is_our_ad_start;
+
+	if(!info || !out_data || !out_len || !info->data_length){
+		return 0;
+	}
+
+	is_our_ad_start = (info->data_length >= 4 &&
+					  info->data[1] == 0xff &&
+					  info->data[2] == U16_LO(APP_ADV_COMPANY_ID_DEV) &&
+					  info->data[3] == U16_HI(APP_ADV_COMPANY_ID_DEV));
+
+	if(info->data_length >= 2 && info->data[1] == 0x16){
+		s_ext_adv_aux_service_start++;
+	}
+
+	if(is_our_ad_start){
+		s_ext_adv_aux_vendor_start++;
+		s_ext_adv_aux_vendor_b0 = info->data_length > 0 ? info->data[0] : 0;
+		s_ext_adv_aux_vendor_b1 = info->data_length > 1 ? info->data[1] : 0;
+		s_ext_adv_aux_vendor_b2 = info->data_length > 2 ? info->data[2] : 0;
+		s_ext_adv_aux_vendor_b3 = info->data_length > 3 ? info->data[3] : 0;
+		expected_len = (u8)(info->data[0] + 1);
+		if(expected_len <= info->data_length){
+			s_ext_adv_reasm_active = 0;
+			*out_data = info->data;
+			*out_len = expected_len;
+			return 1;
+		}
+		if(expected_len > APP_ADV_FRAME_MAX_LEN || expected_len < 4){
+			s_ext_adv_reasm_active = 0;
+			s_ext_adv_aux_reasm_drop++;
+			return 0;
+		}
+		app_ext_adv_reasm_start(info);
+		app_ext_adv_reasm_append(info->data, info->data_length);
+		if(s_ext_adv_reasm_len >= s_ext_adv_reasm_expected_len){
+			s_ext_adv_reasm_active = 0;
+			s_ext_adv_aux_reasm_ok++;
+			*out_data = s_ext_adv_reasm_buf;
+			*out_len = s_ext_adv_reasm_expected_len;
+			return 1;
+		}
+		return 0;
+	}
+
+	if(app_ext_adv_reasm_same_source(info)){
+		app_ext_adv_reasm_append(info->data, info->data_length);
+		if(s_ext_adv_reasm_len >= s_ext_adv_reasm_expected_len){
+			s_ext_adv_reasm_active = 0;
+			s_ext_adv_aux_reasm_ok++;
+			*out_data = s_ext_adv_reasm_buf;
+			*out_len = s_ext_adv_reasm_expected_len;
+			return 1;
+		}
+		return 0;
+	}
+
+	s_ext_adv_reasm_active = 0;
+	*out_data = info->data;
+	*out_len = info->data_length;
+	return 1;
 }
 
 /**
@@ -274,9 +522,12 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 	{
 
 		pExtAdvInfo = (extAdvEvt_info_t *)(pExtAdvRpt->advEvtInfo + offset);
+		int data_avail_len = evt_data_len - 2 - offset - EXTADV_INFO_LENGTH;
 		offset += (EXTADV_INFO_LENGTH + pExtAdvInfo->data_length);
 		s8 rssi = pExtAdvInfo->rssi;
-		app_pendant_on_adv_report(pExtAdvInfo->data, pExtAdvInfo->data_length, rssi, pExtAdvInfo->address);
+		const u8 *report_data = pExtAdvInfo->data;
+		u8 report_len = pExtAdvInfo->data_length;
+		u8 report_ready = 1;
 		s_ext_adv_rpt_count++;
 
 
@@ -303,6 +554,28 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 		}
 		else{
 			s_ext_adv_aux_count++;
+			s_ext_adv_aux_last_len = pExtAdvInfo->data_length;
+			s_ext_adv_aux_last_evt = pExtAdvInfo->event_type;
+			s_ext_adv_aux_last_status = (u8)(pExtAdvInfo->event_type & EXTADV_RPT_DATA_STATUS_MASK);
+			s_ext_adv_aux_evt_len = evt_data_len > 255 ? 255 : (u8)evt_data_len;
+			if(data_avail_len < 0){
+				s_ext_adv_aux_avail_len = 0;
+			}
+			else{
+				s_ext_adv_aux_avail_len = data_avail_len > 255 ? 255 : (u8)data_avail_len;
+			}
+			if(pExtAdvInfo->data_length > s_ext_adv_aux_max_len){
+				s_ext_adv_aux_max_len = pExtAdvInfo->data_length;
+			}
+			s_ext_adv_aux_last_b0 = pExtAdvInfo->data_length > 0 ? pExtAdvInfo->data[0] : 0;
+			s_ext_adv_aux_last_b1 = pExtAdvInfo->data_length > 1 ? pExtAdvInfo->data[1] : 0;
+			s_ext_adv_aux_last_b2 = pExtAdvInfo->data_length > 2 ? pExtAdvInfo->data[2] : 0;
+			s_ext_adv_aux_last_b3 = pExtAdvInfo->data_length > 3 ? pExtAdvInfo->data[3] : 0;
+			report_ready = app_ext_adv_reasm_report(pExtAdvInfo, &report_data, &report_len);
+		}
+
+		if(report_ready){
+			app_pendant_on_adv_report(report_data, report_len, rssi, pExtAdvInfo->address);
 		}
 
 
@@ -961,7 +1234,7 @@ _attribute_no_inline_ void user_init_normal(void)
 
 #if (APP_BLE_ENABLE_DISCOVERY_SCAN)
 	blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M,
-						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_30MS,
+						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
 						   0, 0, 0);
 #endif
 

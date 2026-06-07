@@ -12,8 +12,10 @@
 #define APP_ADV_MAGIC_HI                    0x50
 #define APP_ADV_PROTOCOL_VERSION            0x01
 #define APP_ADV_HEADER_LEN                  50
-#define APP_ADV_PAYLOAD_MAX_LEN             160
-#define APP_ADV_FRAME_MAX_LEN               240
+#define APP_ADV_AD_OVERHEAD_LEN             4
+#define APP_ADV_FRAME_CRC_LEN               4
+#define APP_ADV_FRAME_MAX_LEN               229
+#define APP_ADV_PAYLOAD_MAX_LEN             (APP_ADV_FRAME_MAX_LEN - APP_ADV_AD_OVERHEAD_LEN - APP_ADV_HEADER_LEN - APP_ADV_FRAME_CRC_LEN)
 
 typedef enum {
     APP_OK = 0,

@@ -1,15 +1,18 @@
 #include "app_scan.h"
+#include "../app_config.h"
 #include "../adv_proto/app_adv_proto.h"
 #include "../discovery/app_discovery.h"
 #include "../host_adv/app_host_adv.h"
 #include "../identity/app_identity.h"
 #include "../common/app_debug_print.h"
+#include "common/string.h"
 #include "drivers.h"
 #include "timer.h"
 
 static u8 s_vendor_decode_log_count;
 static u8 s_beacon_log_count;
 static u8 s_data_log_count;
+static app_scan_debug_t s_debug;
 
 static void scan_debug_u8(const char *label, u8 value)
 {
@@ -25,6 +28,7 @@ static void scan_debug_s8(const char *label, s8 value)
 
 void app_scan_init(void)
 {
+    app_scan_debug_reset();
 }
 
 void app_scan_on_report(const app_scan_report_t *report)
@@ -38,10 +42,17 @@ void app_scan_on_report(const app_scan_report_t *report)
         return;
     }
 
+    s_debug.reports++;
+    s_debug.last_adv_len = report->adv_len;
+    s_debug.last_rssi = report->rssi;
+
     st = app_adv_proto_decode(report->adv_data, report->adv_len, &frame);
     if (st != APP_OK) {
-        if (app_adv_proto_is_manufacturer_payload(report->adv_data, report->adv_len, &vendor_payload, &vendor_len) &&
-            s_vendor_decode_log_count < 12) {
+        s_debug.decode_fail++;
+        if (app_adv_proto_is_manufacturer_payload(report->adv_data, report->adv_len, &vendor_payload, &vendor_len)) {
+            s_debug.vendor_decode_fail++;
+        }
+        if (vendor_payload && s_vendor_decode_log_count < 12) {
             u_printf("[SCAN] vendor decode fail\r\n");
             scan_debug_u8(" st=", (u8)st);
             scan_debug_u8(" adv_len=", report->adv_len);
@@ -52,10 +63,17 @@ void app_scan_on_report(const app_scan_report_t *report)
         }
         return;
     }
+    s_debug.decode_ok++;
     if (app_eid_equal(&frame.src_eid, app_identity_get_eid())) {
+        s_debug.self_ignored++;
         return;
     }
+    s_debug.last_type = (u8)frame.type;
+    s_debug.last_payload_len = frame.payload_len;
+    s_debug.last_src0 = frame.src_eid.bytes[0];
+    s_debug.last_src1 = frame.src_eid.bytes[1];
     if (frame.type == ADV_FRAME_BEACON) {
+        s_debug.beacon_rx++;
         if (s_beacon_log_count < 30) {
             u_printf("[SCAN] peer beacon\r\n");
             scan_debug_s8(" rssi=", report->rssi);
@@ -67,6 +85,7 @@ void app_scan_on_report(const app_scan_report_t *report)
         }
         app_discovery_on_beacon(&frame.src_eid, report->rssi, clock_time());
     } else if (frame.type == ADV_FRAME_DATA) {
+        s_debug.data_rx++;
         if (s_data_log_count < 20) {
             u_printf("[SCAN] data frame\r\n");
             scan_debug_s8(" rssi=", report->rssi);
@@ -76,7 +95,11 @@ void app_scan_on_report(const app_scan_report_t *report)
             scan_debug_u8(" dst0=", frame.dst_eid.bytes[0]);
             s_data_log_count++;
         }
+#if (APP_HOST_ENABLE_ADV_TRANSPORT)
         app_host_adv_on_adv_frame(&frame, report->rssi);
+#endif
+    } else {
+        s_debug.other_rx++;
     }
 }
 
@@ -89,4 +112,12 @@ void app_scan_debug_reset(void)
     s_vendor_decode_log_count = 0;
     s_beacon_log_count = 0;
     s_data_log_count = 0;
+    memset(&s_debug, 0, sizeof(s_debug));
+}
+
+void app_scan_get_debug(app_scan_debug_t *debug)
+{
+    if (debug) {
+        *debug = s_debug;
+    }
 }

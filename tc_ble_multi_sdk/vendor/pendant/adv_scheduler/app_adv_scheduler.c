@@ -15,12 +15,9 @@ static u8 s_adv_dirty;
 static u32 s_last_update_tick;
 static u8 s_adv_buf[APP_ADV_FRAME_MAX_LEN];
 static u8 s_payload_buf[32];
-static u8 s_tx_log_count;
+static app_adv_scheduler_debug_t s_debug;
 
 #define APP_ADV_SCHED_QUEUE_SIZE 4
-#define APP_ADV_DEBUG_NAME "PENDANT"
-#define AD_TYPE_FLAGS 0x01
-#define AD_TYPE_COMPLETE_LOCAL_NAME 0x09
 
 typedef struct {
     app_adv_frame_t frame;
@@ -37,11 +34,11 @@ void app_adv_scheduler_init(void)
     s_frame_seq = 0;
     s_adv_dirty = 1;
     s_last_update_tick = 0;
-    s_tx_log_count = 0;
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;
     memset(s_frame_queue, 0, sizeof(s_frame_queue));
+    memset(&s_debug, 0, sizeof(s_debug));
 }
 
 app_status_t app_adv_scheduler_request_beacon_update(void)
@@ -52,8 +49,17 @@ app_status_t app_adv_scheduler_request_beacon_update(void)
 
 void app_adv_scheduler_debug_reset(void)
 {
-    s_tx_log_count = 0;
+    memset(&s_debug, 0, sizeof(s_debug));
+    s_debug.queue_count = s_q_count;
     s_adv_dirty = 1;
+}
+
+void app_adv_scheduler_get_debug(app_adv_scheduler_debug_t *debug)
+{
+    if (debug) {
+        *debug = s_debug;
+        debug->queue_count = s_q_count;
+    }
 }
 
 app_status_t app_adv_scheduler_enqueue_frame(const app_adv_frame_t *frame)
@@ -67,6 +73,7 @@ app_status_t app_adv_scheduler_enqueue_frame(const app_adv_frame_t *frame)
         return APP_ERR_PARAM;
     }
     if (s_q_count >= APP_ADV_SCHED_QUEUE_SIZE) {
+        s_debug.enqueue_full++;
         return APP_ERR_NO_MEM;
     }
 
@@ -79,6 +86,8 @@ app_status_t app_adv_scheduler_enqueue_frame(const app_adv_frame_t *frame)
     }
     s_q_tail = (u8)((s_q_tail + 1) % APP_ADV_SCHED_QUEUE_SIZE);
     s_q_count++;
+    s_debug.enqueue_ok++;
+    s_debug.queue_count = s_q_count;
     s_adv_dirty = 1;
     return APP_OK;
 }
@@ -124,24 +133,14 @@ app_status_t app_adv_scheduler_build_next_adv_data(u8 *buf, u8 max_len, u8 *out_
     app_adv_frame_t frame;
     app_eid_t zero_eid;
     u8 payload_len;
-    u8 prefix_len;
     u8 frame_len;
-    const u8 name_len = sizeof(APP_ADV_DEBUG_NAME) - 1;
 
     if (!buf || !out_len) {
         return APP_ERR_PARAM;
     }
-    if (max_len < (u8)(3 + 2 + name_len)) {
+    if (max_len < (APP_ADV_AD_OVERHEAD_LEN + APP_ADV_HEADER_LEN + APP_ADV_FRAME_CRC_LEN)) {
         return APP_ERR_NO_MEM;
     }
-
-    buf[0] = 2;
-    buf[1] = AD_TYPE_FLAGS;
-    buf[2] = 0x06;
-    buf[3] = (u8)(name_len + 1);
-    buf[4] = AD_TYPE_COMPLETE_LOCAL_NAME;
-    memcpy(&buf[5], APP_ADV_DEBUG_NAME, name_len);
-    prefix_len = (u8)(5 + name_len);
 
     if (s_q_count) {
         app_adv_sched_item_t item = s_frame_queue[s_q_head];
@@ -170,25 +169,43 @@ app_status_t app_adv_scheduler_build_next_adv_data(u8 *buf, u8 max_len, u8 *out_
         frame.payload_len = payload_len;
     }
 
-    if (app_adv_proto_encode(&frame, &buf[prefix_len], (u8)(max_len - prefix_len), &frame_len) != APP_OK) {
+    s_debug.last_type = (u8)frame.type;
+    s_debug.last_payload_len = frame.payload_len;
+    if (app_adv_proto_encode(&frame, buf, max_len, &frame_len) != APP_OK) {
+        s_debug.queue_count = s_q_count;
         return APP_ERR_NO_MEM;
     }
-    *out_len = (u8)(prefix_len + frame_len);
+    s_debug.last_adv_len = frame_len;
+    if (frame_len > s_debug.max_adv_len) {
+        s_debug.max_adv_len = frame_len;
+    }
+    if (frame.type == ADV_FRAME_DATA) {
+        s_debug.last_data_adv_len = frame_len;
+        s_debug.last_data_payload_len = frame.payload_len;
+    }
+    s_debug.queue_count = s_q_count;
+    *out_len = frame_len;
     return APP_OK;
 }
 
 void app_adv_scheduler_poll(void)
 {
     u8 len;
+    app_status_t st;
     u32 update_interval_us = s_q_count ? 50000 : 200000;
     if (!s_last_update_tick || clock_time_exceed(s_last_update_tick, update_interval_us) || s_adv_dirty) {
-        if (app_adv_scheduler_build_next_adv_data(s_adv_buf, sizeof(s_adv_buf), &len) == APP_OK) {
-            if (s_tx_log_count < 5) {
-                u_printf("[ADV-TX] len=");
-                u_printf("%x\r\n", len);
-                s_tx_log_count++;
+        st = app_adv_scheduler_build_next_adv_data(s_adv_buf, sizeof(s_adv_buf), &len);
+        s_debug.last_status = (u8)st;
+        if (st == APP_OK) {
+            s_debug.build_ok++;
+            if (s_debug.last_type == ADV_FRAME_DATA) {
+                s_debug.data_build_ok++;
+            } else if (s_debug.last_type == ADV_FRAME_BEACON) {
+                s_debug.beacon_build_ok++;
             }
             app_ble_update_ext_adv_data(s_adv_buf, len);
+        } else {
+            s_debug.build_fail++;
         }
         s_last_update_tick = clock_time();
         s_adv_dirty = 0;
