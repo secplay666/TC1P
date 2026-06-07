@@ -45,17 +45,21 @@ static u8 s_rsp_buf[APP_ADV_FRAME_MAX_LEN];
 typedef struct {
     u8 active;
     u8 seq;
+    u8 cmd;
     u16 len;
-    char line[64];
-} host_shell_pending_t;
+    union {
+        char line[64];
+        u8 payload[20];
+    } data;
+} host_pending_t;
 
 typedef union {
-    host_shell_pending_t shell;
+    host_pending_t pending;
     app_peer_record_t peer_snapshot[APP_PEER_MAX_COUNT];
 } host_cmd_scratch_t;
 
 static host_cmd_scratch_t s_scratch;
-#define s_shell_pending (s_scratch.shell)
+#define s_pending (s_scratch.pending)
 
 static u8 s_reboot_pending;
 static u32 s_reboot_tick;
@@ -399,34 +403,40 @@ static void handle_get_identity(u8 seq)
 
 static void handle_write_identity(u8 seq, const u8 *payload, u16 len)
 {
-    app_unique_id_t id;
-    app_status_t st;
-    u8 lock_after_write;
-
     if (!payload || len < 17) {
         send_rsp(seq, HOST_CMD_WRITE_IDENTITY, HOST_STATUS_ERR_PARAM, 0, 0);
         return;
     }
+    if (len > sizeof(s_pending.data.payload)) {
+        send_rsp(seq, HOST_CMD_WRITE_IDENTITY, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
+    }
 
-    lock_after_write = payload[0] & 0x01;
-    memcpy(id.bytes, &payload[1], APP_UNIQUE_ID_LEN);
-    st = app_factory_write_unique_id(&id);
-    if (st == APP_OK && lock_after_write) {
-        st = app_factory_lock_identity();
+    if (s_pending.active) {
+        send_rsp(seq, HOST_CMD_WRITE_IDENTITY, HOST_STATUS_ERR_BUSY, 0, 0);
+        return;
     }
-    if (st == APP_OK) {
-        app_adv_scheduler_request_beacon_update();
-    }
-    send_identity_rsp(seq, HOST_CMD_WRITE_IDENTITY, st);
+
+    memset(&s_pending, 0, sizeof(s_pending));
+    s_pending.active = 1;
+    s_pending.seq = seq;
+    s_pending.cmd = HOST_CMD_WRITE_IDENTITY;
+    s_pending.len = len;
+    memcpy(s_pending.data.payload, payload, len);
 }
 
 static void handle_lock_identity(u8 seq)
 {
-    app_status_t st = app_factory_lock_identity();
-    if (st == APP_OK) {
-        app_adv_scheduler_request_beacon_update();
+    if (s_pending.active) {
+        send_rsp(seq, HOST_CMD_LOCK_IDENTITY, HOST_STATUS_ERR_BUSY, 0, 0);
+        return;
     }
-    send_identity_rsp(seq, HOST_CMD_LOCK_IDENTITY, st);
+
+    memset(&s_pending, 0, sizeof(s_pending));
+    s_pending.active = 1;
+    s_pending.seq = seq;
+    s_pending.cmd = HOST_CMD_LOCK_IDENTITY;
+    s_pending.len = 0;
 }
 
 static void handle_get_factory_info(u8 seq)
@@ -454,46 +464,52 @@ static void handle_get_factory_info(u8 seq)
 
 static void handle_run_factory_test(u8 seq, const u8 *payload, u16 len)
 {
-    u32 test_mask = 0xffffffff;
-    u32 result_mask = 0;
-    app_status_t st;
-
-    if (payload && len >= 4) {
-        test_mask = rd32(payload);
+    if (len > sizeof(s_pending.data.payload)) {
+        send_rsp(seq, HOST_CMD_RUN_FACTORY_TEST, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
     }
-    st = app_factory_run_self_test(test_mask, &result_mask);
-    s_rsp_buf[0] = 1;
-    wr32(&s_rsp_buf[1], test_mask);
-    wr32(&s_rsp_buf[5], result_mask);
-    send_rsp(seq, HOST_CMD_RUN_FACTORY_TEST, host_status_from_app(st), s_rsp_buf, st == APP_OK ? 9 : 0);
+    if (s_pending.active) {
+        send_rsp(seq, HOST_CMD_RUN_FACTORY_TEST, HOST_STATUS_ERR_BUSY, 0, 0);
+        return;
+    }
+
+    memset(&s_pending, 0, sizeof(s_pending));
+    s_pending.active = 1;
+    s_pending.seq = seq;
+    s_pending.cmd = HOST_CMD_RUN_FACTORY_TEST;
+    s_pending.len = len;
+    if (payload && len) {
+        memcpy(s_pending.data.payload, payload, len);
+    }
 }
 
 static void handle_shell_exec(u8 seq, const u8 *payload, u16 len)
 {
     u16 i;
 
-    if (len >= sizeof(s_shell_pending.line)) {
+    if (len >= sizeof(s_pending.data.line)) {
         send_rsp(seq, HOST_CMD_SHELL_EXEC, HOST_STATUS_ERR_PARAM, 0, 0);
         return;
     }
 
-    if (s_shell_pending.active) {
+    if (s_pending.active) {
         send_rsp(seq, HOST_CMD_SHELL_EXEC, HOST_STATUS_ERR_BUSY, 0, 0);
         return;
     }
 
-    memset(&s_shell_pending, 0, sizeof(s_shell_pending));
-    s_shell_pending.seq = seq;
+    memset(&s_pending, 0, sizeof(s_pending));
+    s_pending.active = 1;
+    s_pending.seq = seq;
+    s_pending.cmd = HOST_CMD_SHELL_EXEC;
 
     for (i = 0; i < len; i++) {
         if (payload[i] == '\r' || payload[i] == '\n') {
             break;
         }
-        s_shell_pending.line[i] = (char)payload[i];
+        s_pending.data.line[i] = (char)payload[i];
     }
-    s_shell_pending.line[i] = 0;
-    s_shell_pending.len = i;
-    s_shell_pending.active = 1;
+    s_pending.data.line[i] = 0;
+    s_pending.len = i;
 }
 
 static void handle_shell_pending(void)
@@ -501,14 +517,14 @@ static void handle_shell_pending(void)
     host_shell_capture_t cap;
     u8 seq;
 
-    if (!s_shell_pending.active) {
+    if (!s_pending.active || s_pending.cmd != HOST_CMD_SHELL_EXEC) {
         return;
     }
 
-    seq = s_shell_pending.seq;
-    s_shell_pending.active = 0;
+    seq = s_pending.seq;
+    s_pending.active = 0;
 
-    if (bytes_eq_word_ci((const u8 *)s_shell_pending.line, s_shell_pending.len, "reset")) {
+    if (bytes_eq_word_ci((const u8 *)s_pending.data.line, s_pending.len, "reset")) {
         s_rsp_buf[0] = '[';
         s_rsp_buf[1] = 'D';
         s_rsp_buf[2] = 'B';
@@ -528,7 +544,7 @@ static void handle_shell_pending(void)
         return;
     }
 
-    if (bytes_eq_word_ci((const u8 *)s_shell_pending.line, s_shell_pending.len, "disc")) {
+    if (bytes_eq_word_ci((const u8 *)s_pending.data.line, s_pending.len, "disc")) {
         s_rsp_buf[0] = '[';
         s_rsp_buf[1] = 'D';
         s_rsp_buf[2] = 'B';
@@ -559,7 +575,7 @@ static void handle_shell_pending(void)
     cap.truncated = 0;
     memset(s_rsp_buf, 0, APP_HOST_MESSAGE_MAX_LEN);
 
-    app_debug_shell_cmd_execute_with_writer(s_shell_pending.line, shell_capture_write, &cap);
+    app_debug_shell_cmd_execute_with_writer(s_pending.data.line, shell_capture_write, &cap);
     if (cap.truncated) {
         cap.max = HOST_SHELL_RSP_MAX_LEN;
         shell_capture_puts(&cap, "\r\n[truncated]\r\n");
@@ -567,10 +583,79 @@ static void handle_shell_pending(void)
     send_rsp(seq, HOST_CMD_SHELL_EXEC, HOST_STATUS_OK, s_rsp_buf, cap.len);
 }
 
+static void handle_flash_pending(void)
+{
+    app_unique_id_t id;
+    app_status_t st;
+    u32 test_mask;
+    u32 result_mask = 0;
+    u8 payload[20];
+    u16 payload_len;
+    u8 seq;
+    u8 cmd;
+    u8 lock_after_write;
+
+    if (!s_pending.active || s_pending.cmd == HOST_CMD_SHELL_EXEC) {
+        return;
+    }
+
+    seq = s_pending.seq;
+    cmd = s_pending.cmd;
+    payload_len = s_pending.len;
+    if (payload_len > sizeof(payload)) {
+        payload_len = sizeof(payload);
+    }
+    if (payload_len) {
+        memcpy(payload, s_pending.data.payload, payload_len);
+    }
+    s_pending.active = 0;
+
+    if (cmd == HOST_CMD_WRITE_IDENTITY) {
+        if (payload_len < 17) {
+            send_rsp(seq, HOST_CMD_WRITE_IDENTITY, HOST_STATUS_ERR_PARAM, 0, 0);
+            return;
+        }
+
+        lock_after_write = payload[0] & 0x01;
+        memcpy(id.bytes, &payload[1], APP_UNIQUE_ID_LEN);
+        st = app_factory_write_unique_id(&id);
+        if (st == APP_OK && lock_after_write) {
+            st = app_factory_lock_identity();
+        }
+        if (st == APP_OK) {
+            app_adv_scheduler_request_beacon_update();
+        }
+        send_identity_rsp(seq, HOST_CMD_WRITE_IDENTITY, st);
+        return;
+    }
+
+    if (cmd == HOST_CMD_LOCK_IDENTITY) {
+        st = app_factory_lock_identity();
+        if (st == APP_OK) {
+            app_adv_scheduler_request_beacon_update();
+        }
+        send_identity_rsp(seq, HOST_CMD_LOCK_IDENTITY, st);
+        return;
+    }
+
+    if (cmd == HOST_CMD_RUN_FACTORY_TEST) {
+        test_mask = 0xffffffff;
+        if (payload_len >= 4) {
+            test_mask = rd32(payload);
+        }
+        st = app_factory_run_self_test(test_mask, &result_mask);
+        s_rsp_buf[0] = 1;
+        wr32(&s_rsp_buf[1], test_mask);
+        wr32(&s_rsp_buf[5], result_mask);
+        send_rsp(seq, HOST_CMD_RUN_FACTORY_TEST, host_status_from_app(st), s_rsp_buf, st == APP_OK ? 9 : 0);
+        return;
+    }
+}
+
 static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
 {
     s_cmd_count++;
-    if (s_shell_pending.active && cmd != HOST_CMD_SHELL_EXEC) {
+    if (s_pending.active) {
         send_rsp(seq, cmd, HOST_STATUS_ERR_BUSY, 0, 0);
         return;
     }
@@ -638,7 +723,7 @@ void app_host_cmd_init(void)
     s_log_count = 0;
     s_cmd_count = 0;
     s_crc_error_count = 0;
-    memset(&s_shell_pending, 0, sizeof(s_shell_pending));
+    memset(&s_pending, 0, sizeof(s_pending));
     s_reboot_pending = 0;
     s_reboot_tick = 0;
     s_disconnect_pending = 0;
@@ -647,6 +732,7 @@ void app_host_cmd_init(void)
 
 void app_host_cmd_poll(void)
 {
+    handle_flash_pending();
     handle_shell_pending();
     if (s_disconnect_pending && clock_time_exceed(s_disconnect_tick, 300000)) {
         s_disconnect_pending = 0;
