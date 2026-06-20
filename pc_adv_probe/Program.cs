@@ -26,6 +26,7 @@ internal static class Program
                 "scan" => await RunScanAsync(args),
                 "info" => await RunInfoAsync(args),
                 "send" => await RunSendAsync(args),
+                "tx-len" => await RunTxLenAsync(args),
                 "legacy-ping" => await RunLegacyPingAsync(args),
                 "selftest" => RunSelfTest(),
                 _ => UnknownCommand(command),
@@ -132,6 +133,60 @@ internal static class Program
         int listenSeconds = args.Length >= 5 ? int.Parse(args[4]) : 10;
 
         return await SendAndListenAsync(eid, cmd, payload, listenSeconds);
+    }
+
+    private static async Task<int> RunTxLenAsync(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("tx-len needs: <pendant_payload_len> [repeat] [on_ms]");
+            return 2;
+        }
+
+        int payloadLen = int.Parse(args[1]);
+        int repeat = args.Length >= 3 ? int.Parse(args[2]) : 3;
+        int onMs = args.Length >= 4 ? int.Parse(args[3]) : 250;
+
+        if (payloadLen < 0 || payloadLen > PendantAdvProtocol.AdvPayloadMaxLen)
+        {
+            Console.Error.WriteLine($"payload length out of range: 0..{PendantAdvProtocol.AdvPayloadMaxLen}");
+            return 2;
+        }
+        if (repeat <= 0 || repeat > 20 || onMs <= 0 || onMs > 3000)
+        {
+            Console.Error.WriteLine("repeat/on_ms out of range");
+            return 2;
+        }
+
+        byte[] payload = new byte[payloadLen];
+        for (int i = 0; i < payload.Length; i++)
+        {
+            payload[i] = (byte)(0xA5 ^ i);
+        }
+
+        var vendorPayloads = new List<byte[]>();
+        ushort seqBase = (ushort)NextSeq();
+        for (int i = 0; i < repeat; i++)
+        {
+            var frame = new PendantAdvProtocol.AdvFrame(
+                PendantAdvProtocol.FrameData,
+                0,
+                1,
+                0,
+                (ushort)(seqBase + i),
+                PendantAdvProtocol.DefaultHostEid,
+                PendantAdvProtocol.ZeroEid,
+                (uint)(seqBase + i),
+                0,
+                1,
+                payload);
+            vendorPayloads.Add(PendantAdvProtocol.EncodeVendorPayload(frame));
+        }
+
+        int advDataLen = vendorPayloads[0].Length + 4;
+        Console.WriteLine($"TX-LEN pendant_payload={payloadLen} manufacturer_payload={vendorPayloads[0].Length} adv_data={advDataLen} repeat={repeat} on_ms={onMs}");
+        await PublishVendorPayloadsAsync(vendorPayloads, TimeSpan.FromMilliseconds(onMs), TimeSpan.FromMilliseconds(80));
+        return 0;
     }
 
     private static async Task<int> RunLegacyPingAsync(string[] args)

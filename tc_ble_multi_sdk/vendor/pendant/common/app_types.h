@@ -14,12 +14,7 @@
 #define APP_ADV_HEADER_LEN                  50
 #define APP_ADV_AD_OVERHEAD_LEN             4
 #define APP_ADV_FRAME_CRC_LEN               4
-/*
- * B85 multi-connection SDK can transmit longer extended advertising data, but
- * B85-to-B85 extended scan has only been verified up to 79 bytes in the current
- * peer communication path. Keep the application frame within that proven limit.
- */
-#define APP_ADV_FRAME_MAX_LEN               79
+#define APP_ADV_FRAME_MAX_LEN               251
 #define APP_ADV_PAYLOAD_MAX_LEN             (APP_ADV_FRAME_MAX_LEN - APP_ADV_AD_OVERHEAD_LEN - APP_ADV_HEADER_LEN - APP_ADV_FRAME_CRC_LEN)
 
 typedef enum {

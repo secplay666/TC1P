@@ -9,7 +9,7 @@ internal static class PendantAdvProtocol
     public const byte AdvMagicHi = 0x50;
     public const byte AdvProtocolVersion = 0x01;
     public const byte AdvHeaderLen = 50;
-    public const int AdvPayloadMaxLen = 160;
+    public const int AdvPayloadMaxLen = 193;
 
     public const byte FrameBeacon = 0x01;
     public const byte FrameData = 0x10;

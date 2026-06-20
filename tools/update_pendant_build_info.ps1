@@ -10,10 +10,11 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
 
 $outDir = Join-Path $RepoRoot "tc_ble_multi_sdk\vendor\pendant\build_info"
 $outFile = Join-Path $outDir "app_build_info.h"
+$gitSafeRepoRoot = $RepoRoot.Replace("\", "/")
 
 function Get-GitText {
     param([string[]]$GitArgs, [string]$Fallback)
-    $output = & git -C $RepoRoot @GitArgs 2>$null
+    $output = & git -c "safe.directory=$gitSafeRepoRoot" -c "core.excludesFile=" -C $RepoRoot @GitArgs 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
         return $Fallback
     }
@@ -30,7 +31,7 @@ function Convert-ToCString {
 
 $sha = Get-GitText -GitArgs @("rev-parse", "--short=12", "HEAD") -Fallback "unknown"
 $branch = Get-GitText -GitArgs @("rev-parse", "--abbrev-ref", "HEAD") -Fallback "unknown"
-$status = & git -C $RepoRoot status --porcelain 2>$null
+$status = & git -c "safe.directory=$gitSafeRepoRoot" -c "core.excludesFile=" -C $RepoRoot status --porcelain 2>$null
 $dirty = if ($LASTEXITCODE -eq 0 -and $status) { 1 } else { 0 }
 $desc = if ($dirty) { "$sha-dirty" } else { $sha }
 

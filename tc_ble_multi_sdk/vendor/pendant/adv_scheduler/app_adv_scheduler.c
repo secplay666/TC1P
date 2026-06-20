@@ -18,7 +18,7 @@ static u8 s_adv_buf[APP_ADV_FRAME_MAX_LEN];
 static u8 s_payload_buf[32];
 static app_adv_scheduler_debug_t s_debug;
 
-#define APP_ADV_SCHED_QUEUE_SIZE 3
+#define APP_ADV_SCHED_QUEUE_SIZE 1
 #define APP_ADV_DATA_HOLD_US     3000000
 
 typedef struct {

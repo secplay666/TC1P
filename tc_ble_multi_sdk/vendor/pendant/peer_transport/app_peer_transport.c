@@ -7,7 +7,7 @@
 #include "timer.h"
 
 #define APP_PEER_TRANSPORT_LOG_MAX              20
-#define APP_PEER_TRANSPORT_DUP_TIMEOUT_US       1500000
+#define APP_PEER_TRANSPORT_DUP_TIMEOUT_US       5000000
 #define APP_PEER_TRANSPORT_RX_LOG_ENABLE        0
 
 static u16 s_seq;

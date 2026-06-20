@@ -135,7 +135,7 @@ const u8 tbl_extAdvInitData[] = {
 };
 
 #define APP_ADV_SETS_NUMBER                    2
-#define APP_MAX_LENGTH_ADV_DATA                80
+#define APP_MAX_LENGTH_ADV_DATA                256
 #define APP_MAX_LENGTH_SCAN_RESPONSE_DATA      31
 
 _attribute_ble_data_retention_ static u8 app_advSet_buffer[ADV_SET_PARAM_LENGTH * APP_ADV_SETS_NUMBER];
