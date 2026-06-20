@@ -19,6 +19,14 @@ typedef struct {
 typedef struct {
     u8 connected;
     u8 started;
+    u16 conn_handle;
+    u16 last_conn_handle;
+    u16 conn_interval;
+    u16 conn_latency;
+    u16 conn_timeout;
+    u8 last_disconnect_reason;
+    u16 disconnect_count;
+    u16 stop_count;
     u8 adv0_enabled;
     u8 adv1_enabled;
     u8 scan_enabled;

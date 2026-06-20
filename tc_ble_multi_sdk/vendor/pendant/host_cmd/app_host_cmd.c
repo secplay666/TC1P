@@ -11,6 +11,7 @@
 #include "../factory/app_factory.h"
 #include "../adv_scheduler/app_adv_scheduler.h"
 #include "../peer_table/app_peer_table.h"
+#include "../peer_transport/app_peer_transport.h"
 #include "../motor/app_motor.h"
 #include "../pm/app_pm.h"
 #include "../ble/app_ble.h"
@@ -20,6 +21,8 @@
 
 #define HOST_SHELL_RSP_MAX_LEN 72
 #define HOST_SHELL_RSP_BODY_MAX_LEN 57
+#define HOST_P2P_CHAT_EVENT_HEADER_LEN 8
+#define HOST_P2P_CHAT_EVENT_FLAG_TRUNCATED 0x01
 
 #define HOST_LOG_LEVEL_INFO  1
 #define HOST_LOG_LEVEL_ERROR 2
@@ -41,6 +44,9 @@ static u16 s_log_count;
 static u16 s_cmd_count;
 static u16 s_crc_error_count;
 static u8 s_rsp_buf[APP_ADV_FRAME_MAX_LEN];
+static u8 s_evt_buf[APP_HOST_MESSAGE_MAX_LEN];
+static u16 s_evt_len;
+static u8 s_p2p_chat_event_pending;
 
 typedef struct {
     u8 active;
@@ -49,7 +55,7 @@ typedef struct {
     u16 len;
     union {
         char line[64];
-        u8 payload[20];
+        u8 payload[APP_HOST_MESSAGE_MAX_LEN];
     } data;
 } host_pending_t;
 
@@ -512,6 +518,63 @@ static void handle_shell_exec(u8 seq, const u8 *payload, u16 len)
     s_pending.len = i;
 }
 
+static void handle_p2p_chat_send(u8 seq, const u8 *payload, u16 len)
+{
+    if (!payload || !len || len > APP_PEER_TRANSPORT_MESSAGE_MAX_LEN) {
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
+    }
+    if (len > sizeof(s_pending.data.payload)) {
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
+    }
+
+    memset(&s_pending, 0, sizeof(s_pending));
+    s_pending.active = 1;
+    s_pending.seq = seq;
+    s_pending.cmd = HOST_CMD_P2P_CHAT_SEND;
+    s_pending.len = len;
+    memcpy(s_pending.data.payload, payload, len);
+}
+
+static void handle_p2p_chat_pending(void)
+{
+    app_peer_record_t peer;
+    app_status_t st;
+    u8 seq;
+    u16 len;
+
+    if (!s_pending.active || s_pending.cmd != HOST_CMD_P2P_CHAT_SEND) {
+        return;
+    }
+
+    seq = s_pending.seq;
+    len = s_pending.len;
+
+    if (app_peer_table_copy(&peer, 1) != 1) {
+        s_pending.active = 0;
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_NOT_FOUND, 0, 0);
+        return;
+    }
+
+    st = app_peer_transport_send_message(&peer.eid, APP_PEER_MSG_USER, s_pending.data.payload, len,
+                                         APP_PEER_SEND_RELIABLE,
+                                         APP_PEER_TRANSPORT_FRAME_FLAG_NOTIFY);
+    s_pending.active = 0;
+    if (st != APP_OK) {
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, host_status_from_app(st), 0, 0);
+        return;
+    }
+
+    s_rsp_buf[0] = 1;
+    s_rsp_buf[1] = app_peer_table_count();
+    wr16(&s_rsp_buf[2], len);
+    wr16(&s_rsp_buf[4], APP_PEER_TRANSPORT_MESSAGE_MAX_LEN);
+    s_rsp_buf[6] = APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN;
+    s_rsp_buf[7] = APP_PEER_TRANSPORT_MAX_FRAGMENTS;
+    send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_OK, s_rsp_buf, 8);
+}
+
 static void handle_shell_pending(void)
 {
     host_shell_capture_t cap;
@@ -599,6 +662,11 @@ static void handle_flash_pending(void)
         return;
     }
 
+    if (s_pending.cmd == HOST_CMD_P2P_CHAT_SEND) {
+        handle_p2p_chat_pending();
+        return;
+    }
+
     seq = s_pending.seq;
     cmd = s_pending.cmd;
     payload_len = s_pending.len;
@@ -649,6 +717,22 @@ static void handle_flash_pending(void)
         wr32(&s_rsp_buf[5], result_mask);
         send_rsp(seq, HOST_CMD_RUN_FACTORY_TEST, host_status_from_app(st), s_rsp_buf, st == APP_OK ? 9 : 0);
         return;
+    }
+}
+
+static void handle_p2p_chat_event_pending(void)
+{
+    app_status_t st;
+
+    if (!s_p2p_chat_event_pending) {
+        return;
+    }
+
+    st = app_host_transport_send_message(HOST_FRAME_TYPE_EVENT, HOST_EVENT_P2P_CHAT,
+                                         HOST_STATUS_OK, s_evt_buf, s_evt_len);
+    if (st == APP_OK) {
+        s_p2p_chat_event_pending = 0;
+        s_evt_len = 0;
     }
 }
 
@@ -709,6 +793,9 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
     case HOST_CMD_SHELL_EXEC:
         handle_shell_exec(seq, payload, len);
         break;
+    case HOST_CMD_P2P_CHAT_SEND:
+        handle_p2p_chat_send(seq, payload, len);
+        break;
     default:
         send_rsp(seq, cmd, HOST_STATUS_ERR_UNSUPPORTED, 0, 0);
         break;
@@ -723,6 +810,8 @@ void app_host_cmd_init(void)
     s_log_count = 0;
     s_cmd_count = 0;
     s_crc_error_count = 0;
+    s_evt_len = 0;
+    s_p2p_chat_event_pending = 0;
     memset(&s_pending, 0, sizeof(s_pending));
     s_reboot_pending = 0;
     s_reboot_tick = 0;
@@ -734,6 +823,7 @@ void app_host_cmd_poll(void)
 {
     handle_flash_pending();
     handle_shell_pending();
+    handle_p2p_chat_event_pending();
     if (s_disconnect_pending && clock_time_exceed(s_disconnect_tick, 300000)) {
         s_disconnect_pending = 0;
         app_ble_disconnect_app(0x13);
@@ -831,6 +921,39 @@ void app_host_cmd_log_text(u8 level, const char *tag, const char *msg)
         payload[offset++] = (u8)msg[i++];
     }
     app_host_transport_send_message(HOST_FRAME_TYPE_LOG, 0, HOST_STATUS_OK, payload, offset);
+}
+
+void app_host_cmd_notify_p2p_chat(const app_eid_t *src_eid, s8 rssi, const u8 *text, u16 len)
+{
+    u16 copy_len;
+    app_peer_record_t *peer;
+    u32 short_id = 0;
+    u8 flags = 0;
+
+    if (!text || !len) {
+        return;
+    }
+
+    if (src_eid) {
+        peer = app_peer_table_find(src_eid);
+        if (peer) {
+            short_id = peer->short_id;
+        }
+    }
+
+    copy_len = len;
+    if (copy_len > APP_HOST_MESSAGE_MAX_LEN - HOST_P2P_CHAT_EVENT_HEADER_LEN) {
+        copy_len = APP_HOST_MESSAGE_MAX_LEN - HOST_P2P_CHAT_EVENT_HEADER_LEN;
+        flags |= HOST_P2P_CHAT_EVENT_FLAG_TRUNCATED;
+    }
+
+    wr32(&s_evt_buf[0], short_id);
+    s_evt_buf[4] = (u8)rssi;
+    s_evt_buf[5] = flags;
+    wr16(&s_evt_buf[6], len);
+    memcpy(&s_evt_buf[HOST_P2P_CHAT_EVENT_HEADER_LEN], text, copy_len);
+    s_evt_len = (u16)(HOST_P2P_CHAT_EVENT_HEADER_LEN + copy_len);
+    s_p2p_chat_event_pending = 1;
 }
 
 void app_host_cmd_notify_peer_level(const app_eid_t *eid, u8 old_level, u8 new_level, s8 rssi_avg, u8 reason)

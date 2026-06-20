@@ -20,6 +20,19 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
+## Headless two-PC chat test
+
+For automated full-chain validation with two PENDANT devices:
+
+```bat
+cd pc_debug_tool
+.venv\Scripts\python.exe headless_chat_test.py
+```
+
+This opens two BLE debug connections, enables log notify on both sides, sends
+`p2pchat pcA hello` from endpoint A, waits for endpoint B to receive
+`LOG P2P: pcA hello`, then repeats the test in the opposite direction.
+
 ## 功能
 
 - 扫描 BLE 设备，优先显示 `PENDANT`。

@@ -35,10 +35,12 @@ CMD_LOCK_IDENTITY = 0x0D
 CMD_GET_FACTORY_INFO = 0x0E
 CMD_RUN_FACTORY_TEST = 0x0F
 CMD_SHELL_EXEC = 0x10
+CMD_P2P_CHAT_SEND = 0x11
 
 EVENT_PEER_LEVEL = 0x81
 EVENT_SYSTEM = 0x82
 EVENT_ERROR = 0x83
+EVENT_P2P_CHAT = 0x84
 
 CMD_NAMES = {
     CMD_GET_DEVICE_INFO: "GET_DEVICE_INFO",
@@ -57,6 +59,7 @@ CMD_NAMES = {
     CMD_GET_FACTORY_INFO: "GET_FACTORY_INFO",
     CMD_RUN_FACTORY_TEST: "RUN_FACTORY_TEST",
     CMD_SHELL_EXEC: "SHELL_EXEC",
+    CMD_P2P_CHAT_SEND: "P2P_CHAT_SEND",
 }
 
 STATUS_NAMES = {
@@ -278,6 +281,15 @@ def make_shell_exec(seq: int, line: str) -> list[bytes]:
     return encode_message(TYPE_CMD, seq, CMD_SHELL_EXEC, 0, line.encode("utf-8")[:MESSAGE_MAX_LEN])
 
 
+def make_p2p_chat_send(seq: int, text: str) -> list[bytes]:
+    payload = text.encode("utf-8")
+    if not payload:
+        raise ValueError("chat text is empty")
+    if len(payload) > MESSAGE_MAX_LEN:
+        raise ValueError(f"chat text too long: {len(payload)} > {MESSAGE_MAX_LEN}")
+    return encode_message(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, payload)
+
+
 def build_unique_id(product_sn: int, terminal_sn: int, random_value: int, reserved: int = 0) -> bytes:
     return struct.pack("<IIII", product_sn & 0xFFFFFFFF, terminal_sn & 0xFFFFFFFF, random_value & 0xFFFFFFFF, reserved & 0xFFFFFFFF)
 
@@ -482,6 +494,20 @@ def parse_event(cmd: int, payload: bytes) -> dict:
         if len(payload) < 4:
             raise ValueError("error event too short")
         return {"event": "ERROR", "error_code": u16le(payload, 0), "detail": u16le(payload, 2)}
+    if cmd == EVENT_P2P_CHAT:
+        if len(payload) < 8:
+            raise ValueError("p2p chat event too short")
+        text_len = u16le(payload, 6)
+        text_bytes = payload[8:]
+        return {
+            "event": "P2P_CHAT",
+            "short_id": u32le(payload, 0),
+            "rssi": i8(payload[4]),
+            "flags": payload[5],
+            "text_len": text_len,
+            "truncated": bool(payload[5] & 0x01) or len(text_bytes) < text_len,
+            "text": text_bytes.decode("utf-8", errors="replace"),
+        }
     return {"event": f"0x{cmd:02X}", "payload_hex": hex_bytes(payload)}
 
 
@@ -538,6 +564,14 @@ def format_response(message: HostMessage) -> str:
             )
         if message.cmd == CMD_SHELL_EXEC:
             return message.payload.decode("utf-8", errors="replace").rstrip()
+        if message.cmd == CMD_P2P_CHAT_SEND:
+            if len(message.payload) >= 8:
+                return (
+                    f"{name}: queued {u16le(message.payload, 2)} bytes, "
+                    f"peers={message.payload[1]}, p2p_max={u16le(message.payload, 4)}, "
+                    f"frag_payload={message.payload[6]}, max_frag={message.payload[7]}"
+                )
+            return f"{name}: {status}"
     except Exception as exc:
         return f"{name}: parse error: {exc}; raw={hex_bytes(message.payload)}"
 

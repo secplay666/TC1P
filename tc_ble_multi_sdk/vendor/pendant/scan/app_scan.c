@@ -16,6 +16,43 @@ static u8 s_data_log_count;
 static app_scan_debug_t s_debug;
 
 #define APP_SCAN_RX_LOG_ENABLE 0
+#define APP_SCAN_DEFER_QUEUE_SIZE 1
+#define APP_SCAN_DEFER_PAYLOAD_MAX_LEN (APP_PEER_TRANSPORT_HEADER_LEN + APP_PEER_TRANSPORT_FRAGMENT_BODY_MAX_LEN)
+
+typedef struct {
+    app_adv_frame_t frame;
+    u8 payload[APP_SCAN_DEFER_PAYLOAD_MAX_LEN];
+    s8 rssi;
+} app_scan_deferred_frame_t;
+
+static app_scan_deferred_frame_t s_defer_q[APP_SCAN_DEFER_QUEUE_SIZE];
+static u8 s_defer_head;
+static u8 s_defer_tail;
+static u8 s_defer_count;
+
+static u8 app_scan_defer_frame(const app_adv_frame_t *frame, s8 rssi)
+{
+    app_scan_deferred_frame_t *item;
+
+    if (!frame || frame->payload_len > APP_SCAN_DEFER_PAYLOAD_MAX_LEN ||
+        (frame->payload_len && !frame->payload) ||
+        s_defer_count >= APP_SCAN_DEFER_QUEUE_SIZE) {
+        return 0;
+    }
+
+    item = &s_defer_q[s_defer_tail];
+    item->frame = *frame;
+    if (frame->payload_len) {
+        memcpy(item->payload, frame->payload, frame->payload_len);
+        item->frame.payload = item->payload;
+    } else {
+        item->frame.payload = 0;
+    }
+    item->rssi = rssi;
+    s_defer_tail = (u8)((s_defer_tail + 1) % APP_SCAN_DEFER_QUEUE_SIZE);
+    s_defer_count++;
+    return 1;
+}
 
 #if APP_SCAN_RX_LOG_ENABLE
 static void scan_debug_u8(const char *label, u8 value)
@@ -100,7 +137,6 @@ void app_scan_on_report(const app_scan_report_t *report)
 #endif
         app_discovery_on_beacon(&frame.src_eid, report->rssi, clock_time());
     } else if (frame.type == ADV_FRAME_DATA) {
-        u8 peer_frame_handled;
         s_debug.data_rx++;
 #if APP_SCAN_RX_LOG_ENABLE
         if (s_data_log_count < 20) {
@@ -115,17 +151,14 @@ void app_scan_on_report(const app_scan_report_t *report)
 #else
         (void)s_data_log_count;
 #endif
-        peer_frame_handled = app_peer_transport_on_adv_frame(&frame, report->rssi);
-#if (APP_HOST_ENABLE_ADV_TRANSPORT)
-        if (!peer_frame_handled) {
-            app_host_adv_on_adv_frame(&frame, report->rssi);
+        if (!app_scan_defer_frame(&frame, report->rssi)) {
+            s_debug.other_rx++;
         }
-#else
-        (void)peer_frame_handled;
-#endif
     } else if (frame.type == ADV_FRAME_ACK) {
         s_debug.data_rx++;
-        (void)app_peer_transport_on_adv_frame(&frame, report->rssi);
+        if (!app_scan_defer_frame(&frame, report->rssi)) {
+            s_debug.other_rx++;
+        }
     } else {
         s_debug.other_rx++;
     }
@@ -133,6 +166,28 @@ void app_scan_on_report(const app_scan_report_t *report)
 
 void app_scan_poll(void)
 {
+    app_scan_deferred_frame_t *item;
+    u8 peer_frame_handled;
+
+    if (!s_defer_count) {
+        return;
+    }
+
+    item = &s_defer_q[s_defer_head];
+    if (item->frame.payload_len) {
+        item->frame.payload = item->payload;
+    }
+    peer_frame_handled = app_peer_transport_on_adv_frame(&item->frame, item->rssi);
+#if (APP_HOST_ENABLE_ADV_TRANSPORT)
+    if (!peer_frame_handled) {
+        app_host_adv_on_adv_frame(&item->frame, item->rssi);
+    }
+#else
+    (void)peer_frame_handled;
+#endif
+    memset(item, 0, sizeof(*item));
+    s_defer_head = (u8)((s_defer_head + 1) % APP_SCAN_DEFER_QUEUE_SIZE);
+    s_defer_count--;
 }
 
 void app_scan_debug_reset(void)
@@ -140,6 +195,10 @@ void app_scan_debug_reset(void)
     s_vendor_decode_log_count = 0;
     s_beacon_log_count = 0;
     s_data_log_count = 0;
+    s_defer_head = 0;
+    s_defer_tail = 0;
+    s_defer_count = 0;
+    memset(s_defer_q, 0, sizeof(s_defer_q));
     memset(&s_debug, 0, sizeof(s_debug));
 }
 

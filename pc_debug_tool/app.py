@@ -117,6 +117,9 @@ class BleWorker:
     def send_shell(self, line: str) -> None:
         self.submit(self._send_packets(proto.make_shell_exec(self._next_seq(), line)))
 
+    def send_p2p_chat(self, text: str) -> None:
+        self.submit(self._send_packets(proto.make_p2p_chat_send(self._next_seq(), text)))
+
     def send_packets(self, packets: list[bytes]) -> None:
         self.submit(self._send_packets(packets))
 
@@ -443,7 +446,25 @@ class PendantDebugApp:
         self._refresh_provision_status()
 
     def _build_message_tab(self) -> None:
-        self.log_text = scrolledtext.ScrolledText(self.message_tab, wrap=tk.WORD)
+        chat = ttk.LabelFrame(self.message_tab, text="P2P Chat", padding=8)
+        chat.pack(fill=tk.BOTH, expand=True)
+
+        self.chat_text = scrolledtext.ScrolledText(chat, height=10, wrap=tk.WORD)
+        self.chat_text.pack(fill=tk.BOTH, expand=True)
+
+        chat_bar = ttk.Frame(chat)
+        chat_bar.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(chat_bar, text="Message").pack(side=tk.LEFT)
+        self.chat_var = tk.StringVar()
+        chat_entry = ttk.Entry(chat_bar, textvariable=self.chat_var)
+        chat_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        chat_entry.bind("<Return>", lambda _event: self._send_p2p_chat())
+        ttk.Button(chat_bar, text="Send", command=self._send_p2p_chat).pack(side=tk.LEFT)
+        ttk.Button(chat_bar, text="Clear", command=lambda: self._set_text(self.chat_text, "")).pack(side=tk.LEFT, padx=(6, 0))
+
+        log_frame = ttk.LabelFrame(self.message_tab, text="Debug Log", padding=8)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=12, wrap=tk.WORD)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
         raw = ttk.Frame(self.message_tab)
@@ -527,6 +548,24 @@ class PendantDebugApp:
         payload = bytes([1 if self.log_enable_var.get() else 0])
         self.worker.send_command(proto.CMD_LOG_ENABLE, payload)
         self._log(f"TX LOG_ENABLE {payload[0]}")
+
+    def _send_p2p_chat(self) -> None:
+        text = self.chat_var.get().strip()
+        if not text:
+            return
+        if not self.connected:
+            messagebox.showinfo("提示", "请先连接一个 PENDANT")
+            return
+        try:
+            payload_len = len(text.encode("utf-8"))
+            proto.make_p2p_chat_send(0, text)
+        except Exception as exc:
+            messagebox.showerror("P2P Chat", str(exc))
+            return
+        self.chat_var.set("")
+        self._append_chat("me", text)
+        self.worker.send_p2p_chat(text)
+        self._log(f"TX P2P_CHAT_SEND {payload_len} bytes")
 
     def _send_motor(self) -> None:
         pattern = int(self.motor_var.get().split()[0])
@@ -890,6 +929,8 @@ class PendantDebugApp:
                     self._append_identity(summary)
             if message.cmd == proto.CMD_RUN_FACTORY_TEST:
                 self._append_identity(summary)
+            if message.cmd == proto.CMD_P2P_CHAT_SEND and message.status != 0:
+                self._append_chat("system", summary)
             self._handle_provision_response(message)
             return
 
@@ -904,6 +945,9 @@ class PendantDebugApp:
         if message.frame_type == proto.TYPE_EVENT:
             try:
                 parsed = proto.parse_event(message.cmd, message.payload)
+                if parsed.get("event") == "P2P_CHAT":
+                    suffix = " [truncated]" if parsed.get("truncated") else ""
+                    self._append_chat(f"peer 0x{parsed['short_id']:08X}", parsed["text"] + suffix)
                 self._log("EVT " + str(parsed))
             except Exception as exc:
                 self._log(f"EVT parse error: {exc}; raw={proto.hex_bytes(message.payload)}")
@@ -989,6 +1033,10 @@ class PendantDebugApp:
     def _append_shell(self, text: str) -> None:
         self.shell_text.insert(tk.END, text + "\n")
         self.shell_text.see(tk.END)
+
+    def _append_chat(self, who: str, text: str) -> None:
+        self.chat_text.insert(tk.END, f"[{now_text()}] {who}: {text}\n")
+        self.chat_text.see(tk.END)
 
     def _log(self, text: str) -> None:
         self.log_text.insert(tk.END, f"[{now_text()}] {text}\n")

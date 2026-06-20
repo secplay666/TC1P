@@ -21,12 +21,14 @@ typedef enum {
     HOST_CMD_GET_FACTORY_INFO = 0x0E,
     HOST_CMD_RUN_FACTORY_TEST = 0x0F,
     HOST_CMD_SHELL_EXEC = 0x10,
+    HOST_CMD_P2P_CHAT_SEND = 0x11,
 } app_host_cmd_id_t;
 
 typedef enum {
     HOST_EVENT_PEER_LEVEL = 0x81,
     HOST_EVENT_SYSTEM = 0x82,
     HOST_EVENT_ERROR = 0x83,
+    HOST_EVENT_P2P_CHAT = 0x84,
 } app_host_event_id_t;
 
 void app_host_cmd_init(void);
@@ -35,6 +37,7 @@ void app_host_cmd_on_rx_frame(const u8 *data, u8 len);
 void app_host_cmd_on_rx_message(app_host_frame_type_t type, u8 seq, u8 cmd, u8 status, const u8 *payload, u16 len);
 u8 app_host_cmd_next_tx_seq(void);
 void app_host_cmd_log_text(u8 level, const char *tag, const char *msg);
+void app_host_cmd_notify_p2p_chat(const app_eid_t *src_eid, s8 rssi, const u8 *text, u16 len);
 void app_host_cmd_notify_peer_level(const app_eid_t *eid, u8 old_level, u8 new_level, s8 rssi_avg, u8 reason);
 void app_host_cmd_notify_error(u16 error_code, u16 detail);
 

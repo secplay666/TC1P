@@ -44,7 +44,7 @@ static ble_sts_t app_ble_configure_ext_scan(void)
 {
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
     return blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, s_scan_filter_policy, SCAN_PHY_1M,
-                                  SCAN_TYPE_ACTIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
+                                  SCAN_TYPE_PASSIVE, SCAN_INTERVAL_200MS, SCAN_WINDOW_10MS,
                                   0, 0, 0);
 #else
     return BLE_SUCCESS;
@@ -96,6 +96,14 @@ app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
 app_status_t app_ble_set_adv0_enabled(u8 enable)
 {
     ble_sts_t st;
+
+    if (enable && s_conn.connected) {
+        s_debug.adv0_status = BLE_SUCCESS;
+        s_debug.adv0_enabled = 1;
+        app_ble_refresh_started();
+        return APP_OK;
+    }
+
 #if PENDANT_EXT_ADV_ENABLE
     st = blc_ll_setExtAdvEnable(enable ? BLC_ADV_ENABLE : BLC_ADV_DISABLE, APP_BLE_APP_ADV_HANDLE, 0, 0);
 #else
@@ -189,6 +197,7 @@ app_status_t app_ble_whitelist_add_public(const u8 *addr)
 
 app_status_t app_ble_stop_adv_scan(void)
 {
+    s_debug.stop_count++;
     app_ble_set_scan_enabled(0);
     app_ble_set_adv1_enabled(0);
     app_ble_set_adv0_enabled(0);
@@ -273,6 +282,16 @@ void app_ble_get_debug(app_ble_debug_t *debug)
         *debug = s_debug;
         debug->connected = s_conn.connected;
         debug->started = s_adv_scan_started;
+        debug->conn_handle = s_conn.conn_handle;
+        if (s_conn.connected) {
+            debug->conn_interval = blc_ll_getAclConnectionInterval(s_conn.conn_handle);
+            debug->conn_latency = blc_ll_getAclConnectionLatency(s_conn.conn_handle);
+            debug->conn_timeout = blc_ll_getAclConnectionTimeout(s_conn.conn_handle);
+        } else {
+            debug->conn_interval = 0;
+            debug->conn_latency = 0;
+            debug->conn_timeout = 0;
+        }
     }
 }
 
@@ -284,6 +303,8 @@ void app_ble_on_connected(const u8 *peer_addr, u16 conn_handle)
 {
     s_conn.connected = 1;
     s_debug.connected = 1;
+    s_debug.conn_handle = conn_handle;
+    s_debug.last_conn_handle = conn_handle;
     s_conn.conn_handle = conn_handle;
     if (peer_addr) {
         memcpy(s_conn.peer_addr, peer_addr, sizeof(s_conn.peer_addr));
@@ -295,8 +316,12 @@ void app_ble_on_disconnected(u8 reason)
 {
     ble_sts_t adv_st;
 
+    s_debug.last_disconnect_reason = reason;
+    s_debug.last_conn_handle = s_conn.conn_handle;
+    s_debug.disconnect_count++;
     s_conn.connected = 0;
     s_debug.connected = 0;
+    s_debug.conn_handle = 0;
     s_conn.conn_handle = 0;
     if (s_adv_scan_started) {
 #if PENDANT_EXT_ADV_ENABLE

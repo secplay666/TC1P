@@ -5,9 +5,12 @@
 #include "../identity/app_identity.h"
 #include "../system/app_system.h"
 #include "../common/app_debug_print.h"
+#include "../app_config.h"
 #include "common/string.h"
 #include "drivers.h"
 #include "timer.h"
+
+#if (APP_HOST_ENABLE_ADV_TRANSPORT)
 
 #define APP_HOST_ADV_RX_QUEUE_SIZE       2
 #define APP_HOST_ADV_TX_REPEAT           3
@@ -385,3 +388,47 @@ app_status_t app_host_adv_send_message(app_host_frame_type_t type, u8 cmd, u8 st
 {
     return app_host_adv_send_message_with_seq(type, next_tx_seq(), cmd, status, payload, len);
 }
+
+#else
+
+void app_host_adv_init(void)
+{
+}
+
+void app_host_adv_poll(void)
+{
+}
+
+void app_host_adv_on_adv_frame(const app_adv_frame_t *frame, s8 rssi)
+{
+    (void)frame;
+    (void)rssi;
+}
+
+u8 app_host_adv_is_ready(void)
+{
+    return 0;
+}
+
+app_status_t app_host_adv_send_message(app_host_frame_type_t type, u8 cmd, u8 status, const u8 *payload, u16 len)
+{
+    (void)type;
+    (void)cmd;
+    (void)status;
+    (void)payload;
+    (void)len;
+    return APP_ERR_STATE;
+}
+
+app_status_t app_host_adv_send_message_with_seq(app_host_frame_type_t type, u8 seq, u8 cmd, u8 status, const u8 *payload, u16 len)
+{
+    (void)type;
+    (void)seq;
+    (void)cmd;
+    (void)status;
+    (void)payload;
+    (void)len;
+    return APP_ERR_STATE;
+}
+
+#endif

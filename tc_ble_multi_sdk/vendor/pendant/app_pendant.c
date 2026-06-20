@@ -24,8 +24,22 @@
 #include "host_transport/app_host_transport.h"
 #include "debug_shell/app_debug_shell.h"
 #include "system/app_system.h"
+#include "common/string.h"
 #include "drivers.h"
 #include "timer.h"
+
+static void app_pendant_on_peer_message(const app_eid_t *src_eid,
+                                        app_peer_msg_type_t type,
+                                        const u8 *payload,
+                                        u16 len,
+                                        s8 rssi)
+{
+    if (type != APP_PEER_MSG_USER || !payload || !len) {
+        return;
+    }
+
+    app_host_cmd_notify_p2p_chat(src_eid, rssi, payload, len);
+}
 
 void app_pendant_init(void)
 {
@@ -47,6 +61,7 @@ void app_pendant_init(void)
     app_adv_scheduler_init();
     app_peer_table_init();
     app_peer_transport_init();
+    app_peer_transport_set_rx_callback(app_pendant_on_peer_message);
     app_discovery_init();
     app_scan_init();
     app_host_cmd_init();
@@ -62,10 +77,10 @@ void app_pendant_poll(void)
     app_ble_poll();
     app_system_poll();
     app_scan_poll();
+    app_peer_transport_poll();
     app_host_cmd_poll();
     app_host_transport_poll();
     app_host_gatt_poll();
-    app_peer_transport_poll();
     app_discovery_poll(now);
     app_adv_scheduler_poll();
     app_battery_poll(now);

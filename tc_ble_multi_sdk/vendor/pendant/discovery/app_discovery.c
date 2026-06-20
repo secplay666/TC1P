@@ -4,11 +4,14 @@
 #include "../event/app_event.h"
 #include "../motor/app_motor.h"
 #include "../host_cmd/app_host_cmd.h"
+#include "common/string.h"
 #include "drivers.h"
 #include "timer.h"
 
 #define DISCOVERY_REASON_ENTER 1
 #define DISCOVERY_REASON_EXIT  2
+
+static app_discovery_debug_t s_debug;
 
 static app_peer_level_t level_for_rssi(s8 rssi)
 {
@@ -50,6 +53,7 @@ static void notify_level_change(app_peer_record_t *peer, app_peer_level_t old_le
 
 void app_discovery_init(void)
 {
+    memset(&s_debug, 0, sizeof(s_debug));
 }
 
 void app_discovery_on_beacon(const app_eid_t *eid, s8 rssi, u32 now_tick)
@@ -58,10 +62,20 @@ void app_discovery_on_beacon(const app_eid_t *eid, s8 rssi, u32 now_tick)
     app_peer_level_t target_level;
     const app_runtime_config_t *cfg = app_config_get();
 
+    s_debug.beacon_rx++;
+    s_debug.last_eid0 = eid ? eid->bytes[0] : 0;
+    s_debug.last_eid1 = eid ? eid->bytes[1] : 0;
+    s_debug.last_rssi = rssi;
+    s_debug.last_tin_ms = cfg->tin_ms;
+    s_debug.last_tout_ms = cfg->tout_ms;
+
     peer = app_peer_table_find_or_alloc(eid);
     if (!peer) {
+        s_debug.alloc_fail++;
+        s_debug.peer_count = app_peer_table_count();
         return;
     }
+    s_debug.alloc_ok++;
 
     peer->rssi = rssi;
     if (!peer->rssi_avg) {
@@ -72,6 +86,8 @@ void app_discovery_on_beacon(const app_eid_t *eid, s8 rssi, u32 now_tick)
     peer->last_seen_tick = now_tick;
 
     target_level = level_for_rssi(peer->rssi_avg);
+    s_debug.last_avg = peer->rssi_avg;
+    s_debug.last_target_level = (u8)target_level;
 
     if (target_level > peer->level) {
         if (!peer->enter_start_tick) {
@@ -108,14 +124,27 @@ void app_discovery_on_beacon(const app_eid_t *eid, s8 rssi, u32 now_tick)
         peer->enter_start_tick = 0;
         peer->exit_start_tick = 0;
     }
+
+    s_debug.last_peer_level = (u8)peer->level;
+    s_debug.peer_count = app_peer_table_count();
 }
 
 void app_discovery_poll(u32 now_tick)
 {
+    s_debug.poll_count++;
     app_peer_table_poll_timeout(now_tick);
+    s_debug.peer_count = app_peer_table_count();
 }
 
 void app_discovery_reset_peer(const app_eid_t *eid)
 {
     app_peer_table_remove(eid);
+    s_debug.peer_count = app_peer_table_count();
+}
+
+void app_discovery_get_debug(app_discovery_debug_t *debug)
+{
+    if (debug) {
+        *debug = s_debug;
+    }
 }
