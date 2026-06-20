@@ -15,7 +15,7 @@
 #include "drivers.h"
 #include "uart.h"
 
-#define APP_DEBUG_SHELL_CMD_MAX_COUNT 24
+#define APP_DEBUG_SHELL_CMD_MAX_COUNT 25
 #define APP_DEBUG_SHELL_ARG_MAX 5
 
 static app_debug_shell_cmd_entry_t s_cmds[APP_DEBUG_SHELL_CMD_MAX_COUNT];
@@ -523,14 +523,29 @@ static void cmd_p2pstat(u8 argc, char **argv)
     app_debug_shell_cmd_puts("[DBG] p2pstat\r\n");
     app_debug_shell_cmd_print_u32(" tx_ok=", debug.tx_ok);
     app_debug_shell_cmd_print_u32(" tx_fail=", debug.tx_fail);
+    app_debug_shell_cmd_print_u32(" tx_msg_ok=", debug.tx_msg_ok);
+    app_debug_shell_cmd_print_u32(" tx_msg_fail=", debug.tx_msg_fail);
+    app_debug_shell_cmd_print_u32(" tx_frag=", debug.tx_frag_sent);
+    app_debug_shell_cmd_print_u32(" tx_retx=", debug.tx_frag_retx);
+    app_debug_shell_cmd_print_u32(" tx_ack=", debug.tx_ack_rx);
+    app_debug_shell_cmd_print_u32(" tx_ack_to=", debug.tx_ack_timeout);
     app_debug_shell_cmd_print_u32(" rx_total=", debug.rx_total);
     app_debug_shell_cmd_print_u32(" rx_accept=", debug.rx_accept);
     app_debug_shell_cmd_print_u32(" rx_drop=", debug.rx_drop);
     app_debug_shell_cmd_print_u32(" rx_dup=", debug.rx_dup);
     app_debug_shell_cmd_print_u32(" rx_bc=", debug.rx_broadcast);
     app_debug_shell_cmd_print_u32(" rx_dir=", debug.rx_direct);
+    app_debug_shell_cmd_print_u32(" rx_msg_ok=", debug.rx_msg_ok);
+    app_debug_shell_cmd_print_u32(" rx_msg_to=", debug.rx_msg_timeout);
+    app_debug_shell_cmd_print_u32(" rx_frag=", debug.rx_frag_new);
+    app_debug_shell_cmd_print_u32(" rx_ack_tx=", debug.rx_ack_tx);
+    app_debug_shell_cmd_print_u32(" rx_busy=", debug.rx_busy);
+    app_debug_shell_cmd_print_u32(" rx_rej=", debug.rx_rejected);
+    app_debug_shell_cmd_print_u32(" rx_dbg_drop=", debug.rx_debug_drop);
     app_debug_shell_cmd_print_u32(" tx_seq=", debug.last_tx_seq);
     app_debug_shell_cmd_print_u32(" rx_seq=", debug.last_rx_seq);
+    app_debug_shell_cmd_print_u32(" tx_msg_len=", debug.last_tx_msg_len);
+    app_debug_shell_cmd_print_u32(" rx_msg_len=", debug.last_rx_msg_len);
     app_debug_shell_cmd_print_u8(" st=", debug.last_status);
     app_debug_shell_cmd_print_u8(" tx_type=", debug.last_tx_type);
     app_debug_shell_cmd_print_u8(" tx_len=", debug.last_tx_len);
@@ -540,35 +555,64 @@ static void cmd_p2pstat(u8 argc, char **argv)
     app_debug_shell_cmd_print_u8(" src0=", debug.last_rx_src0);
     app_debug_shell_cmd_print_u8(" src1=", debug.last_rx_src1);
     app_debug_shell_cmd_print_u8(" max=", debug.max_payload_len);
+    app_debug_shell_cmd_print_u8(" max_frag=", debug.max_fragments);
+    app_debug_shell_cmd_print_u8(" tx_active=", debug.tx_active);
+    app_debug_shell_cmd_print_u8(" tx_frag_cnt=", debug.tx_frag_count);
+    app_debug_shell_cmd_print_u8(" tx_pending=", debug.tx_pending);
+    app_debug_shell_cmd_print_u8(" tx_ack_bits=", debug.tx_ack_bits);
+    app_debug_shell_cmd_print_u8(" tx_retry=", debug.tx_retry_round);
+    app_debug_shell_cmd_print_u8(" rx_active=", debug.rx_active);
+    app_debug_shell_cmd_print_u8(" rx_frag_cnt=", debug.rx_frag_count);
+    app_debug_shell_cmd_print_u8(" rx_bitmap=", debug.rx_bitmap);
+    app_debug_shell_cmd_print_u8(" rx_drop_mask=", debug.rx_drop_mask);
 }
 
 static void cmd_p2psend(u8 argc, char **argv)
 {
+    app_peer_record_t peer;
+    app_eid_t *dst = 0;
+    app_peer_send_mode_t mode = APP_PEER_SEND_UNRELIABLE;
     u16 len = APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN;
     u16 i;
     app_status_t st;
 
     if (argc > 1) {
         if (!parse_u16_arg(argv[1], &len)) {
-            app_debug_shell_cmd_puts("[DBG] usage: p2psend [len]\r\n");
+            app_debug_shell_cmd_puts("[DBG] usage: p2psend [len] [u|r]\r\n");
             app_debug_shell_cmd_print_u8(" max=", APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN);
+            app_debug_shell_cmd_print_u32(" max_msg=", APP_PEER_TRANSPORT_MESSAGE_MAX_LEN);
             return;
         }
     }
-    if (len > APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN) {
-        app_debug_shell_cmd_puts("[DBG] usage: p2psend [len]\r\n");
+    if (argc > 2) {
+        if (str_eq(argv[2], "r")) {
+            mode = APP_PEER_SEND_RELIABLE;
+            if (app_peer_table_copy(&peer, 1) != 1) {
+                app_debug_shell_cmd_puts("[DBG] no peer\r\n");
+                return;
+            }
+            dst = &peer.eid;
+        } else if (str_eq(argv[2], "u")) {
+            mode = APP_PEER_SEND_UNRELIABLE;
+        } else {
+            app_debug_shell_cmd_puts("[DBG] usage: p2psend [len] [u|r]\r\n");
+            return;
+        }
+    }
+    if (len > APP_PEER_TRANSPORT_MESSAGE_MAX_LEN) {
+        app_debug_shell_cmd_puts("[DBG] usage: p2psend [len] [u|r]\r\n");
         app_debug_shell_cmd_print_u8(" max=", APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN);
+        app_debug_shell_cmd_print_u32(" max_msg=", APP_PEER_TRANSPORT_MESSAGE_MAX_LEN);
         return;
     }
 
-    for (i = 0; i < len; i++) {
-        s_dbg_payload[i] = (u8)(i + 0x30);
-    }
-    st = app_peer_transport_send(0, APP_PEER_MSG_TEST, s_dbg_payload, (u8)len);
+    (void)i;
+    st = app_peer_transport_send_test_pattern(dst, APP_PEER_MSG_TEST, len, mode, 0);
     app_debug_shell_cmd_puts("[DBG] p2psend\r\n");
     app_debug_shell_cmd_print_u8(" st=", (u8)st);
-    app_debug_shell_cmd_print_u8(" payload=", (u8)len);
-    app_debug_shell_cmd_print_u32(" adv_payload=", APP_PEER_TRANSPORT_HEADER_LEN + len);
+    app_debug_shell_cmd_print_u32(" payload=", len);
+    app_debug_shell_cmd_print_u8(" mode=", (u8)mode);
+    app_debug_shell_cmd_print_u32(" frag_payload=", APP_PEER_TRANSPORT_HEADER_LEN + APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN);
 }
 
 static void cmd_p2pclear(u8 argc, char **argv)
@@ -577,6 +621,25 @@ static void cmd_p2pclear(u8 argc, char **argv)
     (void)argv;
     app_peer_transport_debug_reset();
     app_debug_shell_cmd_puts("[DBG] p2p cleared\r\n");
+}
+
+static void cmd_p2pdrop(u8 argc, char **argv)
+{
+    u16 index;
+    u32 mask;
+
+    if (argc != 2 || !parse_u16_arg(argv[1], &index) ||
+        index >= APP_PEER_TRANSPORT_MAX_FRAGMENTS) {
+        app_debug_shell_cmd_puts("[DBG] usage: p2pdrop <frag_index>\r\n");
+        app_debug_shell_cmd_print_u8(" max_frag=", APP_PEER_TRANSPORT_MAX_FRAGMENTS);
+        return;
+    }
+
+    mask = ((u32)1 << index);
+    app_peer_transport_debug_drop_next_rx(mask);
+    app_debug_shell_cmd_puts("[DBG] p2pdrop armed\r\n");
+    app_debug_shell_cmd_print_u8(" frag=", (u8)index);
+    app_debug_shell_cmd_print_u8(" mask=", (u8)mask);
 }
 
 static void cmd_txstat(u8 argc, char **argv)
@@ -913,6 +976,7 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("p2pstat", "p2pstat", "show peer transport counters", cmd_p2pstat);
     app_debug_shell_cmd_register("p2psend", "p2psend [len]", "send peer test message", cmd_p2psend);
     app_debug_shell_cmd_register("p2pclear", "p2pclear", "clear peer transport counters", cmd_p2pclear);
+    app_debug_shell_cmd_register("p2pdrop", "p2pdrop <frag>", "drop first RX round for one fragment", cmd_p2pdrop);
     app_debug_shell_cmd_register("txstat", "txstat", "show adv scheduler counters", cmd_txstat);
     app_debug_shell_cmd_register("radio", "radio", "show BLE radio state", cmd_radio);
     app_debug_shell_cmd_register("mac", "mac", "show BLE MAC address bytes", cmd_mac);

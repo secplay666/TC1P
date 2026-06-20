@@ -123,6 +123,9 @@ void app_scan_on_report(const app_scan_report_t *report)
 #else
         (void)peer_frame_handled;
 #endif
+    } else if (frame.type == ADV_FRAME_ACK) {
+        s_debug.data_rx++;
+        (void)app_peer_transport_on_adv_frame(&frame, report->rssi);
     } else {
         s_debug.other_rx++;
     }
