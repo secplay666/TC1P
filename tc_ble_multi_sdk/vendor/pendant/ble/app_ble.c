@@ -44,7 +44,7 @@ static ble_sts_t app_ble_configure_ext_scan(void)
 {
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
     return blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, s_scan_filter_policy, SCAN_PHY_1M,
-                                  SCAN_TYPE_PASSIVE, SCAN_INTERVAL_200MS, SCAN_WINDOW_10MS,
+                                  SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
                                   0, 0, 0);
 #else
     return BLE_SUCCESS;

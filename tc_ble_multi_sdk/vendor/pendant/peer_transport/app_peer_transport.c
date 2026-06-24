@@ -662,6 +662,7 @@ static u8 handle_ack_frame(const app_adv_frame_t *frame)
     app_peer_msg_type_t ack_type;
     u8 fragment_count;
     u32 bitmap;
+    u8 match_flags = 0;
 
     if (!frame || frame->type != ADV_FRAME_ACK ||
         !p2p_header_is_v2(frame->payload, frame->payload_len)) {
@@ -683,6 +684,29 @@ static u8 handle_ack_frame(const app_adv_frame_t *frame)
     fragment_count = payload[9];
     bitmap = rd32(&payload[10]);
     s_debug.tx_ack_rx++;
+    s_debug.last_ack_status = (u8)status;
+    s_debug.last_ack_type = (u8)ack_type;
+    s_debug.last_ack_frag_count = fragment_count;
+    s_debug.last_ack_bitmap = (u8)(bitmap & 0xff);
+    s_debug.last_ack_src0 = frame->src_eid.bytes[0];
+    s_debug.last_ack_src1 = frame->src_eid.bytes[1];
+
+    if (s_tx.active) {
+        match_flags |= 0x01;
+    }
+    if (s_tx.message_id == frame->message_id) {
+        match_flags |= 0x02;
+    }
+    if (s_tx.type == ack_type) {
+        match_flags |= 0x04;
+    }
+    if (app_eid_equal(&s_tx.dst_eid, &frame->src_eid)) {
+        match_flags |= 0x08;
+    }
+    if (fragment_count == s_tx.fragment_count) {
+        match_flags |= 0x10;
+    }
+    s_debug.last_ack_match_flags = match_flags;
 
     if (!s_tx.active ||
         s_tx.message_id != frame->message_id ||
@@ -695,6 +719,7 @@ static u8 handle_ack_frame(const app_adv_frame_t *frame)
         return 1;
     }
 
+    s_debug.tx_ack_match++;
     s_tx.last_ack_tick = clock_time();
     if (status == APP_PEER_ACK_COMPLETE ||
         status == APP_PEER_ACK_DUP_COMPLETE) {

@@ -49,6 +49,7 @@ typedef struct {
     u32 tx_frag_sent;
     u32 tx_frag_retx;
     u32 tx_ack_rx;
+    u32 tx_ack_match;
     u32 tx_ack_timeout;
     u32 rx_total;
     u32 rx_accept;
@@ -82,6 +83,13 @@ typedef struct {
     u8 tx_pending;
     u8 tx_ack_bits;
     u8 tx_retry_round;
+    u8 last_ack_status;
+    u8 last_ack_type;
+    u8 last_ack_frag_count;
+    u8 last_ack_bitmap;
+    u8 last_ack_match_flags;
+    u8 last_ack_src0;
+    u8 last_ack_src1;
     u8 rx_active;
     u8 rx_frag_count;
     u8 rx_bitmap;

@@ -16,7 +16,7 @@
 #include "drivers.h"
 #include "uart.h"
 
-#define APP_DEBUG_SHELL_CMD_MAX_COUNT 20
+#define APP_DEBUG_SHELL_CMD_MAX_COUNT 22
 #define APP_DEBUG_SHELL_ARG_MAX 5
 #define APP_DEBUG_SHELL_ENABLE_ADV_TEST_CMDS 0
 #define APP_DEBUG_SHELL_SENDMAX_PAYLOAD_MAX 64
@@ -549,6 +549,7 @@ static void cmd_p2pstat(u8 argc, char **argv)
     app_debug_shell_cmd_print_u32(" tx_frag=", debug.tx_frag_sent);
     app_debug_shell_cmd_print_u32(" tx_retx=", debug.tx_frag_retx);
     app_debug_shell_cmd_print_u32(" tx_ack=", debug.tx_ack_rx);
+    app_debug_shell_cmd_print_u32(" tx_ack_match=", debug.tx_ack_match);
     app_debug_shell_cmd_print_u32(" tx_ack_to=", debug.tx_ack_timeout);
     app_debug_shell_cmd_print_u32(" rx_total=", debug.rx_total);
     app_debug_shell_cmd_print_u32(" rx_accept=", debug.rx_accept);
@@ -582,6 +583,13 @@ static void cmd_p2pstat(u8 argc, char **argv)
     app_debug_shell_cmd_print_u8(" tx_pending=", debug.tx_pending);
     app_debug_shell_cmd_print_u8(" tx_ack_bits=", debug.tx_ack_bits);
     app_debug_shell_cmd_print_u8(" tx_retry=", debug.tx_retry_round);
+    app_debug_shell_cmd_print_u8(" ack_st=", debug.last_ack_status);
+    app_debug_shell_cmd_print_u8(" ack_type=", debug.last_ack_type);
+    app_debug_shell_cmd_print_u8(" ack_frag=", debug.last_ack_frag_count);
+    app_debug_shell_cmd_print_u8(" ack_bits=", debug.last_ack_bitmap);
+    app_debug_shell_cmd_print_u8(" ack_match=", debug.last_ack_match_flags);
+    app_debug_shell_cmd_print_u8(" ack_src0=", debug.last_ack_src0);
+    app_debug_shell_cmd_print_u8(" ack_src1=", debug.last_ack_src1);
     app_debug_shell_cmd_print_u8(" rx_active=", debug.rx_active);
     app_debug_shell_cmd_print_u8(" rx_frag_cnt=", debug.rx_frag_count);
     app_debug_shell_cmd_print_u8(" rx_bitmap=", debug.rx_bitmap);
@@ -1048,7 +1056,9 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("txstat", "txstat", "show adv scheduler counters", cmd_txstat);
     app_debug_shell_cmd_register("radio", "radio", "show BLE radio state", cmd_radio);
     app_debug_shell_cmd_register("ble", "ble [start|stop|adv0-on|adv1-on|scan-on]", "control BLE radio", cmd_ble);
+    app_debug_shell_cmd_register("rx", "rx [on|off]", "control scan decode", cmd_rx);
     app_debug_shell_cmd_register("wl", "wl [off|add <mac>]", "control scan whitelist", cmd_wl);
+    app_debug_shell_cmd_register("mac", "mac", "show BLE mac", cmd_mac);
     app_debug_shell_cmd_register("disc", "disc", "disconnect GATT", cmd_disc);
     app_debug_shell_cmd_register("reset", "reset", "software reset", cmd_reset);
 }

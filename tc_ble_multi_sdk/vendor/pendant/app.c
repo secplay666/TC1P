@@ -1291,7 +1291,7 @@ _attribute_no_inline_ void user_init_normal(void)
 
 #if (APP_BLE_ENABLE_DISCOVERY_SCAN)
 	blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, SCAN_FP_ALLOW_ADV_ANY, SCAN_PHY_1M,
-						   SCAN_TYPE_ACTIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
+						   SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
 						   0, 0, 0);
 #endif
 
