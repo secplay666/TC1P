@@ -1,6 +1,6 @@
 # 蓝牙吊坠固件构建与下载
 
-当前下位机主工程位于 `tc_ble_multi_sdk/`，目标芯片为 Telink B85 / TLSR8258。`tc_ble_single_sdk/` 仍保留作历史对照，后续确认 Multi SDK 路线稳定后再删除。
+当前下位机主工程位于 `tc_ble_multi_sdk/`，目标芯片为 Telink B85 / TLSR8258。旧 `tc_ble_single_sdk/` 已在 Multi SDK 路线稳定后移除。
 
 ## 环境要求
 
