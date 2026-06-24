@@ -218,9 +218,9 @@ class BleWorker:
 
         for packet in packets:
             try:
-                await self.client.write_gatt_char(self.chars["cmd"], packet, response=False)
-            except Exception:
                 await self.client.write_gatt_char(self.chars["cmd"], packet, response=True)
+            except Exception:
+                await self.client.write_gatt_char(self.chars["cmd"], packet, response=False)
             await asyncio.sleep(0.02)
         self.post("tx", packets=packets)
 
@@ -946,8 +946,29 @@ class PendantDebugApp:
             try:
                 parsed = proto.parse_event(message.cmd, message.payload)
                 if parsed.get("event") == "P2P_CHAT":
-                    suffix = " [truncated]" if parsed.get("truncated") else ""
-                    self._append_chat(f"peer 0x{parsed['short_id']:08X}", parsed["text"] + suffix)
+                    if parsed.get("dropped"):
+                        self._append_chat(
+                            "system",
+                            f"missed P2P message from peer 0x{parsed['short_id']:08X}; "
+                            f"{parsed['text_len']} bytes expired before PC delivery",
+                        )
+                    else:
+                        suffix = " [truncated]" if parsed.get("truncated") else ""
+                        self._append_chat(f"peer 0x{parsed['short_id']:08X}", parsed["text"] + suffix)
+                if parsed.get("event") == "P2P_CHAT_TX_RESULT":
+                    if parsed.get("ok"):
+                        self._append_chat(
+                            "system",
+                            f"message delivered to peer 0x{parsed['short_id']:08X}; "
+                            f"id=0x{parsed['peer_message_id']:08X}",
+                        )
+                    else:
+                        self._append_chat(
+                            "system",
+                            f"message failed to peer 0x{parsed['short_id']:08X}; "
+                            f"{parsed['text_len']} bytes, status={parsed['host_status_name']}, "
+                            f"id=0x{parsed['peer_message_id']:08X}",
+                        )
                 self._log("EVT " + str(parsed))
             except Exception as exc:
                 self._log(f"EVT parse error: {exc}; raw={proto.hex_bytes(message.payload)}")

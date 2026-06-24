@@ -42,7 +42,7 @@ class IdentityWriter:
         self.seq = 1 if self.seq >= 255 else self.seq + 1
         packets = proto.encode_message(proto.TYPE_CMD, seq, cmd, 0, payload)
         for packet in packets:
-            await self.client.write_gatt_char(self.chars["cmd"], packet, response=False)  # type: ignore[union-attr]
+            await self.client.write_gatt_char(self.chars["cmd"], packet, response=True)  # type: ignore[union-attr]
             await asyncio.sleep(0.02)
 
         end_time = asyncio.get_running_loop().time() + timeout_s

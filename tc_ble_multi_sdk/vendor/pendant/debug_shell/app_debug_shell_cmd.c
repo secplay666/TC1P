@@ -4,6 +4,7 @@
 #include "../identity/app_identity.h"
 #include "../peer_table/app_peer_table.h"
 #include "../peer_transport/app_peer_transport.h"
+#include "../host_cmd/app_host_cmd.h"
 #include "../scan/app_scan.h"
 #include "../discovery/app_discovery.h"
 #include "../ble/app_ble.h"
@@ -736,6 +737,25 @@ static void cmd_txstat(u8 argc, char **argv)
     app_debug_shell_cmd_print_u8(" data_payload=", adv.last_data_payload_len);
 }
 
+static void cmd_hoststat(u8 argc, char **argv)
+{
+    app_host_cmd_debug_t host;
+    (void)argc;
+    (void)argv;
+
+    app_host_cmd_get_debug(&host);
+    app_debug_shell_cmd_puts("[DBG] hoststat\r\n");
+    app_debug_shell_cmd_print_u8(" ready=", host.host_ready);
+    app_debug_shell_cmd_print_u8(" chat_pending=", host.p2p_chat_event_pending);
+    app_debug_shell_cmd_print_u8(" chat_flags=", host.p2p_chat_event_flags);
+    app_debug_shell_cmd_print_u8(" last_st=", host.p2p_chat_event_last_status);
+    app_debug_shell_cmd_print_u32(" evt_len=", host.p2p_chat_event_len);
+    app_debug_shell_cmd_print_u32(" text_len=", host.p2p_chat_event_text_len);
+    app_debug_shell_cmd_print_u32(" chat_rx=", host.p2p_chat_event_rx_count);
+    app_debug_shell_cmd_print_u32(" chat_drop=", host.p2p_chat_event_drop_count);
+    app_debug_shell_cmd_print_u32(" chat_sent=", host.p2p_chat_event_sent_count);
+}
+
 static void cmd_radio(u8 argc, char **argv)
 {
     app_ble_debug_t ble;
@@ -999,6 +1019,11 @@ static void execute_line(char *line)
     lower_command_name(line);
     argc = split_args(line, argv, APP_DEBUG_SHELL_ARG_MAX);
     if (!argc) {
+        return;
+    }
+
+    if (str_eq(argv[0], "hoststat")) {
+        cmd_hoststat(argc, argv);
         return;
     }
 

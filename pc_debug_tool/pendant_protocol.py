@@ -13,6 +13,9 @@ HEADER_LEN = 9
 CRC_LEN = 2
 CHUNK_MAX_LEN = MAX_PACKET_LEN - HEADER_LEN - CRC_LEN
 MESSAGE_MAX_LEN = 192
+P2P_CHAT_MAX_LEN = MESSAGE_MAX_LEN
+P2P_CHAT_FLAG_TRUNCATED = 0x01
+P2P_CHAT_FLAG_DROPPED = 0x02
 
 TYPE_CMD = 1
 TYPE_RSP = 2
@@ -41,6 +44,7 @@ EVENT_PEER_LEVEL = 0x81
 EVENT_SYSTEM = 0x82
 EVENT_ERROR = 0x83
 EVENT_P2P_CHAT = 0x84
+EVENT_P2P_CHAT_TX_RESULT = 0x85
 
 CMD_NAMES = {
     CMD_GET_DEVICE_INFO: "GET_DEVICE_INFO",
@@ -285,8 +289,8 @@ def make_p2p_chat_send(seq: int, text: str) -> list[bytes]:
     payload = text.encode("utf-8")
     if not payload:
         raise ValueError("chat text is empty")
-    if len(payload) > MESSAGE_MAX_LEN:
-        raise ValueError(f"chat text too long: {len(payload)} > {MESSAGE_MAX_LEN}")
+    if len(payload) > P2P_CHAT_MAX_LEN:
+        raise ValueError(f"chat text too long: {len(payload)} > {P2P_CHAT_MAX_LEN}")
     return encode_message(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, payload)
 
 
@@ -505,8 +509,25 @@ def parse_event(cmd: int, payload: bytes) -> dict:
             "rssi": i8(payload[4]),
             "flags": payload[5],
             "text_len": text_len,
-            "truncated": bool(payload[5] & 0x01) or len(text_bytes) < text_len,
+            "dropped": bool(payload[5] & P2P_CHAT_FLAG_DROPPED),
+            "truncated": bool(payload[5] & P2P_CHAT_FLAG_TRUNCATED) or len(text_bytes) < text_len,
             "text": text_bytes.decode("utf-8", errors="replace"),
+        }
+    if cmd == EVENT_P2P_CHAT_TX_RESULT:
+        if len(payload) < 14:
+            raise ValueError("p2p chat tx result event too short")
+        host_status = payload[4]
+        app_status = payload[5]
+        return {
+            "event": "P2P_CHAT_TX_RESULT",
+            "short_id": u32le(payload, 0),
+            "host_status": host_status,
+            "host_status_name": STATUS_NAMES.get(host_status, f"0x{host_status:02X}"),
+            "app_status": app_status,
+            "flags": payload[6],
+            "text_len": u16le(payload, 8),
+            "peer_message_id": u32le(payload, 10),
+            "ok": host_status == 0,
         }
     return {"event": f"0x{cmd:02X}", "payload_hex": hex_bytes(payload)}
 
@@ -516,6 +537,11 @@ def format_response(message: HostMessage) -> str:
     status = STATUS_NAMES.get(message.status, f"0x{message.status:02X}")
 
     if message.status != 0:
+        if message.cmd == CMD_P2P_CHAT_SEND and message.status == 0x02 and message.payload:
+            return (
+                f"{name}: {status} "
+                f"(peer_count={message.payload[0]}, target selection is not implemented yet)"
+            )
         return f"{name}: {status}"
 
     try:

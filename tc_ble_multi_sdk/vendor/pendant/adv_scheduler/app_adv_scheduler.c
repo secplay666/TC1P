@@ -215,14 +215,14 @@ void app_adv_scheduler_poll(void)
         s_debug.last_status = (u8)st;
         if (st == APP_OK) {
             s_debug.build_ok++;
-            if (s_debug.last_type == ADV_FRAME_DATA) {
-                s_debug.data_build_ok++;
-                s_data_hold_active = 1;
-            } else if (s_debug.last_type == ADV_FRAME_BEACON) {
+            if (s_debug.last_type == ADV_FRAME_BEACON) {
                 s_debug.beacon_build_ok++;
                 s_data_hold_active = 0;
             } else {
-                s_data_hold_active = 0;
+                if (s_debug.last_type == ADV_FRAME_DATA) {
+                    s_debug.data_build_ok++;
+                }
+                s_data_hold_active = 1;
             }
             app_ble_update_ext_adv_data(s_adv_buf, len);
         } else {

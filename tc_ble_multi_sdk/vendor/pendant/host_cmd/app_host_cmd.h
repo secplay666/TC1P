@@ -29,15 +29,31 @@ typedef enum {
     HOST_EVENT_SYSTEM = 0x82,
     HOST_EVENT_ERROR = 0x83,
     HOST_EVENT_P2P_CHAT = 0x84,
+    HOST_EVENT_P2P_CHAT_TX_RESULT = 0x85,
 } app_host_event_id_t;
+
+typedef struct {
+    u8 p2p_chat_event_pending;
+    u8 p2p_chat_event_flags;
+    u8 p2p_chat_event_last_status;
+    u8 host_ready;
+    u16 p2p_chat_event_len;
+    u16 p2p_chat_event_text_len;
+    u16 p2p_chat_event_rx_count;
+    u16 p2p_chat_event_drop_count;
+    u16 p2p_chat_event_sent_count;
+} app_host_cmd_debug_t;
 
 void app_host_cmd_init(void);
 void app_host_cmd_poll(void);
 void app_host_cmd_on_rx_frame(const u8 *data, u8 len);
 void app_host_cmd_on_rx_message(app_host_frame_type_t type, u8 seq, u8 cmd, u8 status, const u8 *payload, u16 len);
 u8 app_host_cmd_next_tx_seq(void);
+void app_host_cmd_get_debug(app_host_cmd_debug_t *debug);
 void app_host_cmd_log_text(u8 level, const char *tag, const char *msg);
 void app_host_cmd_notify_p2p_chat(const app_eid_t *src_eid, s8 rssi, const u8 *text, u16 len);
+void app_host_cmd_notify_p2p_chat_tx_result(const app_eid_t *dst_eid, u32 message_id,
+                                            u16 len, app_status_t status, u8 flags);
 void app_host_cmd_notify_peer_level(const app_eid_t *eid, u8 old_level, u8 new_level, s8 rssi_avg, u8 reason);
 void app_host_cmd_notify_error(u16 error_code, u16 detail);
 

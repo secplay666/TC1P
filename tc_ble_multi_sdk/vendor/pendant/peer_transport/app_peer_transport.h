@@ -101,6 +101,12 @@ typedef void (*app_peer_transport_rx_cb_t)(const app_eid_t *src_eid,
                                            const u8 *payload,
                                            u16 len,
                                            s8 rssi);
+typedef void (*app_peer_transport_tx_cb_t)(const app_eid_t *dst_eid,
+                                           app_peer_msg_type_t type,
+                                           u32 message_id,
+                                           u16 len,
+                                           app_status_t status,
+                                           u8 flags);
 
 void app_peer_transport_init(void);
 void app_peer_transport_poll(void);
@@ -115,6 +121,7 @@ app_status_t app_peer_transport_send_test_pattern(const app_eid_t *dst_eid,
                                                   app_peer_send_mode_t mode,
                                                   u8 flags);
 void app_peer_transport_set_rx_callback(app_peer_transport_rx_cb_t cb);
+void app_peer_transport_set_tx_callback(app_peer_transport_tx_cb_t cb);
 void app_peer_transport_debug_drop_next_rx(u32 fragment_bitmap);
 u8 app_peer_transport_on_adv_frame(const app_adv_frame_t *frame, s8 rssi);
 void app_peer_transport_debug_reset(void);

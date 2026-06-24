@@ -41,6 +41,20 @@ static void app_pendant_on_peer_message(const app_eid_t *src_eid,
     app_host_cmd_notify_p2p_chat(src_eid, rssi, payload, len);
 }
 
+static void app_pendant_on_peer_tx_result(const app_eid_t *dst_eid,
+                                          app_peer_msg_type_t type,
+                                          u32 message_id,
+                                          u16 len,
+                                          app_status_t status,
+                                          u8 flags)
+{
+    if (type != APP_PEER_MSG_USER) {
+        return;
+    }
+
+    app_host_cmd_notify_p2p_chat_tx_result(dst_eid, message_id, len, status, flags);
+}
+
 void app_pendant_init(void)
 {
     app_board_init();
@@ -62,6 +76,7 @@ void app_pendant_init(void)
     app_peer_table_init();
     app_peer_transport_init();
     app_peer_transport_set_rx_callback(app_pendant_on_peer_message);
+    app_peer_transport_set_tx_callback(app_pendant_on_peer_tx_result);
     app_discovery_init();
     app_scan_init();
     app_host_cmd_init();

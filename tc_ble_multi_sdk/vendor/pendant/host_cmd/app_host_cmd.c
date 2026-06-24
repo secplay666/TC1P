@@ -23,6 +23,9 @@
 #define HOST_SHELL_RSP_BODY_MAX_LEN 57
 #define HOST_P2P_CHAT_EVENT_HEADER_LEN 8
 #define HOST_P2P_CHAT_EVENT_FLAG_TRUNCATED 0x01
+#define HOST_P2P_CHAT_EVENT_FLAG_DROPPED   0x02
+#define HOST_P2P_CHAT_DELIVERY_TTL_US      5000000
+#define HOST_P2P_CHAT_DROP_NOTICE_TTL_US   60000000
 
 #define HOST_LOG_LEVEL_INFO  1
 #define HOST_LOG_LEVEL_ERROR 2
@@ -47,6 +50,11 @@ static u8 s_rsp_buf[APP_ADV_FRAME_MAX_LEN];
 static u8 s_evt_buf[APP_HOST_MESSAGE_MAX_LEN];
 static u16 s_evt_len;
 static u8 s_p2p_chat_event_pending;
+static u32 s_p2p_chat_event_tick;
+static u8 s_p2p_chat_event_last_status;
+static u16 s_p2p_chat_event_rx_count;
+static u16 s_p2p_chat_event_drop_count;
+static u16 s_p2p_chat_event_sent_count;
 
 typedef struct {
     u8 active;
@@ -543,6 +551,7 @@ static void handle_p2p_chat_pending(void)
     app_status_t st;
     u8 seq;
     u16 len;
+    u8 peer_count;
 
     if (!s_pending.active || s_pending.cmd != HOST_CMD_P2P_CHAT_SEND) {
         return;
@@ -551,9 +560,21 @@ static void handle_p2p_chat_pending(void)
     seq = s_pending.seq;
     len = s_pending.len;
 
-    if (app_peer_table_copy(&peer, 1) != 1) {
+    peer_count = app_peer_table_count();
+    if (!peer_count) {
         s_pending.active = 0;
         send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_NOT_FOUND, 0, 0);
+        return;
+    }
+    if (peer_count != 1) {
+        s_pending.active = 0;
+        s_rsp_buf[0] = peer_count;
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_STATE, s_rsp_buf, 1);
+        return;
+    }
+    if (app_peer_table_copy(&peer, 1) != 1) {
+        s_pending.active = 0;
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_STATE, 0, 0);
         return;
     }
 
@@ -728,11 +749,26 @@ static void handle_p2p_chat_event_pending(void)
         return;
     }
 
+    if (s_evt_buf[5] & HOST_P2P_CHAT_EVENT_FLAG_DROPPED) {
+        if (clock_time_exceed(s_p2p_chat_event_tick, HOST_P2P_CHAT_DROP_NOTICE_TTL_US)) {
+            s_p2p_chat_event_pending = 0;
+            s_evt_len = 0;
+            return;
+        }
+    } else if (clock_time_exceed(s_p2p_chat_event_tick, HOST_P2P_CHAT_DELIVERY_TTL_US)) {
+        s_evt_buf[5] |= HOST_P2P_CHAT_EVENT_FLAG_DROPPED;
+        s_evt_len = HOST_P2P_CHAT_EVENT_HEADER_LEN;
+        s_p2p_chat_event_tick = clock_time();
+        s_p2p_chat_event_drop_count++;
+    }
+
     st = app_host_transport_send_message(HOST_FRAME_TYPE_EVENT, HOST_EVENT_P2P_CHAT,
                                          HOST_STATUS_OK, s_evt_buf, s_evt_len);
+    s_p2p_chat_event_last_status = (u8)st;
     if (st == APP_OK) {
         s_p2p_chat_event_pending = 0;
         s_evt_len = 0;
+        s_p2p_chat_event_sent_count++;
     }
 }
 
@@ -812,6 +848,11 @@ void app_host_cmd_init(void)
     s_crc_error_count = 0;
     s_evt_len = 0;
     s_p2p_chat_event_pending = 0;
+    s_p2p_chat_event_tick = 0;
+    s_p2p_chat_event_last_status = APP_OK;
+    s_p2p_chat_event_rx_count = 0;
+    s_p2p_chat_event_drop_count = 0;
+    s_p2p_chat_event_sent_count = 0;
     memset(&s_pending, 0, sizeof(s_pending));
     s_reboot_pending = 0;
     s_reboot_tick = 0;
@@ -836,6 +877,24 @@ void app_host_cmd_poll(void)
 u8 app_host_cmd_next_tx_seq(void)
 {
     return s_tx_seq++;
+}
+
+void app_host_cmd_get_debug(app_host_cmd_debug_t *debug)
+{
+    if (!debug) {
+        return;
+    }
+
+    memset(debug, 0, sizeof(*debug));
+    debug->p2p_chat_event_pending = s_p2p_chat_event_pending;
+    debug->p2p_chat_event_flags = s_p2p_chat_event_pending ? s_evt_buf[5] : 0;
+    debug->p2p_chat_event_last_status = s_p2p_chat_event_last_status;
+    debug->host_ready = app_host_transport_is_ready();
+    debug->p2p_chat_event_len = s_evt_len;
+    debug->p2p_chat_event_text_len = s_p2p_chat_event_pending ? rd16(&s_evt_buf[6]) : 0;
+    debug->p2p_chat_event_rx_count = s_p2p_chat_event_rx_count;
+    debug->p2p_chat_event_drop_count = s_p2p_chat_event_drop_count;
+    debug->p2p_chat_event_sent_count = s_p2p_chat_event_sent_count;
 }
 
 void app_host_cmd_on_rx_frame(const u8 *data, u8 len)
@@ -954,6 +1013,32 @@ void app_host_cmd_notify_p2p_chat(const app_eid_t *src_eid, s8 rssi, const u8 *t
     memcpy(&s_evt_buf[HOST_P2P_CHAT_EVENT_HEADER_LEN], text, copy_len);
     s_evt_len = (u16)(HOST_P2P_CHAT_EVENT_HEADER_LEN + copy_len);
     s_p2p_chat_event_pending = 1;
+    s_p2p_chat_event_tick = clock_time();
+    s_p2p_chat_event_rx_count++;
+}
+
+void app_host_cmd_notify_p2p_chat_tx_result(const app_eid_t *dst_eid, u32 message_id,
+                                            u16 len, app_status_t status, u8 flags)
+{
+    app_peer_record_t *peer;
+    u32 short_id = 0;
+
+    if (dst_eid) {
+        peer = app_peer_table_find(dst_eid);
+        if (peer) {
+            short_id = peer->short_id;
+        }
+    }
+
+    wr32(&s_rsp_buf[0], short_id);
+    s_rsp_buf[4] = host_status_from_app(status);
+    s_rsp_buf[5] = (u8)status;
+    s_rsp_buf[6] = flags;
+    s_rsp_buf[7] = 0;
+    wr16(&s_rsp_buf[8], len);
+    wr32(&s_rsp_buf[10], message_id);
+    app_host_transport_send_message(HOST_FRAME_TYPE_EVENT, HOST_EVENT_P2P_CHAT_TX_RESULT,
+                                    HOST_STATUS_OK, s_rsp_buf, 14);
 }
 
 void app_host_cmd_notify_peer_level(const app_eid_t *eid, u8 old_level, u8 new_level, s8 rssi_avg, u8 reason)

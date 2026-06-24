@@ -100,6 +100,7 @@ static app_peer_completed_t s_completed[APP_PEER_COMPLETED_CACHE_COUNT];
 static app_peer_ack_pending_t s_ack;
 static app_peer_debug_drop_t s_debug_drop;
 static app_peer_transport_rx_cb_t s_rx_cb;
+static app_peer_transport_tx_cb_t s_tx_cb;
 
 static u16 rd16(const u8 *p)
 {
@@ -507,6 +508,9 @@ static app_status_t send_tx_fragment(u8 index)
 static void tx_finish_success(void)
 {
     s_debug.tx_msg_ok++;
+    if ((s_tx.flags & APP_PEER_TRANSPORT_FRAME_FLAG_NOTIFY) && s_tx_cb) {
+        s_tx_cb(&s_tx.dst_eid, s_tx.type, s_tx.message_id, s_tx.len, APP_OK, s_tx.flags);
+    }
     memset(&s_tx, 0, sizeof(s_tx));
 }
 
@@ -515,6 +519,9 @@ static void tx_finish_fail(app_status_t status)
     s_debug.tx_msg_fail++;
     s_debug.tx_fail++;
     s_debug.last_status = (u8)status;
+    if ((s_tx.flags & APP_PEER_TRANSPORT_FRAME_FLAG_NOTIFY) && s_tx_cb) {
+        s_tx_cb(&s_tx.dst_eid, s_tx.type, s_tx.message_id, s_tx.len, status, s_tx.flags);
+    }
     memset(&s_tx, 0, sizeof(s_tx));
 }
 
@@ -969,6 +976,7 @@ void app_peer_transport_init(void)
     s_seq = 1;
     s_message_id = 1;
     s_rx_cb = 0;
+    s_tx_cb = 0;
     app_peer_transport_debug_reset();
 }
 
@@ -1121,6 +1129,11 @@ app_status_t app_peer_transport_send_test_pattern(const app_eid_t *dst_eid,
 void app_peer_transport_set_rx_callback(app_peer_transport_rx_cb_t cb)
 {
     s_rx_cb = cb;
+}
+
+void app_peer_transport_set_tx_callback(app_peer_transport_tx_cb_t cb)
+{
+    s_tx_cb = cb;
 }
 
 u8 app_peer_transport_on_adv_frame(const app_adv_frame_t *frame, s8 rssi)

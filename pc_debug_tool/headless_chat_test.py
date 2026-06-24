@@ -143,9 +143,9 @@ class Endpoint:
             raise RuntimeError(f"{self.label}: not connected")
         for packet in packets:
             try:
-                await self.client.write_gatt_char(self.chars["cmd"], packet, response=False)
-            except Exception:
                 await self.client.write_gatt_char(self.chars["cmd"], packet, response=True)
+            except Exception:
+                await self.client.write_gatt_char(self.chars["cmd"], packet, response=False)
             await asyncio.sleep(0.02)
 
     def _on_notify(self, _sender: Any, data: bytearray) -> None:
@@ -181,9 +181,22 @@ class Endpoint:
                 print(f"{self.label}: EVT cmd=0x{message.cmd:02X} len={len(message.payload)}")
                 return
             if event.get("event") == "P2P_CHAT":
+                if event.get("dropped"):
+                    print(
+                        f"{self.label}: CHAT_DROPPED peer=0x{event['short_id']:08X} "
+                        f"len={event['text_len']}"
+                    )
+                    return
                 text = event["text"]
                 self.chats.append(text)
                 print(f"{self.label}: CHAT {text}")
+            elif event.get("event") == "P2P_CHAT_TX_RESULT":
+                result = "OK" if event.get("ok") else "FAIL"
+                print(
+                    f"{self.label}: CHAT_TX_{result} peer=0x{event['short_id']:08X} "
+                    f"status={event['host_status_name']} len={event['text_len']} "
+                    f"id=0x{event['peer_message_id']:08X}"
+                )
             else:
                 print(f"{self.label}: EVT {event}")
 
