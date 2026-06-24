@@ -84,6 +84,43 @@ powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -PortNu
 
 注意：PID 不是固定板子身份，重新插拔、目标 USB 下载口打开、Burning EVK 状态变化后都可能变化。当前不建议同时插两套 Telink Debugger 做命令行烧录。
 
+## 串口继电器切换两块板
+
+当前调试台支持用一个 Telink Debugger 通过串口继电器切换两块 B85 dangle 板。继电器串口参数：
+
+- 端口：`COM18`
+- 波特率：`9600`
+- 数据格式：`8N1`
+- 控制方式：发送原始十六进制字节，不是 ASCII 字符串
+
+当前接线映射：
+
+- `COM16` / `A` / `ON`：继电器第一路打开，发送 `A0 01 01 A2`，返回 `CH1: 1`
+- `COM17` / `B` / `OFF`：继电器第一路关闭，发送 `A0 01 00 A1`，返回 `CH1: 0`
+
+只切换目标板：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\relay_select_b85.ps1 -Target COM16
+powershell -ExecutionPolicy Bypass -File .\tools\relay_select_b85.ps1 -Target COM17
+```
+
+切换后复位：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi_relay.ps1 -Target COM16 -DeviceId 1
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi_relay.ps1 -Target COM17 -DeviceId 1
+```
+
+切换后烧录：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi_relay.ps1 -Target COM16 -DeviceId 1
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi_relay.ps1 -Target COM17 -DeviceId 1
+```
+
+当前已实测：`COM17` 使用继电器 `OFF` 能刷写和复位，`COM16` 使用继电器 `ON` 能刷写和复位。BDT `ac` 激活命令仍可能偶发返回 `0x1002`，但后续 `wf` 烧录和 `rst` 复位可以成功。
+
 ## USB 下载
 
 当前固件已启用 B85 USB 下载功能，但为了避免 USB 运行态影响 BLE/GATT 调试，策略如下：
