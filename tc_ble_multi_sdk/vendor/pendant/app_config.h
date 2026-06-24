@@ -41,7 +41,7 @@
 #define PENDANT_EXT_ADV_ENABLE                        1
 #define APP_BLE_ENABLE_DISCOVERY_SCAN                 1
 #define APP_HOST_ENABLE_ADV_TRANSPORT                 0
-#define PENDANT_BLE_AUTO_START                        0
+#define PENDANT_BLE_AUTO_START                        1
 #define PENDANT_WATCHDOG_ENABLE                       1
 #define PENDANT_WATCHDOG_TIMEOUT_MS                   3000
 #define PENDANT_DEMO_CENTRAL_CONNECT_ENABLE           0
@@ -55,7 +55,7 @@
 #define ID_VENDOR                                      0x248a
 #define ID_PRODUCT_BASE                                0x8800
 #define STRING_VENDOR                                  L"Telink"
-#define STRING_PRODUCT                                 L"PENDANT"
+#define STRING_PRODUCT                                 L"Glimmer"
 #define STRING_SERIAL                                  L"TLSR8258"
 #endif
 

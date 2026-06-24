@@ -8,7 +8,7 @@ from typing import Any, Optional
 from bleak import BleakClient, BleakScanner
 
 import pendant_protocol as proto
-from headless_chat_test import DEBUG_UUIDS, find_debug_chars
+from headless_chat_test import DEBUG_UUIDS, find_debug_chars, is_glimmer_name
 
 
 class IdentityWriter:
@@ -68,7 +68,7 @@ async def scan_pendants(timeout_s: float) -> list[str]:
         name = dev.name or adv.local_name or ""
         service_uuids = [item.lower() for item in (getattr(adv, "service_uuids", []) or [])]
         is_debug = any(uuid in service_uuids for uuid in DEBUG_UUIDS["service"])
-        if "PENDANT" in name.upper() or is_debug:
+        if is_glimmer_name(name) or is_debug:
             addresses.append(dev.address)
     return sorted(set(addresses))
 
@@ -81,7 +81,7 @@ async def run(args: argparse.Namespace) -> int:
         for item in addresses:
             print(f"  {item}")
         if not addresses:
-            print("FAIL: no PENDANT found")
+            print("FAIL: no Glimmer device found")
             return 2
         address = addresses[0]
 
@@ -103,7 +103,7 @@ async def run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Write a non-locking PENDANT unique identity over debug GATT.")
+    parser = argparse.ArgumentParser(description="Write a non-locking Glimmer unique identity over debug GATT.")
     parser.add_argument("--address", default="")
     parser.add_argument("--scan-timeout", type=float, default=6.0)
     parser.add_argument("--product", type=lambda x: int(x, 0), default=0x50444E54)

@@ -5,7 +5,7 @@
 #include "uart.h"
 
 #define DBG_LINE_MAX 40
-#define DBG_PROMPT "pendant> "
+#define DBG_PROMPT "glimmer> "
 #define DBG_BOOT_PROMPT_DELAY_US 1200000
 
 static char s_line[DBG_LINE_MAX];

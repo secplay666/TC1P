@@ -17,7 +17,7 @@ async def run(args: argparse.Namespace) -> int:
         for index, dev in enumerate(devices):
             print(f"  {index}: {dev.address} rssi={dev.rssi} name={dev.name}")
         if len(devices) < 2:
-            print("FAIL: need at least two PENDANT devices")
+            print("FAIL: need at least two Glimmer devices")
             return 2
         addr_a, addr_b = devices[0].address, devices[1].address
 
@@ -58,7 +58,7 @@ async def run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Dual pendant GATT/radio probe without P2P chat.")
+    parser = argparse.ArgumentParser(description="Dual Glimmer GATT/radio probe without P2P chat.")
     parser.add_argument("--addr-a", default="")
     parser.add_argument("--addr-b", default="")
     parser.add_argument("--scan-timeout", type=float, default=8.0)

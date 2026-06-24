@@ -61,6 +61,11 @@ def normalize_uuid(value: str) -> str:
     return value.lower()
 
 
+def _is_glimmer_name(name: str) -> bool:
+    upper = name.upper()
+    return "GLIMMER" in upper or "PENDANT" in upper or "微光" in name
+
+
 def iter_services(services: Any) -> Iterable[Any]:
     try:
         return list(services)
@@ -158,7 +163,7 @@ class BleWorker:
                     }
                 )
 
-        devices.sort(key=lambda d: (0 if "PENDANT" in d["name"].upper() else 1, d["name"], d["address"]))
+        devices.sort(key=lambda d: (0 if _is_glimmer_name(d["name"]) else 1, d["name"], d["address"]))
         self.post("scan_result", devices=devices)
         self.post("status", text=f"扫描完成，发现 {len(devices)} 个设备")
 
@@ -480,7 +485,7 @@ class PendantDebugApp:
 
         bar = ttk.Frame(self.shell_tab)
         bar.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(bar, text="pendant>").pack(side=tk.LEFT)
+        ttk.Label(bar, text="glimmer>").pack(side=tk.LEFT)
         self.shell_var = tk.StringVar()
         entry = ttk.Entry(bar, textvariable=self.shell_var)
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
@@ -540,7 +545,7 @@ class PendantDebugApp:
             return
         self.shell_var.set("")
         self.shell_pending = True
-        self._append_shell(f"pendant> {line}")
+        self._append_shell(f"glimmer> {line}")
         self.worker.send_shell(line)
         self._log(f"TX SHELL_EXEC {line}")
 
@@ -554,7 +559,7 @@ class PendantDebugApp:
         if not text:
             return
         if not self.connected:
-            messagebox.showinfo("提示", "请先连接一个 PENDANT")
+            messagebox.showinfo("提示", "请先连接一个 Glimmer")
             return
         try:
             payload_len = len(text.encode("utf-8"))

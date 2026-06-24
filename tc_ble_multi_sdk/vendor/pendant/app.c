@@ -119,19 +119,19 @@ u8 app_usb_download_is_enabled(void)
 
 
 const u8	tbl_advData[] = {
-	 8,  DT_COMPLETE_LOCAL_NAME, 				'P','E','N','D','A','N','T',
+	 8,  DT_COMPLETE_LOCAL_NAME, 				'G','l','i','m','m','e','r',
 	 2,	 DT_FLAGS, 								0x05, 					// BLE limited discoverable mode and BR/EDR not supported
 	 3,  DT_APPEARANCE, 						0x80, 0x01, 			// 384, Generic Remote Control, Generic category
 	 5,  DT_INCOMPLT_LIST_16BIT_SERVICE_UUID,	0x12, 0x18, 0x0F, 0x18,	// incomplete list of service class UUIDs (0x1812, 0x180F)
 };
 
 const u8	tbl_scanRsp [] = {
-	 8,  DT_COMPLETE_LOCAL_NAME, 				'P','E','N','D','A','N','T',
+	 8,  DT_COMPLETE_LOCAL_NAME, 				'G','l','i','m','m','e','r',
 };
 
 const u8 tbl_extAdvInitData[] = {
 	2, DT_FLAGS, 0x06,
-	8, DT_COMPLETE_LOCAL_NAME, 'P','E','N','D','A','N','T',
+	8, DT_COMPLETE_LOCAL_NAME, 'G','l','i','m','m','e','r',
 };
 
 #define APP_ADV_SETS_NUMBER                    2
@@ -1100,7 +1100,7 @@ _attribute_no_inline_ void user_init_normal(void)
 //////////////////////////// basic hardware Initialization  Begin //////////////////////////////////
 
 	UARTIF_uartinit();
-	u_printf("Pendant boot\r\n");
+	u_printf("Glimmer boot\r\n");
 
 	/* random number generator must be initiated here( in the beginning of user_init_nromal).
 	 * When deepSleep retention wakeUp, no need initialize again */

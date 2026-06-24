@@ -43,7 +43,7 @@ static const u16 s_uuid_gap_service = SERVICE_UUID_GENERIC_ACCESS;
 static const u16 s_uuid_device_name = GATT_UUID_DEVICE_NAME;
 static const u16 s_uuid_appearance = GATT_UUID_APPEARANCE;
 
-static u8 s_device_name[] = "PENDANT";
+static u8 s_device_name[] = "Glimmer";
 static u16 s_appearance = 0;
 static u8 s_device_name_decl[5] = {CHAR_PROP_READ, U16_LO(ATT_HANDLE_GAP_DEVICE_NAME_VALUE), U16_HI(ATT_HANDLE_GAP_DEVICE_NAME_VALUE),
                                    U16_LO(GATT_UUID_DEVICE_NAME), U16_HI(GATT_UUID_DEVICE_NAME)};

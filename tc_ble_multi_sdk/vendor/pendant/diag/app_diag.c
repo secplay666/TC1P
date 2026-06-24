@@ -23,7 +23,7 @@ void app_diag_log_error(u16 error_code, u16 detail)
     s_last_error.error_code = error_code;
     s_last_error.detail = detail;
     s_last_error.tick = clock_time();
-    u_printf("[PENDANT][ERR]\r\n");
+    u_printf("[Glimmer][ERR]\r\n");
     u_printf(" code=0x%x\r\n", error_code);
     u_printf(" detail=0x%x\r\n", detail);
     app_host_cmd_notify_error(error_code, detail);
@@ -31,7 +31,7 @@ void app_diag_log_error(u16 error_code, u16 detail)
 
 void app_diag_log_info(const char *tag, const char *msg)
 {
-    u_printf("[PENDANT]\r\n");
+    u_printf("[Glimmer]\r\n");
     u_printf(tag);
     u_printf("\r\n");
     u_printf(msg);

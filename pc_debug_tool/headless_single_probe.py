@@ -16,7 +16,7 @@ async def run(args: argparse.Namespace) -> int:
         for index, dev in enumerate(devices):
             print(f"  {index}: {dev.address} rssi={dev.rssi} name={dev.name}")
         if not devices:
-            print("FAIL: no PENDANT devices")
+            print("FAIL: no Glimmer devices")
             return 2
         address = devices[0].address
 
@@ -36,7 +36,7 @@ async def run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Single pendant GATT shell probe.")
+    parser = argparse.ArgumentParser(description="Single Glimmer GATT shell probe.")
     parser.add_argument("--address", default="", help="BLE address")
     parser.add_argument("--scan-timeout", type=float, default=6.0)
     parser.add_argument("--command", action="append", default=[], help="Shell command; can be repeated")

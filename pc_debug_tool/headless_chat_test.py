@@ -45,6 +45,11 @@ def normalize_uuid(value: str) -> str:
     return value.lower()
 
 
+def is_glimmer_name(name: str) -> bool:
+    upper = name.upper()
+    return "GLIMMER" in upper or "PENDANT" in upper or "微光" in name
+
+
 def iter_services(services: Any) -> list[Any]:
     try:
         return list(services)
@@ -209,7 +214,7 @@ async def scan_pendants(timeout_s: float) -> list[PendantDevice]:
         name = dev.name or adv.local_name or ""
         service_uuids = [normalize_uuid(x) for x in (getattr(adv, "service_uuids", []) or [])]
         is_debug = any(uuid in service_uuids for uuid in DEBUG_UUIDS["service"])
-        if "PENDANT" in name.upper() or is_debug:
+        if is_glimmer_name(name) or is_debug:
             devices.append(PendantDevice(name=name, address=dev.address, rssi=getattr(adv, "rssi", None)))
     devices.sort(key=lambda d: (-(d.rssi or -999), d.address))
     return devices
@@ -224,7 +229,7 @@ async def run(args: argparse.Namespace) -> int:
         for index, dev in enumerate(devices):
             print(f"  {index}: {dev.address} rssi={dev.rssi} name={dev.name}")
         if len(devices) < 2:
-            print("FAIL: need at least two PENDANT devices")
+            print("FAIL: need at least two Glimmer devices")
             return 2
         addr_a, addr_b = devices[0].address, devices[1].address
 
@@ -272,7 +277,7 @@ async def run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Headless two-PC P2P chat test over pendant debug GATT.")
+    parser = argparse.ArgumentParser(description="Headless two-PC P2P chat test over Glimmer debug GATT.")
     parser.add_argument("--addr-a", default="", help="BLE address for endpoint A")
     parser.add_argument("--addr-b", default="", help="BLE address for endpoint B")
     parser.add_argument("--scan-timeout", type=float, default=6.0)
