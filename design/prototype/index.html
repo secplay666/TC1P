@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>微光 Glimmer App 原型</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="prototype-shell">
+    <section class="phone" aria-label="微光 App 原型">
+      <div class="status-bar">
+        <span>22:54</span>
+        <span class="status-icons">5G  BLE  82%</span>
+      </div>
+
+      <section id="onboarding" class="onboarding">
+        <div class="brand-mark">
+          <span class="spark-core"></span>
+        </div>
+        <p class="eyebrow">Glimmer</p>
+        <h1>把附近的一点光，变成一句话。</h1>
+        <p class="intro">
+          微光通过你的 Glimmer 终端发现附近的人。我们不展示精确位置，也不保存长期离线消息。
+        </p>
+        <div class="permission-list">
+          <div class="permission-row">
+            <span class="mini-icon">BT</span>
+            <div>
+              <strong>蓝牙</strong>
+              <p>连接你的 Glimmer，并发现附近微光。</p>
+            </div>
+          </div>
+          <div class="permission-row">
+            <span class="mini-icon">LOC</span>
+            <div>
+              <strong>位置权限</strong>
+              <p>Android 扫描 BLE 所需，不记录 GPS 轨迹。</p>
+            </div>
+          </div>
+          <div class="permission-row">
+            <span class="mini-icon">MSG</span>
+            <div>
+              <strong>通知</strong>
+              <p>有人回应时提醒你。</p>
+            </div>
+          </div>
+        </div>
+        <button class="primary-btn wide" data-action="enter-app">开始连接</button>
+        <button class="ghost-btn wide" data-action="enter-app-muted">先看看界面</button>
+      </section>
+
+      <section id="app" class="app hidden">
+        <header class="app-header">
+          <div>
+            <p class="eyebrow" id="header-eyebrow">附近</p>
+            <h2 id="header-title">附近的微光</h2>
+          </div>
+          <button class="icon-btn" data-action="open-diagnostics" aria-label="打开设备诊断">DEV</button>
+        </header>
+
+        <div class="device-strip" id="device-strip">
+          <div>
+            <strong>我的 Glimmer 已连接</strong>
+            <p>信号良好，正在保持附近可见</p>
+          </div>
+          <span class="battery-pill">82%</span>
+        </div>
+
+        <section class="view active" id="view-nearby" data-title="附近的微光" data-eyebrow="附近">
+          <div class="scan-panel">
+            <div class="field-map" aria-label="附近微光场">
+              <span class="field-dot dot-a"></span>
+              <span class="field-dot dot-b"></span>
+              <span class="field-dot dot-c"></span>
+              <span class="field-dot dot-me"></span>
+              <span class="range-ring ring-one"></span>
+              <span class="range-ring ring-two"></span>
+            </div>
+            <div class="scan-copy">
+              <h3 id="scan-title">3 束微光在附近</h3>
+              <p id="scan-copy">不显示精确距离，只显示可交流的强弱。</p>
+              <button class="secondary-btn" data-action="scan">重新寻找</button>
+            </div>
+          </div>
+
+          <div class="section-heading">
+            <h3>刚刚擦肩</h3>
+            <button class="text-btn" data-action="toggle-stealth">隐身</button>
+          </div>
+
+          <div class="people-list" id="people-list"></div>
+        </section>
+
+        <section class="view" id="view-messages" data-title="微光消息" data-eyebrow="消息">
+          <div class="filter-row">
+            <button class="chip active">全部</button>
+            <button class="chip">附近</button>
+            <button class="chip">未送达</button>
+          </div>
+          <div class="thread-list" id="thread-list"></div>
+        </section>
+
+        <section class="view" id="view-chat" data-title="与岚对话" data-eyebrow="聊天">
+          <div class="chat-status">
+            <strong id="chat-peer-name">岚</strong>
+            <span id="chat-peer-state">附近，信号 S3</span>
+          </div>
+          <div class="chat-log" id="chat-log" aria-live="polite"></div>
+          <form class="composer" id="composer">
+            <input id="message-input" type="text" maxlength="192" placeholder="写一句轻一点的话">
+            <button class="primary-btn" type="submit">发送</button>
+          </form>
+          <button class="text-btn danger" data-action="simulate-fail">模拟对方离开范围</button>
+        </section>
+
+        <section class="view" id="view-profile" data-title="我的微光" data-eyebrow="我的">
+          <div class="profile-card">
+            <div class="avatar-large">微</div>
+            <div>
+              <h3>未命名的微光</h3>
+              <p>今晚想听一个不会太吵的故事。</p>
+            </div>
+          </div>
+          <div class="setting-list">
+            <button class="setting-row" data-action="edit-profile">
+              <span>个人资料</span>
+              <em>昵称、头像、一句话</em>
+            </button>
+            <button class="setting-row" data-action="toggle-visible">
+              <span>可见性</span>
+              <em id="visible-copy">正常可见</em>
+            </button>
+            <button class="setting-row" data-action="open-diagnostics">
+              <span>我的 Glimmer</span>
+              <em>已连接，固件 1.0.0</em>
+            </button>
+          </div>
+        </section>
+
+        <section class="view" id="view-safety" data-title="安全与边界" data-eyebrow="安全">
+          <div class="safety-card">
+            <h3>你可以随时暗下来</h3>
+            <p>隐身后附近的人看不到你，但你仍可以连接自己的 Glimmer。</p>
+          </div>
+          <div class="toggle-list">
+            <label class="toggle-row">
+              <span>
+                <strong>隐身模式</strong>
+                <em>暂时不被附近发现</em>
+              </span>
+              <input type="checkbox" id="stealth-toggle">
+            </label>
+            <label class="toggle-row">
+              <span>
+                <strong>接收陌生问候</strong>
+                <em>关闭后只保留已开始的会话</em>
+              </span>
+              <input type="checkbox" checked>
+            </label>
+            <label class="toggle-row">
+              <span>
+                <strong>只接收强信号</strong>
+                <em>减少远距离误触发</em>
+              </span>
+              <input type="checkbox">
+            </label>
+          </div>
+          <button class="secondary-btn wide" data-action="show-blocked">屏蔽列表</button>
+        </section>
+
+        <section class="view" id="view-diagnostics" data-title="设备诊断" data-eyebrow="开发">
+          <div class="diagnostic-grid">
+            <div><span>GATT</span><strong>connected</strong></div>
+            <div><span>short id</span><strong>0x140A0B04</strong></div>
+            <div><span>peer count</span><strong>1</strong></div>
+            <div><span>P2P max</span><strong>163 bytes</strong></div>
+          </div>
+          <div class="terminal">
+            <p>glimmer&gt; peers</p>
+            <p>count=1, peer=0x120B0100, rssi=-13</p>
+            <p>glimmer&gt; p2pstat</p>
+            <p>tx_ok=7, rx_ok=6, retry=1, fail=0</p>
+          </div>
+          <button class="secondary-btn wide" data-tab="profile">返回我的</button>
+        </section>
+
+        <nav class="bottom-nav" aria-label="主导航">
+          <button class="nav-item active" data-tab="nearby"><span>近</span><strong>附近</strong></button>
+          <button class="nav-item" data-tab="messages"><span>信</span><strong>消息</strong></button>
+          <button class="nav-item" data-tab="profile"><span>我</span><strong>我的</strong></button>
+          <button class="nav-item" data-tab="safety"><span>安</span><strong>安全</strong></button>
+        </nav>
+      </section>
+
+      <aside class="sheet hidden" id="person-sheet" aria-label="资料预览">
+        <button class="sheet-close" data-action="close-sheet">关闭</button>
+        <div class="sheet-handle"></div>
+        <div class="profile-preview">
+          <div class="avatar-large" id="sheet-avatar">岚</div>
+          <div>
+            <p class="eyebrow" id="sheet-signal">信号 S3</p>
+            <h3 id="sheet-name">岚</h3>
+            <p id="sheet-line">喜欢在深夜散步，也喜欢安静的人。</p>
+          </div>
+        </div>
+        <div class="tag-row" id="sheet-tags"></div>
+        <div class="sheet-actions">
+          <button class="primary-btn" data-action="say-hi">发出问候</button>
+          <button class="secondary-btn" data-action="open-chat">聊天</button>
+          <button class="ghost-btn danger" data-action="hide-person">暂不显示</button>
+        </div>
+      </aside>
+
+      <div class="toast hidden" id="toast" role="status"></div>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>
+
