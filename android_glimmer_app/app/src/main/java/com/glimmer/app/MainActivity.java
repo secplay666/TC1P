@@ -23,8 +23,10 @@ import android.widget.TextView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class MainActivity extends Activity implements GlimmerBleClient.Listener {
@@ -41,6 +43,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private final List<GlimmerBleClient.ScanDevice> scanDevices = new ArrayList<>();
     private final List<HostProtocol.PeerInfo> peers = new ArrayList<>();
     private final List<HostProtocol.PeerProfileInfo> peerProfiles = new ArrayList<>();
+    private final List<HostProtocol.PeerProfileInfo> pendingPeerProfiles = new ArrayList<>();
+    private final Map<Integer, Integer> peerProfilePageStarts = new HashMap<>();
     private final List<String> eventLines = new ArrayList<>();
     private final Set<String> chattedPeerIds = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -49,7 +53,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         public void run() {
             if (debugReady) {
                 bleClient.requestPeerTable();
-                handler.postDelayed(bleClient::requestPeerProfiles, 300);
+                handler.postDelayed(() -> requestPeerProfilesPage(0), 300);
                 handler.postDelayed(this, AUTO_SYNC_INTERVAL_MS);
             }
         }
@@ -289,13 +293,15 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
         } else if (peers.isEmpty() && peerProfiles.isEmpty()) {
             content.addView(emptyStateCard("等待进入范围", "Glimmer 会自动把擦肩的人推到这里。"), cardParams());
-        } else if (!peerProfiles.isEmpty()) {
+        } else {
+            Set<String> profileIds = currentPeerProfileIds();
             for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
                 content.addView(peerProfileCard(profile), cardParams());
             }
-        } else {
             for (HostProtocol.PeerInfo peer : peers) {
-                content.addView(peerCard(peer), cardParams());
+                if (!profileIds.contains(HostProtocol.shortIdText(peer.shortId))) {
+                    content.addView(peerCard(peer), cardParams());
+                }
             }
         }
     }
@@ -309,7 +315,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         row.setGravity(Gravity.CENTER_VERTICAL);
 
         GlimmerFieldView fieldView = new GlimmerFieldView(this);
-        fieldView.setPeerCount(peers.size());
+        fieldView.setPeerCount(nearbyVisibleCount());
         fieldView.setConnected(debugReady);
         row.addView(fieldView, new LinearLayout.LayoutParams(dp(112), dp(112)));
 
@@ -632,7 +638,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (selectedTab == 0) {
             setLocalStatus("正在同步附近的微光");
             bleClient.requestPeerTable();
-            handler.postDelayed(bleClient::requestPeerProfiles, 300);
+            handler.postDelayed(() -> requestPeerProfilesPage(0), 300);
             endRefreshingSoon();
             return;
         }
@@ -644,6 +650,15 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private void startScanFlow() {
         startScanFlow(true);
+    }
+
+    private void requestPeerProfilesPage(int startIndex) {
+        if (startIndex == 0) {
+            pendingPeerProfiles.clear();
+            peerProfilePageStarts.clear();
+        }
+        int seq = bleClient.requestPeerProfilesPage(startIndex);
+        peerProfilePageStarts.put(seq, startIndex);
     }
 
     private void startScanFlow(boolean showRefreshing) {
@@ -755,6 +770,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         } else {
             handler.removeCallbacks(autoReconnectRunnable);
             handler.removeCallbacks(autoSyncRunnable);
+            handler.postDelayed(() -> requestPeerProfilesPage(0), 900);
             handler.postDelayed(autoSyncRunnable, AUTO_SYNC_INTERVAL_MS);
         }
         rerenderCurrentTab();
@@ -770,7 +786,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_TABLE && message.status == 0) {
                 int previousCount = peers.size();
                 peers.clear();
-                peers.addAll(HostProtocol.parsePeerTable(message.payload));
+                for (HostProtocol.PeerInfo peer : HostProtocol.parsePeerTable(message.payload)) {
+                    if (peer.level > 0) {
+                        peers.add(peer);
+                    }
+                }
                 if (peers.isEmpty()) {
                     pushEvent("附近列表已刷新，暂时没有微光");
                 } else if (peers.size() != previousCount) {
@@ -781,13 +801,28 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 setLocalStatus("附近预览卡片已同步");
                 pushEvent("附近预览卡片已同步");
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_PROFILES && message.status == 0) {
+                Integer responseStart = peerProfilePageStarts.remove(message.seq);
                 Set<String> previousIds = currentPeerProfileIds();
-                peerProfiles.clear();
-                peerProfiles.addAll(HostProtocol.parsePeerProfiles(message.payload));
-                if (hasNewPeerProfile(previousIds)) {
-                    pushEvent("有新的微光进入范围");
-                } else if (!peerProfiles.isEmpty()) {
-                    pushEvent("读到 " + peerProfiles.size() + " 张附近资料卡");
+                HostProtocol.PeerProfilePage page = HostProtocol.parsePeerProfilePage(message.payload);
+                if (responseStart == null || responseStart == 0) {
+                    pendingPeerProfiles.clear();
+                }
+                for (HostProtocol.PeerProfileInfo profile : page.profiles) {
+                    if (profile.level > 0) {
+                        upsertPeerProfile(pendingPeerProfiles, profile);
+                    }
+                }
+                if (page.hasMore()) {
+                    requestPeerProfilesPage(page.nextIndex);
+                } else {
+                    peerProfiles.clear();
+                    peerProfiles.addAll(pendingPeerProfiles);
+                    pendingPeerProfiles.clear();
+                    if (hasNewPeerProfile(previousIds)) {
+                        pushEvent("有新的微光进入范围");
+                    } else if (!peerProfiles.isEmpty()) {
+                        pushEvent("读到 " + peerProfiles.size() + " 张附近资料卡");
+                    }
                 }
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT) {
                 HostProtocol.ChatEvent event = HostProtocol.parseChatEvent(message.payload);
@@ -837,6 +872,29 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return ids;
     }
 
+    private void upsertPeerProfile(List<HostProtocol.PeerProfileInfo> target,
+                                   HostProtocol.PeerProfileInfo profile) {
+        String id = HostProtocol.shortIdText(profile.shortId);
+        for (int i = 0; i < target.size(); i++) {
+            if (HostProtocol.shortIdText(target.get(i).shortId).equals(id)) {
+                target.set(i, profile);
+                return;
+            }
+        }
+        target.add(profile);
+    }
+
+    private int nearbyVisibleCount() {
+        Set<String> ids = new HashSet<>();
+        for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+            ids.add(HostProtocol.shortIdText(profile.shortId));
+        }
+        for (HostProtocol.PeerInfo peer : peers) {
+            ids.add(HostProtocol.shortIdText(peer.shortId));
+        }
+        return ids.size();
+    }
+
     private boolean hasNewPeerProfile(Set<String> previousIds) {
         for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
             if (!previousIds.contains(HostProtocol.shortIdText(profile.shortId))) {
@@ -878,7 +936,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (peers.isEmpty() && peerProfiles.isEmpty()) {
             return "等待进入范围";
         }
-        int count = Math.max(peers.size(), peerProfiles.size());
+        int count = nearbyVisibleCount();
         return count + " 位进入范围";
     }
 
@@ -906,7 +964,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (!debugReady) {
             return hasBoundDevice() ? "未连接" : "未绑定";
         }
-        int count = Math.max(peers.size(), peerProfiles.size());
+        int count = nearbyVisibleCount();
         return count == 0 ? "暂无" : count + " 位";
     }
 
@@ -973,7 +1031,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (peers.isEmpty() && peerProfiles.isEmpty()) {
             return "附近暂时没有微光";
         }
-        int count = Math.max(peers.size(), peerProfiles.size());
+        int count = nearbyVisibleCount();
         return "附近有 " + count + " 位微光";
     }
 

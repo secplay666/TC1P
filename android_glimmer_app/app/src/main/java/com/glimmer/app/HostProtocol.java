@@ -74,6 +74,11 @@ final class HostProtocol {
         return encodeMessage(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, payload);
     }
 
+    static List<byte[]> makePeerProfilesCommand(int seq, int startIndex) {
+        return encodeMessage(TYPE_CMD, seq, CMD_GET_PEER_PROFILES, 0,
+                new byte[]{(byte) Math.max(0, Math.min(255, startIndex))});
+    }
+
     static List<byte[]> makeSetProfileSummary(int seq, String nickname, String signature, int avatarSeed, int[] tags) {
         byte[] nicknameBytes = utf8Limit(nickname == null ? "" : nickname.trim(), PROFILE_NICKNAME_MAX_BYTES);
         byte[] signatureBytes = utf8Limit(signature == null ? "" : signature.trim(), PROFILE_SIGNATURE_MAX_BYTES);
@@ -278,9 +283,13 @@ final class HostProtocol {
     }
 
     static List<PeerProfileInfo> parsePeerProfiles(byte[] payload) {
+        return parsePeerProfilePage(payload).profiles;
+    }
+
+    static PeerProfilePage parsePeerProfilePage(byte[] payload) {
         List<PeerProfileInfo> profiles = new ArrayList<>();
         if (payload.length == 0) {
-            return profiles;
+            return new PeerProfilePage(profiles, -1);
         }
 
         int count = u8(payload[0]);
@@ -310,10 +319,16 @@ final class HostProtocol {
             String nickname = new String(payload, offset, nicknameLen, StandardCharsets.UTF_8);
             offset += nicknameLen;
             String signature = new String(payload, offset, signatureLen, StandardCharsets.UTF_8);
+            offset += signatureLen;
             profiles.add(new PeerProfileInfo(shortId, level, rssi, rssiAvg, peerFlags,
                     profileFlags, seq, avatarSeed, tagCount, tags, nickname, signature));
         }
-        return profiles;
+        int nextIndex = -1;
+        if (offset < payload.length) {
+            int rawNext = u8(payload[offset]);
+            nextIndex = rawNext == 0xFF ? -1 : rawNext;
+        }
+        return new PeerProfilePage(profiles, nextIndex);
     }
 
     static String formatResponse(HostMessage message) {
@@ -835,6 +850,20 @@ final class HostProtocol {
                 return "信号良好";
             }
             return "信号较弱";
+        }
+    }
+
+    static final class PeerProfilePage {
+        final List<PeerProfileInfo> profiles;
+        final int nextIndex;
+
+        PeerProfilePage(List<PeerProfileInfo> profiles, int nextIndex) {
+            this.profiles = profiles;
+            this.nextIndex = nextIndex;
+        }
+
+        boolean hasMore() {
+            return nextIndex >= 0;
         }
     }
 

@@ -24,6 +24,7 @@ static app_adv_scheduler_debug_t s_debug;
 #define APP_ADV_SCHED_QUEUE_SIZE 1
 #define APP_ADV_DATA_HOLD_US     3000000
 #define APP_ADV_DATA_UPDATE_US   50000
+#define APP_ADV_BEACON_REFRESH_US 500000
 
 typedef struct {
     app_adv_frame_t frame;
@@ -215,7 +216,8 @@ void app_adv_scheduler_poll(void)
 
     if (s_q_count) {
         need_update = !s_last_update_tick || clock_time_exceed(s_last_update_tick, APP_ADV_DATA_UPDATE_US) || s_adv_dirty;
-    } else if (s_adv_dirty || !s_last_update_tick || s_data_hold_active) {
+    } else if (s_adv_dirty || !s_last_update_tick || s_data_hold_active ||
+               clock_time_exceed(s_last_update_tick, APP_ADV_BEACON_REFRESH_US)) {
         need_update = 1;
     }
 

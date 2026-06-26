@@ -337,12 +337,19 @@ static void handle_get_profile_summary(u8 seq)
     send_rsp(seq, HOST_CMD_GET_PROFILE_SUMMARY, HOST_STATUS_OK, s_rsp_buf, len);
 }
 
-static void handle_get_peer_profiles(u8 seq)
+static void handle_get_peer_profiles(u8 seq, const u8 *payload, u16 len)
 {
     u8 count;
     u8 i;
     u8 included = 0;
+    u8 start_index = 0;
+    u8 active_index = 0;
+    u8 next_index = 0xff;
     u16 offset = 1;
+
+    if (payload && len) {
+        start_index = payload[0];
+    }
 
     count = app_profile_copy_peers(s_scratch.profile_snapshot, APP_PROFILE_PEER_CACHE_COUNT);
     for (i = 0; i < count; i++) {
@@ -359,11 +366,19 @@ static void handle_get_peer_profiles(u8 seq)
         if (!cached->in_use || !(profile->flags & APP_PROFILE_PEER_FLAG_VALID)) {
             continue;
         }
+        if (!peer || peer->level == PEER_LEVEL_NONE) {
+            continue;
+        }
+        if (active_index < start_index) {
+            active_index++;
+            continue;
+        }
         need = (u16)(18 + APP_PROFILE_TAG_MAX_COUNT + profile->nickname_len + profile->signature_len);
         if (profile->nickname_len > APP_PROFILE_NICKNAME_MAX_LEN ||
             profile->signature_len > APP_PROFILE_SIGNATURE_MAX_LEN ||
             profile->tag_count > APP_PROFILE_TAG_MAX_COUNT ||
-            offset + need > HOST_PROFILE_LIST_RSP_MAX_LEN) {
+            offset + need + 1 > HOST_PROFILE_LIST_RSP_MAX_LEN) {
+            next_index = active_index;
             break;
         }
 
@@ -399,9 +414,11 @@ static void handle_get_peer_profiles(u8 seq)
             offset = (u16)(offset + profile->signature_len);
         }
         included++;
+        active_index++;
     }
 
     s_rsp_buf[0] = included;
+    s_rsp_buf[offset++] = next_index;
     send_rsp(seq, HOST_CMD_GET_PEER_PROFILES, HOST_STATUS_OK, s_rsp_buf, offset);
 }
 
@@ -973,7 +990,7 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
         handle_get_profile_summary(seq);
         break;
     case HOST_CMD_GET_PEER_PROFILES:
-        handle_get_peer_profiles(seq);
+        handle_get_peer_profiles(seq, payload, len);
         break;
     case HOST_CMD_SET_RSSI_CONFIG:
         handle_set_rssi_config(seq, payload, len);

@@ -5,6 +5,7 @@
 #include "../common/app_debug_print.h"
 #include "stack/ble/ble.h"
 #include "common/string.h"
+#include "timer.h"
 
 #ifndef BLC_SCAN_DISABLE
 #define BLC_SCAN_DISABLE 0
@@ -26,12 +27,15 @@
 #define APP_BLE_SCAN_FILTER_DUP     DUPE_FLTR_DISABLE
 #define APP_BLE_SCAN_DURATION       SCAN_DURATION_CONTINUOUS
 #define APP_BLE_SCAN_PERIOD         SCAN_WINDOW_CONTINUOUS
+#define APP_BLE_SCAN_RESTART_US     1000000
+#define APP_BLE_SCAN_RESTART_CONNECTED_US 10000000
 
 static app_ble_conn_info_t s_conn;
 static u8 s_adv_scan_started;
 static u8 s_adv_update_error_log_count;
 static u8 s_scan_filter_policy;
 static u8 s_adv1_sid;
+static u32 s_scan_restart_tick;
 static app_ble_debug_t s_debug;
 
 static void app_ble_refresh_started(void)
@@ -43,8 +47,15 @@ static void app_ble_refresh_started(void)
 static ble_sts_t app_ble_configure_ext_scan(void)
 {
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
+    /*
+     * Keep connected scanning low duty-cycle.  The phone connection interval can
+     * be around 50 ms, so a 50/100 ms scan window can starve connection events
+     * and cause HCI_ERR_CONNECTION_TOUT on Android.
+     */
+    u16 scan_interval = s_conn.connected ? SCAN_INTERVAL_500MS : SCAN_INTERVAL_100MS;
+    u16 scan_window = s_conn.connected ? SCAN_WINDOW_20MS : SCAN_WINDOW_100MS;
     return blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, s_scan_filter_policy, SCAN_PHY_1M,
-                                  SCAN_TYPE_PASSIVE, SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS,
+                                  SCAN_TYPE_PASSIVE, scan_interval, scan_window,
                                   0, 0, 0);
 #else
     return BLE_SUCCESS;
@@ -75,6 +86,7 @@ void app_ble_init(void)
     s_debug.scan_filter_policy = s_scan_filter_policy;
     s_adv_scan_started = 0;
     s_adv_update_error_log_count = 0;
+    s_scan_restart_tick = 0;
 }
 
 app_status_t app_ble_start_adv_scan(const app_ble_params_t *params)
@@ -170,6 +182,7 @@ app_status_t app_ble_set_scan_enabled(u8 enable)
 #endif
     s_debug.scan_status = st;
     s_debug.scan_enabled = enable && st == BLE_SUCCESS;
+    s_scan_restart_tick = s_debug.scan_enabled ? clock_time() : 0;
     s_debug.scan_filter_policy = s_scan_filter_policy;
     app_ble_refresh_started();
     return st == BLE_SUCCESS ? APP_OK : APP_ERR_STATE;
@@ -297,6 +310,28 @@ void app_ble_get_debug(app_ble_debug_t *debug)
 
 void app_ble_poll(void)
 {
+#if APP_BLE_ENABLE_DISCOVERY_SCAN
+    u32 restart_us = s_conn.connected ? APP_BLE_SCAN_RESTART_CONNECTED_US : APP_BLE_SCAN_RESTART_US;
+    if (s_debug.scan_enabled && s_scan_restart_tick &&
+        clock_time_exceed(s_scan_restart_tick, restart_us)) {
+        blc_ll_setExtScanEnable(BLC_SCAN_DISABLE,
+                                DUP_FILTER_DISABLE,
+                                SCAN_DURATION_CONTINUOUS,
+                                SCAN_WINDOW_CONTINUOUS);
+        if (app_ble_configure_ext_scan() == BLE_SUCCESS) {
+            ble_sts_t st = blc_ll_setExtScanEnable(BLC_SCAN_ENABLE,
+                                                   APP_BLE_SCAN_FILTER_DUP,
+                                                   APP_BLE_SCAN_DURATION,
+                                                   APP_BLE_SCAN_PERIOD);
+            s_debug.scan_status = st;
+            s_debug.scan_enabled = st == BLE_SUCCESS;
+        } else {
+            s_debug.scan_enabled = 0;
+        }
+        s_scan_restart_tick = clock_time();
+        app_ble_refresh_started();
+    }
+#endif
 }
 
 void app_ble_on_connected(const u8 *peer_addr, u16 conn_handle)
@@ -308,6 +343,9 @@ void app_ble_on_connected(const u8 *peer_addr, u16 conn_handle)
     s_conn.conn_handle = conn_handle;
     if (peer_addr) {
         memcpy(s_conn.peer_addr, peer_addr, sizeof(s_conn.peer_addr));
+    }
+    if (s_debug.scan_enabled) {
+        app_ble_set_scan_enabled(1);
     }
     app_event_post(APP_EVT_APP_CONNECTED, 0, 0);
 }

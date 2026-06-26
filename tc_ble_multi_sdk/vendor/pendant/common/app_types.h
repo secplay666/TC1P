@@ -5,7 +5,7 @@
 
 #define APP_EID_LEN                         16
 #define APP_UNIQUE_ID_LEN                   16
-#define APP_PEER_MAX_COUNT                  6
+#define APP_PEER_MAX_COUNT                  4
 #define APP_EVENT_DATA_MAX_LEN              32
 #define APP_ADV_COMPANY_ID_DEV              0xffff
 #define APP_ADV_MAGIC_LO                    0x44

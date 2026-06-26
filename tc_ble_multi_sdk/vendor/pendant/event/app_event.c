@@ -1,7 +1,7 @@
 #include "app_event.h"
 #include "common/string.h"
 
-#define APP_EVENT_QUEUE_SIZE 8
+#define APP_EVENT_QUEUE_SIZE 4
 
 static app_event_t s_queue[APP_EVENT_QUEUE_SIZE];
 static u8 s_head;

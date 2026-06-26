@@ -4,6 +4,7 @@
 #include "../config/app_config_store.h"
 #include "common/string.h"
 #include "drivers.h"
+#include "flash/flash_common.h"
 #include "timer.h"
 
 #define APP_IDENTITY_MAGIC 0x49445050UL
@@ -80,6 +81,38 @@ static void app_identity_set_loaded(const app_unique_id_t *id, u8 flags, u16 crc
     app_identity_update_eid(0);
 }
 
+static void app_identity_build_dev_fallback_id(app_unique_id_t *id)
+{
+    u32 flash_mid = 0;
+    u8 flash_uid[16];
+    u32 product_sn = 0x524d4c47UL; /* GLMR */
+    u32 terminal_sn;
+    u32 random_value;
+
+    if (!id) {
+        return;
+    }
+
+    memset(flash_uid, 0, sizeof(flash_uid));
+    if (flash_read_mid_uid_with_check(&flash_mid, flash_uid)) {
+        terminal_sn = rd32_le(&flash_uid[0]) ^ rd32_le(&flash_uid[8]);
+        random_value = rd32_le(&flash_uid[4]) ^ rd32_le(&flash_uid[12]) ^ flash_mid;
+    } else {
+        flash_mid = flash_read_mid();
+        terminal_sn = flash_mid ^ 0x44455631UL; /* DEV1 */
+        random_value = clock_time() ^ 0x46424b31UL; /* FBK1 */
+    }
+
+    if (!terminal_sn || terminal_sn == 0xffffffffUL) {
+        terminal_sn = flash_mid ^ 0x5445524dUL; /* TERM */
+    }
+    if (!random_value || random_value == 0xffffffffUL) {
+        random_value = flash_mid ^ 0x52414e44UL; /* RAND */
+    }
+
+    app_identity_build_unique_id(product_sn, terminal_sn, random_value, id);
+}
+
 void app_identity_init(void)
 {
     memset(&s_identity, 0, sizeof(s_identity));
@@ -103,22 +136,9 @@ app_status_t app_identity_load(void)
 
     if (st == APP_ERR_NOT_FOUND || st == APP_ERR_UNSUPPORTED) {
 #if APP_IDENTITY_ALLOW_DEV_FALLBACK
-        u32 tick = clock_time();
         app_unique_id_t dev_id;
-        memset(&dev_id, 0, sizeof(dev_id));
-        dev_id.bytes[0] = 'P';
-        dev_id.bytes[1] = 'D';
-        dev_id.bytes[2] = 'E';
-        dev_id.bytes[3] = 'V';
-        dev_id.bytes[4] = (u8)tick;
-        dev_id.bytes[5] = (u8)(tick >> 8);
-        dev_id.bytes[6] = (u8)(tick >> 16);
-        dev_id.bytes[7] = (u8)(tick >> 24);
-        app_identity_set_loaded(
-            &dev_id,
-            APP_IDENTITY_FLAG_DEV_FALLBACK | APP_IDENTITY_FLAG_VALID,
-            app_crc16(&dev_id, sizeof(dev_id)));
-        return APP_OK;
+        app_identity_build_dev_fallback_id(&dev_id);
+        return app_identity_write_unique_id(&dev_id, 0);
 #else
         return st;
 #endif

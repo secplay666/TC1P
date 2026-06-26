@@ -62,6 +62,8 @@ final class GlimmerBleClient {
             "01000056-4544-3159-4b45-000550544e44",
     };
     private static final UUID CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    private static final boolean CMD_WRITE_WITHOUT_RESPONSE = true;
+    private static final long CMD_WRITE_PACE_MS = 35;
 
     private final Context context;
     private final Listener listener;
@@ -250,7 +252,13 @@ final class GlimmerBleClient {
     }
 
     void requestPeerProfiles() {
-        sendPackets(HostProtocol.makeEmptyCommand(nextSeq(), HostProtocol.CMD_GET_PEER_PROFILES));
+        requestPeerProfilesPage(0);
+    }
+
+    int requestPeerProfilesPage(int startIndex) {
+        int seq = nextSeq();
+        sendPackets(HostProtocol.makePeerProfilesCommand(seq, startIndex));
+        return seq;
     }
 
     void setProfileSummary(String nickname, String signature) {
@@ -262,7 +270,6 @@ final class GlimmerBleClient {
         requestDeviceInfo();
         handler.postDelayed(this::requestPeerTable, 250);
         handler.postDelayed(this::requestProfileSummary, 500);
-        handler.postDelayed(this::requestPeerProfiles, 750);
     }
 
     private void refreshAdapter() {
@@ -414,6 +421,11 @@ final class GlimmerBleClient {
         @Override
         public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
             handler.post(() -> {
+                Log.d(TAG, "onCharacteristicWrite status=" + status
+                        + " uuid=" + characteristic.getUuid());
+                if (CMD_WRITE_WITHOUT_RESPONSE) {
+                    return;
+                }
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     Log.w(TAG, "onCharacteristicWrite failed status=" + status
                             + " uuid=" + characteristic.getUuid());
@@ -465,6 +477,7 @@ final class GlimmerBleClient {
         }
         BluetoothGattCharacteristic characteristic = notifyQueue.poll();
         if (characteristic == null) {
+            Log.i(TAG, "debug channel ready; requesting full sync");
             debugReady = true;
             listener.onBleStatus("我的 Glimmer 已连接");
             listener.onDebugReady(true);
@@ -472,9 +485,12 @@ final class GlimmerBleClient {
             return;
         }
 
+        Log.d(TAG, "subscribe characteristic uuid=" + characteristic.getUuid()
+                + " remaining=" + notifyQueue.size());
         gatt.setCharacteristicNotification(characteristic, true);
         BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD_UUID);
         if (descriptor == null) {
+            Log.w(TAG, "missing CCCD for uuid=" + characteristic.getUuid());
             subscribeNext();
             return;
         }
@@ -488,15 +504,21 @@ final class GlimmerBleClient {
             ok = gatt.writeDescriptor(descriptor);
         }
         if (!ok) {
+            Log.w(TAG, "writeDescriptor returned false uuid=" + characteristic.getUuid());
             subscribeNext();
         }
     }
 
     private void sendPackets(List<byte[]> packets) {
         if (!debugReady || gatt == null || cmdChar == null) {
+            Log.w(TAG, "drop host command: not ready debugReady=" + debugReady
+                    + " gatt=" + (gatt != null) + " cmdChar=" + (cmdChar != null)
+                    + " packets=" + packets.size());
             listener.onBleStatus("Glimmer 还没有连接好");
             return;
         }
+        Log.d(TAG, "queue host packets count=" + packets.size()
+                + " pendingBefore=" + txQueue.size());
         txQueue.addAll(packets);
         if (!writeInProgress) {
             writeNextPacket();
@@ -512,27 +534,37 @@ final class GlimmerBleClient {
         }
         byte[] packet = txQueue.poll();
         if (packet == null) {
+            Log.d(TAG, "tx queue drained");
             writeInProgress = false;
             return;
         }
         writeInProgress = true;
+        Log.d(TAG, "write host packet len=" + packet.length
+                + " remaining=" + txQueue.size());
 
         boolean ok;
+        int writeType = CMD_WRITE_WITHOUT_RESPONSE
+                ? BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                : BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ok = gatt.writeCharacteristic(cmdChar, packet, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            ok = gatt.writeCharacteristic(cmdChar, packet, writeType)
                     == BluetoothStatusCodes.SUCCESS;
         } else {
-            cmdChar.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            cmdChar.setWriteType(writeType);
             cmdChar.setValue(packet);
             ok = gatt.writeCharacteristic(cmdChar);
         }
 
         if (!ok) {
+            Log.w(TAG, "writeCharacteristic returned false len=" + packet.length);
             handler.postDelayed(this::writeNextPacket, 50);
+        } else if (CMD_WRITE_WITHOUT_RESPONSE) {
+            handler.postDelayed(this::writeNextPacket, CMD_WRITE_PACE_MS);
         }
     }
 
     private void onNotify(byte[] data) {
+        Log.d(TAG, "notify len=" + (data == null ? 0 : data.length));
         try {
             HostProtocol.HostFrame frame = HostProtocol.decodePacket(data);
             HostProtocol.HostMessage message = assembler.push(frame);

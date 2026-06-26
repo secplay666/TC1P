@@ -6,6 +6,7 @@
 #include "../peer_transport/app_peer_transport.h"
 #include "../crypto/app_crypto.h"
 #include "../host_cmd/app_host_cmd.h"
+#include "../profile/app_profile.h"
 #include "../scan/app_scan.h"
 #include "../discovery/app_discovery.h"
 #include "../ble/app_ble.h"
@@ -18,7 +19,7 @@
 #include "drivers.h"
 #include "uart.h"
 
-#define APP_DEBUG_SHELL_CMD_MAX_COUNT 22
+#define APP_DEBUG_SHELL_CMD_MAX_COUNT 24
 #define APP_DEBUG_SHELL_ARG_MAX 5
 #define APP_DEBUG_SHELL_ENABLE_ADV_TEST_CMDS 0
 #define APP_DEBUG_SHELL_SENDMAX_PAYLOAD_MAX 64
@@ -63,6 +64,17 @@ void app_debug_shell_cmd_puts(const char *text)
         s_writer = uart_writer;
     }
     s_writer(s_writer_ctx, text, str_len16(text));
+}
+
+static void shell_write_bytes(const u8 *data, u16 len)
+{
+    if (!data || !len) {
+        return;
+    }
+    if (!s_writer) {
+        s_writer = uart_writer;
+    }
+    s_writer(s_writer_ctx, (const char *)data, len);
 }
 
 static void print_hex_u32(u32 value)
@@ -371,6 +383,75 @@ static void cmd_build(u8 argc, char **argv)
     (void)argc;
     (void)argv;
     app_debug_shell_cmd_print_boot_info();
+}
+
+static void cmd_profile(u8 argc, char **argv)
+{
+    app_profile_summary_t summary;
+    const app_profile_summary_t *current;
+    u16 nick_len;
+    u16 sig_len;
+    app_status_t st;
+
+    if (argc == 1) {
+        current = app_profile_get();
+        app_debug_shell_cmd_puts("[DBG] profile\r\n");
+        app_debug_shell_cmd_print_u8(" flags=", current->flags);
+        app_debug_shell_cmd_print_u32(" seq=", current->seq);
+        app_debug_shell_cmd_print_u32(" avatar=", current->avatar_seed);
+        app_debug_shell_cmd_print_u8(" tags=", current->tag_count);
+        app_debug_shell_cmd_puts(" nick=");
+        shell_write_bytes(current->nickname, current->nickname_len);
+        app_debug_shell_cmd_puts("\r\n sig=");
+        shell_write_bytes(current->signature, current->signature_len);
+        app_debug_shell_cmd_puts("\r\n");
+        return;
+    }
+
+    if (argc != 4 || !str_eq(argv[1], "set")) {
+        app_debug_shell_cmd_puts("[DBG] usage: profile set <nick> <signature>\r\n");
+        app_debug_shell_cmd_print_u32(" nick_max=", APP_PROFILE_NICKNAME_MAX_LEN);
+        app_debug_shell_cmd_print_u32(" sig_max=", APP_PROFILE_SIGNATURE_MAX_LEN);
+        return;
+    }
+
+    nick_len = str_len16(argv[2]);
+    sig_len = str_len16(argv[3]);
+    if (!nick_len || !sig_len ||
+        nick_len > APP_PROFILE_NICKNAME_MAX_LEN ||
+        sig_len > APP_PROFILE_SIGNATURE_MAX_LEN) {
+        app_debug_shell_cmd_puts("[DBG] profile len\r\n");
+        app_debug_shell_cmd_print_u32(" nick=", nick_len);
+        app_debug_shell_cmd_print_u32(" sig=", sig_len);
+        app_debug_shell_cmd_print_u32(" nick_max=", APP_PROFILE_NICKNAME_MAX_LEN);
+        app_debug_shell_cmd_print_u32(" sig_max=", APP_PROFILE_SIGNATURE_MAX_LEN);
+        return;
+    }
+
+    current = app_profile_get();
+    memset(&summary, 0, sizeof(summary));
+    summary.flags = APP_PROFILE_FLAG_VISIBLE;
+    summary.key_id = current->key_id;
+    summary.seq = current->seq;
+    summary.avatar_seed = clock_time() ^ app_identity_get_short_id();
+    summary.tag_count = 3;
+    summary.tags[0] = 1;
+    summary.tags[1] = 2;
+    summary.tags[2] = 3;
+    summary.nickname_len = (u8)nick_len;
+    summary.signature_len = (u8)sig_len;
+    memcpy(summary.nickname, argv[2], nick_len);
+    memcpy(summary.signature, argv[3], sig_len);
+
+    st = app_profile_set_summary(&summary);
+    if (st == APP_OK) {
+        app_adv_scheduler_request_beacon_update();
+    }
+    app_debug_shell_cmd_puts("[DBG] profile set\r\n");
+    app_debug_shell_cmd_print_u8(" st=", (u8)st);
+    if (st == APP_OK) {
+        cmd_profile(1, 0);
+    }
 }
 
 static void cmd_peers(u8 argc, char **argv)
@@ -1104,6 +1185,7 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("ping", "ping", "check shell", cmd_ping);
     app_debug_shell_cmd_register("build", "build", "show build info", cmd_build);
     app_debug_shell_cmd_register("info", "info", "show device info", cmd_info);
+    app_debug_shell_cmd_register("profile", "profile [set <nick> <signature>]", "show or update profile card", cmd_profile);
     app_debug_shell_cmd_register("peers", "peers", "show peer table", cmd_peers);
     app_debug_shell_cmd_register("clear", "clear", "clear peer table", cmd_clear);
     app_debug_shell_cmd_register("logs", "logs", "reset debug counters", cmd_logs);
