@@ -1,6 +1,7 @@
 package com.glimmer.app;
 
 import android.app.Activity;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -8,6 +9,8 @@ import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -20,18 +23,49 @@ import android.widget.TextView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class MainActivity extends Activity implements GlimmerBleClient.Listener {
     private static final int REQUEST_APP_PERMISSIONS = 1201;
+    private static final String PREFS_NAME = "glimmer_app";
+    private static final String KEY_BOUND_ADDRESS = "bound_address";
+    private static final String KEY_BOUND_NAME = "bound_name";
+    private static final String KEY_BOUND_SHORT_ID = "bound_short_id";
+    private static final String KEY_CHATTED_PEERS = "chatted_peer_ids";
+    private static final long AUTO_SYNC_INTERVAL_MS = 10000;
+    private static final long AUTO_RECONNECT_INTERVAL_MS = 15000;
 
     private final List<Button> navButtons = new ArrayList<>();
     private final List<GlimmerBleClient.ScanDevice> scanDevices = new ArrayList<>();
     private final List<HostProtocol.PeerInfo> peers = new ArrayList<>();
     private final List<HostProtocol.PeerProfileInfo> peerProfiles = new ArrayList<>();
     private final List<String> eventLines = new ArrayList<>();
+    private final Set<String> chattedPeerIds = new HashSet<>();
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable autoSyncRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (debugReady) {
+                bleClient.requestPeerTable();
+                handler.postDelayed(bleClient::requestPeerProfiles, 300);
+                handler.postDelayed(this, AUTO_SYNC_INTERVAL_MS);
+            }
+        }
+    };
+    private final Runnable autoReconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!debugReady && hasBoundDevice()) {
+                startScanFlow(false);
+                handler.postDelayed(this, AUTO_RECONNECT_INTERVAL_MS);
+            }
+        }
+    };
 
     private GlimmerBleClient bleClient;
+    private SharedPreferences prefs;
     private LinearLayout root;
     private LinearLayout content;
     private SwipeRefreshLayout refreshLayout;
@@ -45,17 +79,25 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private EditText nicknameEdit;
     private EditText signatureEdit;
     private boolean debugReady;
+    private String boundAddress;
+    private String boundName;
+    private String boundShortId;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        loadLocalState();
         bleClient = new GlimmerBleClient(this, this);
         buildUi();
         showTab(0);
+        maybeStartBoundReconnect();
     }
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacks(autoSyncRunnable);
+        handler.removeCallbacks(autoReconnectRunnable);
         if (bleClient != null) {
             bleClient.stopScan();
             bleClient.disconnect();
@@ -63,11 +105,89 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         super.onDestroy();
     }
 
+    private void loadLocalState() {
+        boundAddress = prefs.getString(KEY_BOUND_ADDRESS, null);
+        boundName = prefs.getString(KEY_BOUND_NAME, null);
+        boundShortId = prefs.getString(KEY_BOUND_SHORT_ID, null);
+        Set<String> savedPeers = prefs.getStringSet(KEY_CHATTED_PEERS, null);
+        chattedPeerIds.clear();
+        if (savedPeers != null) {
+            chattedPeerIds.addAll(savedPeers);
+        }
+        connectionStatus = hasBoundDevice() ? "正在寻找已绑定的 Glimmer" : "我的 Glimmer 未绑定";
+    }
+
+    private boolean hasBoundDevice() {
+        return boundAddress != null && !boundAddress.isEmpty();
+    }
+
+    private void saveBoundDevice(GlimmerBleClient.ScanDevice device) {
+        boundAddress = device.address;
+        boundName = device.displayName();
+        prefs.edit()
+                .putString(KEY_BOUND_ADDRESS, boundAddress)
+                .putString(KEY_BOUND_NAME, boundName)
+                .apply();
+    }
+
+    private void saveBoundDeviceInfo() {
+        if (deviceInfo == null || !hasBoundDevice()) {
+            return;
+        }
+        boundShortId = deviceInfo.shortCode();
+        prefs.edit().putString(KEY_BOUND_SHORT_ID, boundShortId).apply();
+    }
+
+    private void unbindDevice() {
+        bleClient.stopScan();
+        bleClient.disconnect();
+        handler.removeCallbacks(autoSyncRunnable);
+        handler.removeCallbacks(autoReconnectRunnable);
+        boundAddress = null;
+        boundName = null;
+        boundShortId = null;
+        debugReady = false;
+        deviceInfo = null;
+        myProfile = null;
+        peers.clear();
+        peerProfiles.clear();
+        scanDevices.clear();
+        prefs.edit()
+                .remove(KEY_BOUND_ADDRESS)
+                .remove(KEY_BOUND_NAME)
+                .remove(KEY_BOUND_SHORT_ID)
+                .apply();
+        setLocalStatus("已解除绑定，可以重新绑定新的 Glimmer");
+        rerenderCurrentTab();
+    }
+
+    private void rememberChattedPeer(long shortId) {
+        String value = HostProtocol.shortIdText(shortId);
+        if (chattedPeerIds.add(value)) {
+            prefs.edit().putStringSet(KEY_CHATTED_PEERS, new HashSet<>(chattedPeerIds)).apply();
+        }
+    }
+
+    private boolean hasChattedWith(long shortId) {
+        return chattedPeerIds.contains(HostProtocol.shortIdText(shortId));
+    }
+
+    private void maybeStartBoundReconnect() {
+        if (!hasBoundDevice() || debugReady) {
+            return;
+        }
+        if (ensurePermissions(false)) {
+            startScanFlow(false);
+            handler.removeCallbacks(autoReconnectRunnable);
+            handler.postDelayed(autoReconnectRunnable, AUTO_RECONNECT_INTERVAL_MS);
+        }
+    }
+
     private void buildUi() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(color(0xF7F8F5));
-        root.setPadding(dp(18), dp(18), dp(18), dp(12));
+        root.setPadding(dp(18), dp(48), dp(18), dp(12));
 
         titleView = label("附近的微光", 28, color(0x1F2420), true);
         root.addView(titleView, new LinearLayout.LayoutParams(
@@ -155,25 +275,20 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void renderNearbyPage() {
-        LinearLayout intro = card();
-        intro.addView(label("Glimmer", 12, color(0x1F6F60), true));
-        intro.addView(label("附近有人发来一束微光", 24, color(0x1F2420), true),
-                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
-        intro.addView(label("微光通过你的 Glimmer 终端发现附近的人。我们不展示精确位置，也不保存长期离线消息。", 15, color(0x667068), false),
-                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
-        intro.addView(label("下拉页面即可重新寻找附近终端。", 13, color(0x2F8F7B), true),
-                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(14), 0, 0));
-        content.addView(intro, cardParams());
-
         content.addView(scanPanel(), cardParams());
-        content.addView(sectionTitle("刚刚擦肩"), marginParams(
+
+        content.addView(nearbySectionHeader(), marginParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                0, dp(4), 0, dp(10)));
+                0, dp(2), 0, dp(10)));
         if (!debugReady) {
-            content.addView(emptyStateCard("先连接你的 Glimmer", "连接自己的终端后，这里会显示附近可交流的微光。"), cardParams());
+            if (!hasBoundDevice()) {
+                content.addView(emptyStateCard("先绑定你的 Glimmer", "第一次使用时下拉寻找终端，绑定后这里只服务这一台。"), cardParams());
+            } else {
+                content.addView(emptyStateCard("等待已绑定终端", "它进入范围后会自动连接，连接后附近的人会出现在这里。"), cardParams());
+            }
         } else if (peers.isEmpty() && peerProfiles.isEmpty()) {
-            content.addView(emptyStateCard("附近暂时没有微光", "可以下拉刷新，或者稍后再看看。"), cardParams());
+            content.addView(emptyStateCard("等待进入范围", "Glimmer 会自动把擦肩的人推到这里。"), cardParams());
         } else if (!peerProfiles.isEmpty()) {
             for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
                 content.addView(peerProfileCard(profile), cardParams());
@@ -183,12 +298,6 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 content.addView(peerCard(peer), cardParams());
             }
         }
-
-        content.addView(sectionTitle("我的 Glimmer 终端"), marginParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                0, dp(6), 0, dp(10)));
-        content.addView(terminalPanel(), cardParams());
     }
 
     private LinearLayout scanPanel() {
@@ -202,21 +311,31 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         GlimmerFieldView fieldView = new GlimmerFieldView(this);
         fieldView.setPeerCount(peers.size());
         fieldView.setConnected(debugReady);
-        row.addView(fieldView, new LinearLayout.LayoutParams(dp(126), dp(126)));
+        row.addView(fieldView, new LinearLayout.LayoutParams(dp(112), dp(112)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(14), 0, 0, 0);
-        copy.addView(label(nearbyTitle(), 19, color(0x1F2420), true));
-        copy.addView(label(nearbyCopy(), 13, color(0x667068), false),
-                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(6), 0, dp(10)));
-        copy.addView(secondaryButton(bleClient.isScanning() ? "正在寻找" : "重新寻找", v -> startScanFlow()),
-                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+        copy.addView(label(nearbyTitle(), 20, color(0x1F2420), true));
+        copy.addView(terminalStatusRow(),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(6), 0, dp(8)));
+        copy.addView(label(scanHintText(), 12, color(0x667068), false));
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         panel.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        if (!debugReady && !hasBoundDevice() && !scanDevices.isEmpty()) {
+            int limit = Math.min(scanDevices.size(), 2);
+            for (int i = 0; i < limit; i++) {
+                panel.addView(terminalDeviceRow(scanDevices.get(i)), marginParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        0, dp(12), 0, 0));
+            }
+        }
+
         return panel;
     }
 
@@ -275,7 +394,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
         device.addView(label(deviceInfoSummary(), 14, color(0x667068), false),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, dp(12)));
-        device.addView(primaryButton(debugReady ? "同步设备状态" : "寻找我的 Glimmer", v -> {
+        device.addView(primaryButton(debugReady ? "同步设备状态" : (hasBoundDevice() ? "寻找已绑定终端" : "寻找并绑定 Glimmer"), v -> {
             if (debugReady) {
                 bleClient.requestFullSync();
                 setLocalStatus("正在同步 Glimmer 状态");
@@ -283,6 +402,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 startScanFlow();
             }
         }), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        if (hasBoundDevice()) {
+            device.addView(secondaryButton("解除绑定", v -> unbindDevice()),
+                    marginParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), 0, dp(10), 0, 0));
+        }
         content.addView(device, cardParams());
 
         LinearLayout nearby = card();
@@ -318,50 +441,95 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         content.addView(events, cardParams());
     }
 
+    private LinearLayout nearbySectionHeader() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(sectionTitle("刚刚擦肩"), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(infoPill(nearbyCountText()), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
+    }
+
+    private LinearLayout terminalStatusRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(9), dp(8), dp(9), dp(8));
+        row.setBackground(rounded(0xF1F6F2, 8));
+        row.setOnClickListener(v -> {
+            if (debugReady) {
+                bleClient.requestFullSync();
+                setLocalStatus("正在同步 Glimmer 状态");
+            }
+        });
+
+        String icon = debugReady ? "✓" : (bleClient.isScanning() ? "↻" : "○");
+        int iconColor = debugReady ? 0x2F8F7B : (bleClient.isScanning() ? 0xE5B84B : 0x9AA39C);
+        row.addView(statusIcon(icon, iconColor), new LinearLayout.LayoutParams(dp(28), dp(28)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setPadding(dp(9), 0, dp(6), 0);
+        copy.addView(label("我的 Glimmer", 13, color(0x1F2420), true));
+        copy.addView(label(terminalCompactText(), 11, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(1), 0, 0));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        row.addView(label(terminalStatusActionText(), 12, color(0x1F6F60), true));
+        return row;
+    }
+
     private LinearLayout peerCard(HostProtocol.PeerInfo peer) {
+        boolean familiar = hasChattedWith(peer.shortId);
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(13), dp(14), dp(13));
-        row.setBackground(rounded(0xFFFFFF, 8));
+        row.setBackground(rounded(familiar ? 0xFFF7DF : 0xFFFFFF, 8));
 
-        row.addView(avatar("微", 0x2F8F7B), new LinearLayout.LayoutParams(dp(44), dp(44)));
+        row.addView(avatar(familiar ? "↻" : "微", familiar ? 0xC08A24 : 0x2F8F7B),
+                new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), 0, dp(8), 0);
-        copy.addView(label("一束微光", 16, color(0x1F2420), true));
+        copy.addView(label(familiar ? "再遇见的微光" : "一束微光", 16, color(0x1F2420), true));
         copy.addView(label(peer.proximityText() + " · " + peer.signalText(), 13, color(0x667068), false),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(4), 0, 0));
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
-        row.addView(infoPill(peer.proximityText()), new LinearLayout.LayoutParams(
+        row.addView(infoPill(familiar ? "再遇见" : peer.proximityText()), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         return row;
     }
 
     private LinearLayout peerProfileCard(HostProtocol.PeerProfileInfo profile) {
+        boolean familiar = hasChattedWith(profile.shortId);
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(13), dp(14), dp(13));
-        row.setBackground(rounded(0xFFFFFF, 8));
+        row.setBackground(rounded(familiar ? 0xFFF7DF : 0xFFFFFF, 8));
 
-        row.addView(avatar(profile.displayName().substring(0, 1), 0x2F8F7B),
+        row.addView(avatar(familiar ? "↻" : profile.displayName().substring(0, 1),
+                        familiar ? 0xC08A24 : 0x2F8F7B),
                 new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), 0, dp(8), 0);
-        copy.addView(label(profile.displayName(), 16, color(0x1F2420), true));
+        copy.addView(label(familiar ? profile.displayName() + " · 再遇见" : profile.displayName(),
+                16, color(0x1F2420), true));
         copy.addView(label(profile.signatureText(), 13, color(0x667068), false),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(4), 0, 0));
         copy.addView(label(profile.proximityText() + " · " + profile.signalText(), 12, color(0x9AA39C), false),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(4), 0, 0));
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
-        row.addView(infoPill(profile.proximityText()), new LinearLayout.LayoutParams(
+        row.addView(infoPill(familiar ? "再遇见" : profile.proximityText()), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         return row;
@@ -373,7 +541,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
         row.setBackground(rounded(0xF1F6F2, 8));
-        row.setOnClickListener(v -> bleClient.connect(device));
+        row.setOnClickListener(v -> bindOrConnectDevice(device));
 
         row.addView(avatar("G", 0x1F6F60), new LinearLayout.LayoutParams(dp(38), dp(38)));
 
@@ -381,11 +549,39 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setPadding(dp(12), 0, 0, 0);
         copy.addView(label("Glimmer 终端", 15, color(0x1F2420), true));
-        copy.addView(label(signalText(device.rssi) + " · 点击连接", 12, color(0x667068), false),
+        copy.addView(label(signalText(device.rssi), 12, color(0x667068), false),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(3), 0, 0));
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
+        row.addView(label("›", 24, color(0x2F8F7B), true), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
         return row;
+    }
+
+    private void bindOrConnectDevice(GlimmerBleClient.ScanDevice device) {
+        if (device == null) {
+            return;
+        }
+        if (hasBoundDevice() && !boundAddress.equals(device.address)) {
+            setLocalStatus("已绑定一台 Glimmer，请先在“我的”页面解绑");
+            return;
+        }
+        if (!hasBoundDevice()) {
+            saveBoundDevice(device);
+            setLocalStatus("已绑定 " + device.displayName() + "，正在连接");
+        }
+        bleClient.connect(device);
+        handler.removeCallbacks(autoReconnectRunnable);
+        handler.postDelayed(autoReconnectRunnable, AUTO_RECONNECT_INTERVAL_MS);
+    }
+
+    private TextView statusIcon(String text, int backgroundColor) {
+        TextView icon = label(text, 15, Color.WHITE, true);
+        icon.setGravity(Gravity.CENTER);
+        icon.setBackground(rounded(backgroundColor, 8));
+        return icon;
     }
 
     private LinearLayout emptyStateCard(String title, String copyText) {
@@ -428,8 +624,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void handlePullRefresh() {
-        if (selectedTab == 0 || !debugReady) {
+        if (!debugReady) {
             startScanFlow();
+            return;
+        }
+
+        if (selectedTab == 0) {
+            setLocalStatus("正在同步附近的微光");
+            bleClient.requestPeerTable();
+            handler.postDelayed(bleClient::requestPeerProfiles, 300);
+            endRefreshingSoon();
             return;
         }
 
@@ -439,11 +643,15 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void startScanFlow() {
-        if (!ensurePermissions(true)) {
+        startScanFlow(true);
+    }
+
+    private void startScanFlow(boolean showRefreshing) {
+        if (!ensurePermissions(showRefreshing)) {
             endRefreshing();
             return;
         }
-        if (refreshLayout != null) {
+        if (showRefreshing && refreshLayout != null) {
             refreshLayout.setRefreshing(true);
         }
         bleClient.startScan();
@@ -509,10 +717,26 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     public void onScanDevicesChanged(List<GlimmerBleClient.ScanDevice> devices) {
         scanDevices.clear();
         scanDevices.addAll(devices);
+        GlimmerBleClient.ScanDevice boundDevice = findBoundScanDevice();
+        if (boundDevice != null && !debugReady) {
+            bleClient.connect(boundDevice);
+        }
         if (!bleClient.isScanning()) {
             endRefreshing();
         }
         rerenderCurrentTab();
+    }
+
+    private GlimmerBleClient.ScanDevice findBoundScanDevice() {
+        if (!hasBoundDevice()) {
+            return null;
+        }
+        for (GlimmerBleClient.ScanDevice device : scanDevices) {
+            if (boundAddress.equals(device.address)) {
+                return device;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -523,6 +747,15 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             myProfile = null;
             peers.clear();
             peerProfiles.clear();
+            handler.removeCallbacks(autoSyncRunnable);
+            if (hasBoundDevice()) {
+                handler.removeCallbacks(autoReconnectRunnable);
+                handler.postDelayed(autoReconnectRunnable, AUTO_RECONNECT_INTERVAL_MS);
+            }
+        } else {
+            handler.removeCallbacks(autoReconnectRunnable);
+            handler.removeCallbacks(autoSyncRunnable);
+            handler.postDelayed(autoSyncRunnable, AUTO_SYNC_INTERVAL_MS);
         }
         rerenderCurrentTab();
     }
@@ -532,26 +765,41 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         try {
             if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_DEVICE_INFO && message.status == 0) {
                 deviceInfo = HostProtocol.parseDeviceInfo(message.payload);
+                saveBoundDeviceInfo();
                 pushEvent("我的 Glimmer 信息已更新");
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_TABLE && message.status == 0) {
+                int previousCount = peers.size();
                 peers.clear();
                 peers.addAll(HostProtocol.parsePeerTable(message.payload));
-                pushEvent(peers.isEmpty() ? "附近列表已刷新，暂时没有微光" : "发现 " + peers.size() + " 束附近微光");
+                if (peers.isEmpty()) {
+                    pushEvent("附近列表已刷新，暂时没有微光");
+                } else if (peers.size() != previousCount) {
+                    pushEvent("发现 " + peers.size() + " 束附近微光");
+                }
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PROFILE_SUMMARY && message.status == 0) {
                 myProfile = HostProtocol.parseProfileSummary(message.payload);
                 setLocalStatus("附近预览卡片已同步");
                 pushEvent("附近预览卡片已同步");
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_PROFILES && message.status == 0) {
+                Set<String> previousIds = currentPeerProfileIds();
                 peerProfiles.clear();
                 peerProfiles.addAll(HostProtocol.parsePeerProfiles(message.payload));
-                if (!peerProfiles.isEmpty()) {
+                if (hasNewPeerProfile(previousIds)) {
+                    pushEvent("有新的微光进入范围");
+                } else if (!peerProfiles.isEmpty()) {
                     pushEvent("读到 " + peerProfiles.size() + " 张附近资料卡");
                 }
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT) {
                 HostProtocol.ChatEvent event = HostProtocol.parseChatEvent(message.payload);
+                if (!event.isDropped()) {
+                    rememberChattedPeer(event.shortId);
+                }
                 pushEvent(event.isDropped() ? "一条微光已过期" : "收到一条来自附近的微光");
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT_TX_RESULT) {
                 HostProtocol.ChatTxResult result = HostProtocol.parseChatTxResult(message.payload);
+                if (result.isSuccess()) {
+                    rememberChattedPeer(result.shortId);
+                }
                 pushEvent(result.isSuccess() ? "消息已送达" : "对方暂时不可达，消息未送达");
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.status != 0) {
                 pushEvent(productResponseError(message));
@@ -581,6 +829,23 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
     }
 
+    private Set<String> currentPeerProfileIds() {
+        Set<String> ids = new HashSet<>();
+        for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+            ids.add(HostProtocol.shortIdText(profile.shortId));
+        }
+        return ids;
+    }
+
+    private boolean hasNewPeerProfile(Set<String> previousIds) {
+        for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+            if (!previousIds.contains(HostProtocol.shortIdText(profile.shortId))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void rerenderCurrentTab() {
         if (content != null) {
             showTab(selectedTab);
@@ -589,7 +854,13 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private String topStatusText(int index) {
         if (index == 0) {
-            return debugReady ? peerSummary() : "下拉寻找附近的 Glimmer 终端";
+            if (debugReady) {
+                return "✓ " + peerSummary();
+            }
+            if (!hasBoundDevice()) {
+                return bleClient.isScanning() ? "↻ 正在寻找可绑定终端" : "○ 我的 Glimmer 未绑定";
+            }
+            return bleClient.isScanning() ? "↻ 正在找回已绑定终端" : "○ 等待已绑定 Glimmer";
         }
         if (index == 2) {
             return connectionStatus;
@@ -599,18 +870,21 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private String nearbyTitle() {
         if (!debugReady) {
-            return "先连接你的 Glimmer";
+            if (!hasBoundDevice()) {
+                return bleClient.isScanning() ? "选择你的 Glimmer" : "绑定你的 Glimmer";
+            }
+            return bleClient.isScanning() ? "正在找回终端" : "等待自动连接";
         }
         if (peers.isEmpty() && peerProfiles.isEmpty()) {
-            return "附近暂时没有微光";
+            return "等待进入范围";
         }
         int count = Math.max(peers.size(), peerProfiles.size());
-        return count + " 束微光在附近";
+        return count + " 位进入范围";
     }
 
     private String nearbyCopy() {
         if (!debugReady) {
-            return "找到并连接自己的终端后，微光会开始同步附近状态。";
+            return hasBoundDevice() ? "已绑定的终端进入范围后会自动连接。" : "一个 App 只绑定一台微光终端。";
         }
         if (peers.isEmpty()) {
             return "不显示精确距离，只显示可交流的强弱。";
@@ -618,47 +892,101 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return "不显示精确距离，只显示可交流的强弱。";
     }
 
+    private String scanHintText() {
+        if (!hasBoundDevice()) {
+            return bleClient.isScanning() ? "正在寻找可绑定的终端" : "下拉页面绑定你的 Glimmer";
+        }
+        if (!debugReady) {
+            return bleClient.isScanning() ? "正在自动连接已绑定终端" : "下拉页面寻找已绑定终端";
+        }
+        return "进入范围的人会自动出现在下方";
+    }
+
+    private String nearbyCountText() {
+        if (!debugReady) {
+            return hasBoundDevice() ? "未连接" : "未绑定";
+        }
+        int count = Math.max(peers.size(), peerProfiles.size());
+        return count == 0 ? "暂无" : count + " 位";
+    }
+
+    private String terminalCompactText() {
+        if (debugReady) {
+            return deviceInfo == null ? "已连接" : deviceInfo.shortCode();
+        }
+        if (bleClient.isScanning()) {
+            if (hasBoundDevice()) {
+                return "找回中";
+            }
+            return scanDevices.isEmpty() ? "寻找中" : scanDevices.size() + " 台可绑定";
+        }
+        if (hasBoundDevice()) {
+            return boundShortId == null ? "已绑定" : boundShortId;
+        }
+        return scanDevices.isEmpty() ? "未绑定" : scanDevices.size() + " 台可绑定";
+    }
+
+    private String terminalStatusActionText() {
+        if (debugReady) {
+            return "已连";
+        }
+        if (bleClient.isScanning()) {
+            return "寻找中";
+        }
+        return hasBoundDevice() ? "等待" : "未绑定";
+    }
+
     private String terminalTitle() {
         if (debugReady) {
             return "我的 Glimmer 已连接";
         }
         if (bleClient.isScanning()) {
-            return "正在寻找你的 Glimmer";
+            return hasBoundDevice() ? "正在找回已绑定终端" : "正在寻找你的 Glimmer";
         }
-        return "连接你的 Glimmer";
+        return hasBoundDevice() ? "已绑定的 Glimmer" : "绑定你的 Glimmer";
     }
 
     private String terminalCopy() {
         if (debugReady) {
             return "终端已就绪，正在保持附近可见。";
         }
-        return "请确认终端已开机。下拉页面或点击按钮都可以重新寻找。";
+        if (hasBoundDevice()) {
+            return "已绑定 " + (boundName == null ? "Glimmer" : boundName) + "。它进入范围后会自动连接。";
+        }
+        return "第一次使用需要下拉寻找，并选择一台终端完成绑定。";
     }
 
     private String scanSummary() {
         if (bleClient.isScanning()) {
-            return "正在寻找，已发现 " + scanDevices.size() + " 台 Glimmer 终端";
+            return hasBoundDevice() ? "正在寻找已绑定终端" : "正在寻找，已发现 " + scanDevices.size() + " 台可绑定终端";
         }
         if (scanDevices.isEmpty()) {
-            return "还没有发现可连接的 Glimmer 终端。";
+            return hasBoundDevice() ? "已绑定终端暂时不在范围内。" : "还没有发现可绑定的 Glimmer 终端。";
         }
-        return "发现 " + scanDevices.size() + " 台 Glimmer 终端，点击即可连接。";
+        return hasBoundDevice() ? "已绑定终端进入范围后会自动连接。" : "发现 " + scanDevices.size() + " 台 Glimmer 终端，点击即可绑定。";
     }
 
     private String peerSummary() {
         if (!debugReady) {
-            return "连接终端后同步附近状态";
+            return hasBoundDevice() ? "等待已绑定终端进入范围" : "绑定终端后同步附近状态";
         }
         if (peers.isEmpty() && peerProfiles.isEmpty()) {
             return "附近暂时没有微光";
         }
         int count = Math.max(peers.size(), peerProfiles.size());
-        return "附近有 " + count + " 束微光";
+        return "附近有 " + count + " 位微光";
     }
 
     private String deviceInfoSummary() {
         if (deviceInfo == null) {
-            return debugReady ? "正在读取固件和设备识别信息。" : "连接后会显示固件版本、识别码和终端状态。";
+            if (debugReady) {
+                return "正在读取固件和设备识别信息。";
+            }
+            if (hasBoundDevice()) {
+                return "已绑定 " + (boundName == null ? "Glimmer" : boundName)
+                        + (boundShortId == null ? "" : "\n识别码 " + boundShortId);
+            }
+            return "还没有绑定终端。一个 App 只能绑定一台 Glimmer。";
         }
 
         String privacy = deviceInfo.hasPrivacyKey() ? "隐私密钥已启用" : "隐私密钥未启用";
@@ -672,14 +1000,20 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (raw == null) {
             return connectionStatus;
         }
+        if (raw.contains("status=")) {
+            return raw.replace("GATT", "Glimmer");
+        }
         if (raw.startsWith("扫描结束")) {
+            if (hasBoundDevice()) {
+                return findBoundScanDevice() == null ? "已绑定终端暂时不在范围内" : "已找到绑定终端";
+            }
             return scanDevices.isEmpty() ? "暂未发现 Glimmer 终端" : "发现 " + scanDevices.size() + " 台 Glimmer 终端";
         }
         if (raw.startsWith("扫描失败")) {
             return "扫描失败，请稍后重试";
         }
         if (raw.contains("正在寻找")) {
-            return "正在寻找你的 Glimmer";
+            return hasBoundDevice() ? "正在找回已绑定终端" : "正在寻找你的 Glimmer";
         }
         if (raw.contains("正在连接")) {
             return "正在连接我的 Glimmer";

@@ -22,6 +22,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelUuid;
+import android.util.Log;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -34,6 +35,7 @@ import java.util.Queue;
 import java.util.UUID;
 
 final class GlimmerBleClient {
+    private static final String TAG = "GlimmerBleClient";
     private static final String[] DEBUG_SERVICE_UUIDS = {
             "50544e44-0001-4b45-5931-444556000001",
             "56000001-4445-5931-454b-0100444e5450",
@@ -79,8 +81,11 @@ final class GlimmerBleClient {
     private BluetoothGattCharacteristic evtChar;
 
     private boolean scanning;
+    private boolean connected;
     private boolean debugReady;
     private boolean writeInProgress;
+    private String connectedAddress;
+    private String pendingAddress;
     private int seq = 1;
 
     GlimmerBleClient(Context context, Listener listener) {
@@ -180,10 +185,24 @@ final class GlimmerBleClient {
             return;
         }
         stopScan();
+        if (gatt != null && device.address.equals(connectedAddress)) {
+            if (debugReady) {
+                listener.onBleStatus("Glimmer 已连接，正在同步");
+                requestFullSync();
+            } else {
+                listener.onBleStatus("Glimmer 正在完成连接");
+            }
+            return;
+        }
+        if (gatt != null && device.address.equals(pendingAddress)) {
+            listener.onBleStatus("Glimmer 正在完成连接");
+            return;
+        }
         disconnect();
         try {
             BluetoothDevice remote = adapter.getRemoteDevice(device.address);
             listener.onBleStatus("正在连接 " + device.displayName());
+            pendingAddress = device.address;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 gatt = remote.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
             } else {
@@ -196,11 +215,14 @@ final class GlimmerBleClient {
 
     @SuppressLint("MissingPermission")
     void disconnect() {
+        connected = false;
         debugReady = false;
         writeInProgress = false;
         txQueue.clear();
         notifyQueue.clear();
         assembler.reset();
+        connectedAddress = null;
+        pendingAddress = null;
         cmdChar = null;
         rspChar = null;
         logChar = null;
@@ -329,17 +351,27 @@ final class GlimmerBleClient {
         @SuppressLint("MissingPermission")
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            Log.i(TAG, "onConnectionStateChange status=" + status + " newState=" + newState
+                    + " device=" + gatt.getDevice().getAddress());
             handler.post(() -> {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    connected = true;
+                    connectedAddress = pendingAddress == null ? gatt.getDevice().getAddress() : pendingAddress;
+                    pendingAddress = null;
                     listener.onBleStatus("已连接，正在发现服务");
                     gatt.discoverServices();
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    Log.w(TAG, "Glimmer disconnected status=" + status);
                     listener.onBleStatus("Glimmer 已断开");
+                    listener.onBleStatus("Glimmer 已断开 status=" + status);
+                    connected = false;
                     debugReady = false;
                     writeInProgress = false;
                     txQueue.clear();
                     notifyQueue.clear();
                     assembler.reset();
+                    connectedAddress = null;
+                    pendingAddress = null;
                     if (GlimmerBleClient.this.gatt == gatt) {
                         try {
                             gatt.close();
@@ -354,6 +386,7 @@ final class GlimmerBleClient {
 
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            Log.i(TAG, "onServicesDiscovered status=" + status);
             handler.post(() -> {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     listener.onBleStatus("GATT 服务发现失败");
@@ -374,6 +407,7 @@ final class GlimmerBleClient {
 
         @Override
         public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            Log.d(TAG, "onDescriptorWrite status=" + status + " uuid=" + descriptor.getUuid());
             handler.post(GlimmerBleClient.this::subscribeNext);
         }
 
@@ -381,6 +415,8 @@ final class GlimmerBleClient {
         public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
             handler.post(() -> {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Log.w(TAG, "onCharacteristicWrite failed status=" + status
+                            + " uuid=" + characteristic.getUuid());
                     listener.onBleStatus("发送失败：" + status);
                 }
                 handler.postDelayed(GlimmerBleClient.this::writeNextPacket, 20);
