@@ -39,7 +39,7 @@ static void app_pendant_on_peer_message(const app_eid_t *src_eid,
         return;
     }
 
-    app_host_cmd_notify_p2p_chat(src_eid, rssi, payload, len);
+    app_host_cmd_notify_p2p_chat_encrypted(src_eid, rssi, payload, len);
 }
 
 static void app_pendant_on_peer_tx_result(const app_eid_t *dst_eid,

@@ -4,6 +4,9 @@
 #include "../common/app_types.h"
 #include "../host_frame/app_host_frame.h"
 
+#define APP_HOST_P2P_CHAT_EVENT_HEADER_LEN 8
+#define APP_HOST_P2P_CHAT_TEXT_MAX_LEN     (APP_HOST_MESSAGE_MAX_LEN - APP_HOST_P2P_CHAT_EVENT_HEADER_LEN)
+
 typedef enum {
     HOST_CMD_GET_DEVICE_INFO = 0x01,
     HOST_CMD_GET_SYSTEM_STATE = 0x02,
@@ -55,6 +58,7 @@ u8 app_host_cmd_next_tx_seq(void);
 void app_host_cmd_get_debug(app_host_cmd_debug_t *debug);
 void app_host_cmd_log_text(u8 level, const char *tag, const char *msg);
 void app_host_cmd_notify_p2p_chat(const app_eid_t *src_eid, s8 rssi, const u8 *text, u16 len);
+void app_host_cmd_notify_p2p_chat_encrypted(const app_eid_t *src_eid, s8 rssi, const u8 *payload, u16 len);
 void app_host_cmd_notify_p2p_chat_tx_result(const app_eid_t *dst_eid, u32 message_id,
                                             u16 len, app_status_t status, u8 flags);
 void app_host_cmd_notify_peer_level(const app_eid_t *eid, u8 old_level, u8 new_level, s8 rssi_avg, u8 reason);

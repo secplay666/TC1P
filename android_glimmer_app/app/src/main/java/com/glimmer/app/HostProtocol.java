@@ -17,6 +17,7 @@ final class HostProtocol {
     static final int CRC_LEN = 2;
     static final int CHUNK_MAX_LEN = MAX_PACKET_LEN - HEADER_LEN - CRC_LEN;
     static final int MESSAGE_MAX_LEN = 192;
+    static final int CHAT_TEXT_MAX_LEN = MESSAGE_MAX_LEN - 8;
 
     static final int TYPE_CMD = 1;
     static final int TYPE_RSP = 2;
@@ -67,8 +68,8 @@ final class HostProtocol {
         if (payload.length == 0) {
             throw new IllegalArgumentException("chat text is empty");
         }
-        if (payload.length > MESSAGE_MAX_LEN) {
-            throw new IllegalArgumentException("chat text too long: " + payload.length + " > " + MESSAGE_MAX_LEN);
+        if (payload.length > CHAT_TEXT_MAX_LEN) {
+            throw new IllegalArgumentException("chat text too long: " + payload.length + " > " + CHAT_TEXT_MAX_LEN);
         }
         return encodeMessage(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, payload);
     }

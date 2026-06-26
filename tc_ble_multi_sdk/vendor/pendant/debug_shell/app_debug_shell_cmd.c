@@ -4,6 +4,7 @@
 #include "../identity/app_identity.h"
 #include "../peer_table/app_peer_table.h"
 #include "../peer_transport/app_peer_transport.h"
+#include "../crypto/app_crypto.h"
 #include "../host_cmd/app_host_cmd.h"
 #include "../scan/app_scan.h"
 #include "../discovery/app_discovery.h"
@@ -26,6 +27,7 @@ static app_debug_shell_cmd_entry_t s_cmds[APP_DEBUG_SHELL_CMD_MAX_COUNT];
 static u8 s_cmd_count;
 static u32 s_dbg_msg_id;
 static u16 s_dbg_frame_seq;
+static u16 s_dbg_chat_nonce;
 #if APP_DEBUG_SHELL_ENABLE_ADV_TEST_CMDS
 static u8 s_dbg_payload[APP_DEBUG_SHELL_SENDMAX_PAYLOAD_MAX];
 #endif
@@ -648,10 +650,14 @@ static void cmd_p2psend(u8 argc, char **argv)
 static void cmd_p2pchat(u8 argc, char **argv)
 {
     app_peer_record_t peer;
-    u8 payload[APP_PEER_TRANSPORT_MESSAGE_MAX_LEN];
+    u8 payload[APP_HOST_P2P_CHAT_TEXT_MAX_LEN + APP_CHAT_CRYPTO_HEADER_LEN];
+    u8 *plain = &payload[APP_CHAT_CRYPTO_HEADER_LEN];
     u16 len = 0;
+    u16 encrypted_len = 0;
+    u32 nonce;
     u8 i;
     u8 j;
+    u8 truncated = 0;
     app_status_t st;
 
     if (argc < 2) {
@@ -664,12 +670,19 @@ static void cmd_p2pchat(u8 argc, char **argv)
     }
 
     for (i = 1; i < argc; i++) {
-        if (i > 1 && len < sizeof(payload)) {
-            payload[len++] = ' ';
+        if (i > 1) {
+            if (len < APP_HOST_P2P_CHAT_TEXT_MAX_LEN) {
+                plain[len++] = ' ';
+            } else {
+                truncated = 1;
+            }
         }
         j = 0;
-        while (argv[i][j] && len < sizeof(payload)) {
-            payload[len++] = (u8)argv[i][j++];
+        while (argv[i][j] && len < APP_HOST_P2P_CHAT_TEXT_MAX_LEN) {
+            plain[len++] = (u8)argv[i][j++];
+        }
+        if (argv[i][j]) {
+            truncated = 1;
         }
     }
 
@@ -678,12 +691,34 @@ static void cmd_p2pchat(u8 argc, char **argv)
         return;
     }
 
-    st = app_peer_transport_send_message(&peer.eid, APP_PEER_MSG_USER, payload, len,
+    if (truncated) {
+        app_debug_shell_cmd_puts("[DBG] p2pchat too long\r\n");
+        app_debug_shell_cmd_print_u32(" max=", APP_HOST_P2P_CHAT_TEXT_MAX_LEN);
+        return;
+    }
+
+    s_dbg_chat_nonce++;
+    if (!s_dbg_chat_nonce) {
+        s_dbg_chat_nonce = 1;
+    }
+    nonce = clock_time() ^ rand() ^ app_identity_get_short_id() ^ ((u32)s_dbg_chat_nonce << 16);
+    st = app_crypto_chat_encrypt(app_identity_get_eid(), &peer.eid, nonce,
+                                 plain, len,
+                                 payload, sizeof(payload),
+                                 &encrypted_len);
+    if (st != APP_OK) {
+        app_debug_shell_cmd_puts("[DBG] p2pchat encrypt\r\n");
+        app_debug_shell_cmd_print_u8(" st=", (u8)st);
+        return;
+    }
+
+    st = app_peer_transport_send_message(&peer.eid, APP_PEER_MSG_USER, payload, encrypted_len,
                                          APP_PEER_SEND_RELIABLE,
                                          APP_PEER_TRANSPORT_FRAME_FLAG_NOTIFY);
     app_debug_shell_cmd_puts("[DBG] p2pchat\r\n");
     app_debug_shell_cmd_print_u8(" st=", (u8)st);
     app_debug_shell_cmd_print_u32(" len=", len);
+    app_debug_shell_cmd_print_u32(" enc=", encrypted_len);
 }
 
 static void cmd_p2pclear(u8 argc, char **argv)

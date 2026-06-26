@@ -8,6 +8,7 @@
 #include "../charge/app_charge.h"
 #include "../config/app_config_store.h"
 #include "../storage/app_storage.h"
+#include "../crypto/app_crypto.h"
 #include "../factory/app_factory.h"
 #include "../profile/app_profile.h"
 #include "../adv_scheduler/app_adv_scheduler.h"
@@ -22,11 +23,12 @@
 
 #define HOST_SHELL_RSP_MAX_LEN 72
 #define HOST_SHELL_RSP_BODY_MAX_LEN 57
-#define HOST_P2P_CHAT_EVENT_HEADER_LEN 8
+#define HOST_P2P_CHAT_EVENT_HEADER_LEN APP_HOST_P2P_CHAT_EVENT_HEADER_LEN
 #define HOST_P2P_CHAT_EVENT_FLAG_TRUNCATED 0x01
 #define HOST_P2P_CHAT_EVENT_FLAG_DROPPED   0x02
 #define HOST_P2P_CHAT_DELIVERY_TTL_US      5000000
 #define HOST_P2P_CHAT_DROP_NOTICE_TTL_US   60000000
+#define HOST_P2P_CHAT_PLAIN_MAX_LEN        APP_HOST_P2P_CHAT_TEXT_MAX_LEN
 #define HOST_PROFILE_LIST_RSP_MAX_LEN      72
 
 #define HOST_LOG_LEVEL_INFO  1
@@ -57,6 +59,7 @@ static u8 s_p2p_chat_event_last_status;
 static u16 s_p2p_chat_event_rx_count;
 static u16 s_p2p_chat_event_drop_count;
 static u16 s_p2p_chat_event_sent_count;
+static u16 s_p2p_chat_nonce;
 
 typedef struct {
     u8 active;
@@ -145,6 +148,44 @@ static u8 bytes_eq_word_ci(const u8 *payload, u16 len, const char *word)
         i++;
     }
     return start + i == end;
+}
+
+static u32 p2p_chat_short_id_from_eid(const app_eid_t *eid)
+{
+    app_peer_record_t *peer;
+
+    if (!eid) {
+        return 0;
+    }
+
+    peer = app_peer_table_find(eid);
+    return peer ? peer->short_id : 0;
+}
+
+static void notify_p2p_chat_plain(u32 short_id, s8 rssi, const u8 *text, u16 len)
+{
+    u16 copy_len;
+    u8 flags = 0;
+
+    if (!text || !len) {
+        return;
+    }
+
+    copy_len = len;
+    if (copy_len > APP_HOST_P2P_CHAT_TEXT_MAX_LEN) {
+        copy_len = APP_HOST_P2P_CHAT_TEXT_MAX_LEN;
+        flags |= HOST_P2P_CHAT_EVENT_FLAG_TRUNCATED;
+    }
+
+    wr32(&s_evt_buf[0], short_id);
+    s_evt_buf[4] = (u8)rssi;
+    s_evt_buf[5] = flags;
+    wr16(&s_evt_buf[6], len);
+    memcpy(&s_evt_buf[HOST_P2P_CHAT_EVENT_HEADER_LEN], text, copy_len);
+    s_evt_len = (u16)(HOST_P2P_CHAT_EVENT_HEADER_LEN + copy_len);
+    s_p2p_chat_event_pending = 1;
+    s_p2p_chat_event_tick = clock_time();
+    s_p2p_chat_event_rx_count++;
 }
 
 static void shell_capture_write(void *ctx, const char *text, u16 len)
@@ -609,7 +650,7 @@ static void handle_shell_exec(u8 seq, const u8 *payload, u16 len)
 
 static void handle_p2p_chat_send(u8 seq, const u8 *payload, u16 len)
 {
-    if (!payload || !len || len > APP_PEER_TRANSPORT_MESSAGE_MAX_LEN) {
+    if (!payload || !len || len > HOST_P2P_CHAT_PLAIN_MAX_LEN) {
         send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_PARAM, 0, 0);
         return;
     }
@@ -649,8 +690,11 @@ static void handle_p2p_chat_pending(void)
 {
     app_peer_record_t peer;
     app_status_t st;
+    u8 encrypted[APP_HOST_P2P_CHAT_TEXT_MAX_LEN + APP_CHAT_CRYPTO_HEADER_LEN];
+    u32 nonce;
     u8 seq;
     u16 len;
+    u16 encrypted_len = 0;
     u8 peer_count;
 
     if (!s_pending.active || s_pending.cmd != HOST_CMD_P2P_CHAT_SEND) {
@@ -678,7 +722,22 @@ static void handle_p2p_chat_pending(void)
         return;
     }
 
-    st = app_peer_transport_send_message(&peer.eid, APP_PEER_MSG_USER, s_pending.data.payload, len,
+    s_p2p_chat_nonce++;
+    if (!s_p2p_chat_nonce) {
+        s_p2p_chat_nonce = 1;
+    }
+    nonce = clock_time() ^ rand() ^ app_identity_get_short_id() ^ ((u32)s_p2p_chat_nonce << 16);
+    st = app_crypto_chat_encrypt(app_identity_get_eid(), &peer.eid, nonce,
+                                 s_pending.data.payload, len,
+                                 encrypted, sizeof(encrypted),
+                                 &encrypted_len);
+    if (st != APP_OK) {
+        s_pending.active = 0;
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, host_status_from_app(st), 0, 0);
+        return;
+    }
+
+    st = app_peer_transport_send_message(&peer.eid, APP_PEER_MSG_USER, encrypted, encrypted_len,
                                          APP_PEER_SEND_RELIABLE,
                                          APP_PEER_TRANSPORT_FRAME_FLAG_NOTIFY);
     s_pending.active = 0;
@@ -690,7 +749,7 @@ static void handle_p2p_chat_pending(void)
     s_rsp_buf[0] = 1;
     s_rsp_buf[1] = app_peer_table_count();
     wr16(&s_rsp_buf[2], len);
-    wr16(&s_rsp_buf[4], APP_PEER_TRANSPORT_MESSAGE_MAX_LEN);
+    wr16(&s_rsp_buf[4], HOST_P2P_CHAT_PLAIN_MAX_LEN);
     s_rsp_buf[6] = APP_PEER_TRANSPORT_PAYLOAD_MAX_LEN;
     s_rsp_buf[7] = APP_PEER_TRANSPORT_MAX_FRAGMENTS;
     send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_OK, s_rsp_buf, 8);
@@ -1110,34 +1169,31 @@ void app_host_cmd_log_text(u8 level, const char *tag, const char *msg)
 
 void app_host_cmd_notify_p2p_chat(const app_eid_t *src_eid, s8 rssi, const u8 *text, u16 len)
 {
-    u16 copy_len;
-    app_peer_record_t *peer;
-    u32 short_id = 0;
-    u8 flags = 0;
+    notify_p2p_chat_plain(p2p_chat_short_id_from_eid(src_eid), rssi, text, len);
+}
 
-    if (!text || !len) {
+void app_host_cmd_notify_p2p_chat_encrypted(const app_eid_t *src_eid, s8 rssi, const u8 *payload, u16 len)
+{
+    u16 plain_len = 0;
+
+    if (!payload || !len) {
         return;
     }
 
-    if (src_eid) {
-        peer = app_peer_table_find(src_eid);
-        if (peer) {
-            short_id = peer->short_id;
-        }
+    if (app_crypto_chat_decrypt(app_identity_get_eid(), src_eid,
+                                payload, len,
+                                &s_evt_buf[HOST_P2P_CHAT_EVENT_HEADER_LEN],
+                                APP_HOST_P2P_CHAT_TEXT_MAX_LEN,
+                                &plain_len) != APP_OK ||
+        !plain_len) {
+        return;
     }
 
-    copy_len = len;
-    if (copy_len > APP_HOST_MESSAGE_MAX_LEN - HOST_P2P_CHAT_EVENT_HEADER_LEN) {
-        copy_len = APP_HOST_MESSAGE_MAX_LEN - HOST_P2P_CHAT_EVENT_HEADER_LEN;
-        flags |= HOST_P2P_CHAT_EVENT_FLAG_TRUNCATED;
-    }
-
-    wr32(&s_evt_buf[0], short_id);
+    wr32(&s_evt_buf[0], p2p_chat_short_id_from_eid(src_eid));
     s_evt_buf[4] = (u8)rssi;
-    s_evt_buf[5] = flags;
-    wr16(&s_evt_buf[6], len);
-    memcpy(&s_evt_buf[HOST_P2P_CHAT_EVENT_HEADER_LEN], text, copy_len);
-    s_evt_len = (u16)(HOST_P2P_CHAT_EVENT_HEADER_LEN + copy_len);
+    s_evt_buf[5] = 0;
+    wr16(&s_evt_buf[6], plain_len);
+    s_evt_len = (u16)(HOST_P2P_CHAT_EVENT_HEADER_LEN + plain_len);
     s_p2p_chat_event_pending = 1;
     s_p2p_chat_event_tick = clock_time();
     s_p2p_chat_event_rx_count++;

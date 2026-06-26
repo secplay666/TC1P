@@ -247,7 +247,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private void renderMessagesPage() {
         LinearLayout card = card();
         card.addView(label("暂无新的对话", 20, color(0x1F2420), true));
-        card.addView(label("收到或发出的微光消息会出现在这里。消息未送达时，会明确提示对方暂时不可达。", 15, color(0x667068), false),
+        card.addView(label("收到或发出的微光消息会出现在这里。Glimmer 终端会加密转发，对方暂时不可达时会明确提示。", 15, color(0x667068), false),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
         content.addView(card, cardParams());
 
