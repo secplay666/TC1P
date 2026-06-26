@@ -4,6 +4,7 @@
 #include "../discovery/app_discovery.h"
 #include "../host_adv/app_host_adv.h"
 #include "../identity/app_identity.h"
+#include "../profile/app_profile.h"
 #include "../peer_transport/app_peer_transport.h"
 #include "../common/app_debug_print.h"
 #include "common/string.h"
@@ -124,6 +125,8 @@ void app_scan_on_report(const app_scan_report_t *report)
     s_debug.last_src0 = frame.src_eid.bytes[0];
     s_debug.last_src1 = frame.src_eid.bytes[1];
     if (frame.type == ADV_FRAME_BEACON) {
+        app_peer_profile_t profile;
+        app_status_t profile_st;
         s_debug.beacon_rx++;
 #if APP_SCAN_RX_LOG_ENABLE
         if (s_beacon_log_count < 30) {
@@ -141,6 +144,13 @@ void app_scan_on_report(const app_scan_report_t *report)
         s_beacon_eid = frame.src_eid;
         s_beacon_rssi = report->rssi;
         s_beacon_pending = 1;
+        memset(&profile, 0, sizeof(profile));
+        profile_st = frame.payload_len > 21 ?
+            app_profile_parse_adv_block(&frame.payload[21], (u8)(frame.payload_len - 21), &profile) :
+            APP_ERR_NOT_FOUND;
+        if (profile_st == APP_OK) {
+            app_profile_cache_peer(&frame.src_eid, report->rssi, &profile);
+        }
     } else if (frame.type == ADV_FRAME_DATA) {
         s_debug.data_rx++;
 #if APP_SCAN_RX_LOG_ENABLE

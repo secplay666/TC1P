@@ -12,6 +12,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -27,6 +28,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private final List<Button> navButtons = new ArrayList<>();
     private final List<GlimmerBleClient.ScanDevice> scanDevices = new ArrayList<>();
     private final List<HostProtocol.PeerInfo> peers = new ArrayList<>();
+    private final List<HostProtocol.PeerProfileInfo> peerProfiles = new ArrayList<>();
     private final List<String> eventLines = new ArrayList<>();
 
     private GlimmerBleClient bleClient;
@@ -39,6 +41,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private String connectionStatus = "我的 Glimmer 未连接";
     private HostProtocol.DeviceInfo deviceInfo;
+    private HostProtocol.ProfileSummary myProfile;
+    private EditText nicknameEdit;
+    private EditText signatureEdit;
     private boolean debugReady;
 
     @Override
@@ -167,8 +172,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 0, dp(4), 0, dp(10)));
         if (!debugReady) {
             content.addView(emptyStateCard("先连接你的 Glimmer", "连接自己的终端后，这里会显示附近可交流的微光。"), cardParams());
-        } else if (peers.isEmpty()) {
+        } else if (peers.isEmpty() && peerProfiles.isEmpty()) {
             content.addView(emptyStateCard("附近暂时没有微光", "可以下拉刷新，或者稍后再看看。"), cardParams());
+        } else if (!peerProfiles.isEmpty()) {
+            for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+                content.addView(peerProfileCard(profile), cardParams());
+            }
         } else {
             for (HostProtocol.PeerInfo peer : peers) {
                 content.addView(peerCard(peer), cardParams());
@@ -247,11 +256,17 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private void renderMinePage() {
         LinearLayout profile = card();
-        profile.addView(label("我的微光", 20, color(0x1F2420), true));
-        profile.addView(label("未命名的微光", 18, color(0x2F8F7B), true),
+        profile.addView(label("附近预览卡片", 20, color(0x1F2420), true));
+        profile.addView(label(myProfile == null ? "还没有从终端同步资料卡" : myProfile.displayName(), 18, color(0x2F8F7B), true),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
-        profile.addView(label("今晚想听一个不会太吵的故事。", 14, color(0x667068), false),
-                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(6), 0, 0));
+        profile.addView(label(myProfile == null ? "连接 Glimmer 后可以写入昵称和一句话。" : myProfile.signatureText(), 14, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(6), 0, dp(12)));
+        nicknameEdit = editText(myProfile == null ? "微光旅人" : myProfile.displayName());
+        signatureEdit = editText(myProfile == null ? "今晚想听温柔故事" : myProfile.signatureText());
+        profile.addView(nicknameEdit, marginParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), 0, 0, 0, dp(8)));
+        profile.addView(signatureEdit, marginParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), 0, 0, 0, dp(12)));
+        profile.addView(primaryButton("保存到 Glimmer", v -> saveProfileCard()),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
         content.addView(profile, cardParams());
 
         LinearLayout device = card();
@@ -262,8 +277,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, dp(12)));
         device.addView(primaryButton(debugReady ? "同步设备状态" : "寻找我的 Glimmer", v -> {
             if (debugReady) {
-                bleClient.requestDeviceInfo();
-                bleClient.requestPeerTable();
+                bleClient.requestFullSync();
                 setLocalStatus("正在同步 Glimmer 状态");
             } else {
                 startScanFlow();
@@ -322,6 +336,32 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         row.addView(infoPill(peer.proximityText()), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
+    }
+
+    private LinearLayout peerProfileCard(HostProtocol.PeerProfileInfo profile) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(13), dp(14), dp(13));
+        row.setBackground(rounded(0xFFFFFF, 8));
+
+        row.addView(avatar(profile.displayName().substring(0, 1), 0x2F8F7B),
+                new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setPadding(dp(12), 0, dp(8), 0);
+        copy.addView(label(profile.displayName(), 16, color(0x1F2420), true));
+        copy.addView(label(profile.signatureText(), 13, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(4), 0, 0));
+        copy.addView(label(profile.proximityText() + " · " + profile.signalText(), 12, color(0x9AA39C), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(4), 0, 0));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        row.addView(infoPill(profile.proximityText()), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         return row;
@@ -394,8 +434,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
 
         setLocalStatus("正在同步 Glimmer 状态");
-        bleClient.requestDeviceInfo();
-        bleClient.requestPeerTable();
+        bleClient.requestFullSync();
         endRefreshingSoon();
     }
 
@@ -409,6 +448,17 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         bleClient.startScan();
         rerenderCurrentTab();
+    }
+
+    private void saveProfileCard() {
+        if (!debugReady) {
+            setLocalStatus("请先连接我的 Glimmer");
+            return;
+        }
+        String nickname = nicknameEdit == null ? "" : nicknameEdit.getText().toString();
+        String signature = signatureEdit == null ? "" : signatureEdit.getText().toString();
+        bleClient.setProfileSummary(nickname, signature);
+        setLocalStatus("正在保存附近预览卡片");
     }
 
     private boolean ensurePermissions(boolean requestIfMissing) {
@@ -470,7 +520,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         debugReady = ready;
         if (!ready) {
             deviceInfo = null;
+            myProfile = null;
             peers.clear();
+            peerProfiles.clear();
         }
         rerenderCurrentTab();
     }
@@ -485,6 +537,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 peers.clear();
                 peers.addAll(HostProtocol.parsePeerTable(message.payload));
                 pushEvent(peers.isEmpty() ? "附近列表已刷新，暂时没有微光" : "发现 " + peers.size() + " 束附近微光");
+            } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PROFILE_SUMMARY && message.status == 0) {
+                myProfile = HostProtocol.parseProfileSummary(message.payload);
+                setLocalStatus("附近预览卡片已同步");
+                pushEvent("附近预览卡片已同步");
+            } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_PROFILES && message.status == 0) {
+                peerProfiles.clear();
+                peerProfiles.addAll(HostProtocol.parsePeerProfiles(message.payload));
+                if (!peerProfiles.isEmpty()) {
+                    pushEvent("读到 " + peerProfiles.size() + " 张附近资料卡");
+                }
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT) {
                 HostProtocol.ChatEvent event = HostProtocol.parseChatEvent(message.payload);
                 pushEvent(event.isDropped() ? "一条微光已过期" : "收到一条来自附近的微光");
@@ -539,10 +601,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (!debugReady) {
             return "先连接你的 Glimmer";
         }
-        if (peers.isEmpty()) {
+        if (peers.isEmpty() && peerProfiles.isEmpty()) {
             return "附近暂时没有微光";
         }
-        return peers.size() + " 束微光在附近";
+        int count = Math.max(peers.size(), peerProfiles.size());
+        return count + " 束微光在附近";
     }
 
     private String nearbyCopy() {
@@ -586,10 +649,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (!debugReady) {
             return "连接终端后同步附近状态";
         }
-        if (peers.isEmpty()) {
+        if (peers.isEmpty() && peerProfiles.isEmpty()) {
             return "附近暂时没有微光";
         }
-        return "附近有 " + peers.size() + " 束微光";
+        int count = Math.max(peers.size(), peerProfiles.size());
+        return "附近有 " + count + " 束微光";
     }
 
     private String deviceInfoSummary() {
@@ -720,6 +784,17 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         button.setTextSize(14);
         button.setOnClickListener(listener);
         return button;
+    }
+
+    private EditText editText(String text) {
+        EditText edit = new EditText(this);
+        edit.setSingleLine(true);
+        edit.setText(text);
+        edit.setTextSize(14);
+        edit.setTextColor(color(0x1F2420));
+        edit.setPadding(dp(12), 0, dp(12), 0);
+        edit.setBackground(rounded(0xF1F6F2, 8));
+        return edit;
     }
 
     private View spacer(int width, int height) {

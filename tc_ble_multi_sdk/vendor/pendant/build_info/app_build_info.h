@@ -8,10 +8,10 @@
 #define APP_BUILD_BOARD_NAME       "B85_DANGLE"
 #define APP_BUILD_CHIP_NAME        "TLSR8258"
 
-#define APP_BUILD_GIT_SHA          "f789170396ce"
+#define APP_BUILD_GIT_SHA          "a6613085ff4f"
 #define APP_BUILD_GIT_BRANCH       "master"
 #define APP_BUILD_GIT_DIRTY        1
-#define APP_BUILD_GIT_DESC         "f789170396ce-dirty"
+#define APP_BUILD_GIT_DESC         "a6613085ff4f-dirty"
 
 #define APP_BUILD_COMPILE_DATE     __DATE__
 #define APP_BUILD_COMPILE_TIME     __TIME__

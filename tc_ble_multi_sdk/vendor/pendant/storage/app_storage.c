@@ -14,7 +14,7 @@ static const char *const s_part_names[APP_STORAGE_PART_COUNT] = {
     "identity",
     "config",
     "bond",
-    "event_log",
+    "profile",
     "factory",
 };
 

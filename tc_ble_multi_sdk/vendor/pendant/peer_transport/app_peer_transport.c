@@ -6,7 +6,7 @@
 #include "timer.h"
 
 #define APP_PEER_RX_CONTEXT_COUNT               1
-#define APP_PEER_COMPLETED_CACHE_COUNT          2
+#define APP_PEER_COMPLETED_CACHE_COUNT          1
 #define APP_PEER_TX_ACK_WAIT_US                 800000
 #define APP_PEER_TX_TOTAL_TIMEOUT_US            10000000
 #define APP_PEER_TX_MAX_RETRY_ROUNDS            4

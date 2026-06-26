@@ -5,6 +5,7 @@
 #include "../storage/app_storage.h"
 #include "../config/app_config_store.h"
 #include "../identity/app_identity.h"
+#include "../profile/app_profile.h"
 #include "../ble/app_ble.h"
 #include "../pm/app_pm.h"
 #include "../app_config.h"
@@ -47,6 +48,11 @@ static app_status_t app_system_self_check(void)
     }
 
     st = app_identity_self_check();
+    if (st != APP_OK) {
+        return st;
+    }
+
+    st = app_profile_load();
     if (st != APP_OK) {
         return st;
     }

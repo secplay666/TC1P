@@ -28,6 +28,14 @@ final class HostProtocol {
     static final int CMD_LOG_ENABLE = 0x07;
     static final int CMD_SHELL_EXEC = 0x10;
     static final int CMD_P2P_CHAT_SEND = 0x11;
+    static final int CMD_GET_PROFILE_SUMMARY = 0x12;
+    static final int CMD_SET_PROFILE_SUMMARY = 0x13;
+    static final int CMD_GET_PEER_PROFILES = 0x14;
+
+    static final int PROFILE_FLAG_VISIBLE = 0x01;
+    static final int PROFILE_TAG_MAX_COUNT = 6;
+    static final int PROFILE_NICKNAME_MAX_BYTES = 18;
+    static final int PROFILE_SIGNATURE_MAX_BYTES = 28;
 
     static final int EVENT_P2P_CHAT = 0x84;
     static final int EVENT_P2P_CHAT_TX_RESULT = 0x85;
@@ -63,6 +71,29 @@ final class HostProtocol {
             throw new IllegalArgumentException("chat text too long: " + payload.length + " > " + MESSAGE_MAX_LEN);
         }
         return encodeMessage(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, payload);
+    }
+
+    static List<byte[]> makeSetProfileSummary(int seq, String nickname, String signature, int avatarSeed, int[] tags) {
+        byte[] nicknameBytes = utf8Limit(nickname == null ? "" : nickname.trim(), PROFILE_NICKNAME_MAX_BYTES);
+        byte[] signatureBytes = utf8Limit(signature == null ? "" : signature.trim(), PROFILE_SIGNATURE_MAX_BYTES);
+        byte[] payload = new byte[8 + PROFILE_TAG_MAX_COUNT + nicknameBytes.length + signatureBytes.length];
+        int offset = 0;
+
+        payload[offset++] = PROFILE_FLAG_VISIBLE;
+        wr32le(payload, offset, avatarSeed);
+        offset += 4;
+        int tagCount = tags == null ? 0 : Math.min(tags.length, PROFILE_TAG_MAX_COUNT);
+        payload[offset++] = (byte) tagCount;
+        payload[offset++] = (byte) nicknameBytes.length;
+        payload[offset++] = (byte) signatureBytes.length;
+        for (int i = 0; i < PROFILE_TAG_MAX_COUNT; i++) {
+            int value = i < tagCount ? tags[i] : 0;
+            payload[offset++] = (byte) value;
+        }
+        System.arraycopy(nicknameBytes, 0, payload, offset, nicknameBytes.length);
+        offset += nicknameBytes.length;
+        System.arraycopy(signatureBytes, 0, payload, offset, signatureBytes.length);
+        return encodeMessage(TYPE_CMD, seq, CMD_SET_PROFILE_SUMMARY, 0, payload);
     }
 
     static List<byte[]> encodeMessage(int frameType, int seq, int cmd, int status, byte[] payload) {
@@ -216,6 +247,74 @@ final class HostProtocol {
                 u32le(payload, 10));
     }
 
+    static ProfileSummary parseProfileSummary(byte[] payload) {
+        if (payload.length < 12 + PROFILE_TAG_MAX_COUNT) {
+            throw new IllegalArgumentException("profile payload too short");
+        }
+
+        int offset = 0;
+        int version = u8(payload[offset++]);
+        int flags = u8(payload[offset++]);
+        int seq = u16le(payload, offset);
+        offset += 2;
+        int keyId = u8(payload[offset++]);
+        long avatarSeed = u32le(payload, offset);
+        offset += 4;
+        int tagCount = Math.min(u8(payload[offset++]), PROFILE_TAG_MAX_COUNT);
+        int nicknameLen = u8(payload[offset++]);
+        int signatureLen = u8(payload[offset++]);
+        int[] tags = new int[PROFILE_TAG_MAX_COUNT];
+        for (int i = 0; i < PROFILE_TAG_MAX_COUNT; i++) {
+            tags[i] = u8(payload[offset++]);
+        }
+        if (payload.length < offset + nicknameLen + signatureLen) {
+            throw new IllegalArgumentException("profile string length mismatch");
+        }
+        String nickname = new String(payload, offset, nicknameLen, StandardCharsets.UTF_8);
+        offset += nicknameLen;
+        String signature = new String(payload, offset, signatureLen, StandardCharsets.UTF_8);
+        return new ProfileSummary(version, flags, seq, keyId, avatarSeed, tagCount, tags, nickname, signature);
+    }
+
+    static List<PeerProfileInfo> parsePeerProfiles(byte[] payload) {
+        List<PeerProfileInfo> profiles = new ArrayList<>();
+        if (payload.length == 0) {
+            return profiles;
+        }
+
+        int count = u8(payload[0]);
+        int offset = 1;
+        for (int i = 0; i < count && offset + 18 + PROFILE_TAG_MAX_COUNT <= payload.length; i++) {
+            long shortId = u32le(payload, offset);
+            offset += 4;
+            int level = u8(payload[offset++]);
+            int rssi = i8(payload[offset++]);
+            int rssiAvg = i8(payload[offset++]);
+            int peerFlags = u8(payload[offset++]);
+            int profileFlags = u8(payload[offset++]);
+            int seq = u16le(payload, offset);
+            offset += 2;
+            long avatarSeed = u32le(payload, offset);
+            offset += 4;
+            int tagCount = Math.min(u8(payload[offset++]), PROFILE_TAG_MAX_COUNT);
+            int nicknameLen = u8(payload[offset++]);
+            int signatureLen = u8(payload[offset++]);
+            int[] tags = new int[PROFILE_TAG_MAX_COUNT];
+            for (int j = 0; j < PROFILE_TAG_MAX_COUNT; j++) {
+                tags[j] = u8(payload[offset++]);
+            }
+            if (payload.length < offset + nicknameLen + signatureLen) {
+                break;
+            }
+            String nickname = new String(payload, offset, nicknameLen, StandardCharsets.UTF_8);
+            offset += nicknameLen;
+            String signature = new String(payload, offset, signatureLen, StandardCharsets.UTF_8);
+            profiles.add(new PeerProfileInfo(shortId, level, rssi, rssiAvg, peerFlags,
+                    profileFlags, seq, avatarSeed, tagCount, tags, nickname, signature));
+        }
+        return profiles;
+    }
+
     static String formatResponse(HostMessage message) {
         String name = cmdName(message.cmd);
         String status = statusName(message.status);
@@ -246,6 +345,11 @@ final class HostProtocol {
                                 u8(message.payload[7]));
                     }
                     return name + ": " + status;
+                case CMD_GET_PROFILE_SUMMARY:
+                    ProfileSummary profile = parseProfileSummary(message.payload);
+                    return String.format(Locale.US, "%s: %s / %s", name, profile.displayName(), profile.signature);
+                case CMD_GET_PEER_PROFILES:
+                    return name + ": " + parsePeerProfiles(message.payload).size() + " profile(s)";
                 default:
                     return name + ": " + status + ", payload=" + hex(message.payload);
             }
@@ -395,6 +499,12 @@ final class HostProtocol {
                 return "SHELL_EXEC";
             case CMD_P2P_CHAT_SEND:
                 return "P2P_CHAT_SEND";
+            case CMD_GET_PROFILE_SUMMARY:
+                return "GET_PROFILE_SUMMARY";
+            case CMD_SET_PROFILE_SUMMARY:
+                return "SET_PROFILE_SUMMARY";
+            case CMD_GET_PEER_PROFILES:
+                return "GET_PEER_PROFILES";
             default:
                 return "0x" + hex2(cmd);
         }
@@ -454,6 +564,29 @@ final class HostProtocol {
 
     private static String hex2(int value) {
         return String.format(Locale.US, "%02X", value & 0xFF);
+    }
+
+    private static void wr32le(byte[] data, int offset, int value) {
+        data[offset] = (byte) value;
+        data[offset + 1] = (byte) (value >> 8);
+        data[offset + 2] = (byte) (value >> 16);
+        data[offset + 3] = (byte) (value >> 24);
+    }
+
+    private static byte[] utf8Limit(String value, int maxBytes) {
+        byte[] raw = value.getBytes(StandardCharsets.UTF_8);
+        if (raw.length <= maxBytes) {
+            return raw;
+        }
+        int end = value.length();
+        while (end > 0) {
+            byte[] candidate = value.substring(0, end).getBytes(StandardCharsets.UTF_8);
+            if (candidate.length <= maxBytes) {
+                return candidate;
+            }
+            end--;
+        }
+        return new byte[0];
     }
 
     static String shortIdText(long shortId) {
@@ -598,6 +731,109 @@ final class HostProtocol {
 
         boolean isSuccess() {
             return hostStatus == 0;
+        }
+    }
+
+    static final class ProfileSummary {
+        final int version;
+        final int flags;
+        final int seq;
+        final int keyId;
+        final long avatarSeed;
+        final int tagCount;
+        final int[] tags;
+        final String nickname;
+        final String signature;
+
+        ProfileSummary(int version, int flags, int seq, int keyId, long avatarSeed,
+                       int tagCount, int[] tags, String nickname, String signature) {
+            this.version = version;
+            this.flags = flags;
+            this.seq = seq;
+            this.keyId = keyId;
+            this.avatarSeed = avatarSeed;
+            this.tagCount = tagCount;
+            this.tags = tags;
+            this.nickname = nickname;
+            this.signature = signature;
+        }
+
+        String displayName() {
+            return nickname == null || nickname.isEmpty() ? "未命名的微光" : nickname;
+        }
+
+        String signatureText() {
+            return signature == null || signature.isEmpty() ? "一束安静的微光。" : signature;
+        }
+    }
+
+    static final class PeerProfileInfo {
+        final long shortId;
+        final int level;
+        final int rssi;
+        final int rssiAvg;
+        final int peerFlags;
+        final int profileFlags;
+        final int seq;
+        final long avatarSeed;
+        final int tagCount;
+        final int[] tags;
+        final String nickname;
+        final String signature;
+
+        PeerProfileInfo(long shortId, int level, int rssi, int rssiAvg, int peerFlags,
+                        int profileFlags, int seq, long avatarSeed, int tagCount,
+                        int[] tags, String nickname, String signature) {
+            this.shortId = shortId;
+            this.level = level;
+            this.rssi = rssi;
+            this.rssiAvg = rssiAvg;
+            this.peerFlags = peerFlags;
+            this.profileFlags = profileFlags;
+            this.seq = seq;
+            this.avatarSeed = avatarSeed;
+            this.tagCount = tagCount;
+            this.tags = tags;
+            this.nickname = nickname;
+            this.signature = signature;
+        }
+
+        String shortCode() {
+            return shortIdText(shortId);
+        }
+
+        String displayName() {
+            return nickname == null || nickname.isEmpty() ? "一束微光" : nickname;
+        }
+
+        String signatureText() {
+            return signature == null || signature.isEmpty() ? "对方还没有留下一句话。" : signature;
+        }
+
+        String proximityText() {
+            switch (level) {
+                case 3:
+                    return "很近";
+                case 2:
+                    return "附近";
+                case 1:
+                    return "稍远";
+                case 4:
+                    return "刚离开";
+                default:
+                    return "可见";
+            }
+        }
+
+        String signalText() {
+            int value = rssiAvg != 0 ? rssiAvg : rssi;
+            if (value >= -55) {
+                return "信号稳定";
+            }
+            if (value >= -72) {
+                return "信号良好";
+            }
+            return "信号较弱";
         }
     }
 

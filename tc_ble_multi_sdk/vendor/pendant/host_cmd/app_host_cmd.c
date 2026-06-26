@@ -9,6 +9,7 @@
 #include "../config/app_config_store.h"
 #include "../storage/app_storage.h"
 #include "../factory/app_factory.h"
+#include "../profile/app_profile.h"
 #include "../adv_scheduler/app_adv_scheduler.h"
 #include "../peer_table/app_peer_table.h"
 #include "../peer_transport/app_peer_transport.h"
@@ -26,6 +27,7 @@
 #define HOST_P2P_CHAT_EVENT_FLAG_DROPPED   0x02
 #define HOST_P2P_CHAT_DELIVERY_TTL_US      5000000
 #define HOST_P2P_CHAT_DROP_NOTICE_TTL_US   60000000
+#define HOST_PROFILE_LIST_RSP_MAX_LEN      72
 
 #define HOST_LOG_LEVEL_INFO  1
 #define HOST_LOG_LEVEL_ERROR 2
@@ -46,7 +48,7 @@ static u8 s_log_enable;
 static u16 s_log_count;
 static u16 s_cmd_count;
 static u16 s_crc_error_count;
-static u8 s_rsp_buf[APP_ADV_FRAME_MAX_LEN];
+static u8 s_rsp_buf[APP_HOST_MESSAGE_MAX_LEN];
 static u8 s_evt_buf[APP_HOST_MESSAGE_MAX_LEN];
 static u16 s_evt_len;
 static u8 s_p2p_chat_event_pending;
@@ -70,6 +72,7 @@ typedef struct {
 typedef union {
     host_pending_t pending;
     app_peer_record_t peer_snapshot[APP_PEER_MAX_COUNT];
+    app_profile_peer_record_t profile_snapshot[APP_PROFILE_PEER_CACHE_COUNT];
 } host_cmd_scratch_t;
 
 static host_cmd_scratch_t s_scratch;
@@ -258,7 +261,7 @@ static void handle_get_system_state(u8 seq)
 static void handle_get_adv_frame(u8 seq)
 {
     u8 len = 0;
-    app_status_t st = app_adv_scheduler_build_next_adv_data(s_rsp_buf, APP_ADV_FRAME_MAX_LEN, &len);
+    app_status_t st = app_adv_scheduler_build_next_adv_data(s_rsp_buf, APP_HOST_MESSAGE_MAX_LEN, &len);
     send_rsp(seq, HOST_CMD_GET_ADV_FRAME, host_status_from_app(st), s_rsp_buf, st == APP_OK ? len : 0);
 }
 
@@ -281,6 +284,84 @@ static void handle_get_peer_table(u8 seq)
     }
     s_rsp_buf[0] = included;
     send_rsp(seq, HOST_CMD_GET_PEER_TABLE, HOST_STATUS_OK, s_rsp_buf, offset);
+}
+
+static void handle_get_profile_summary(u8 seq)
+{
+    u16 len = app_profile_build_host_payload(s_rsp_buf, APP_HOST_MESSAGE_MAX_LEN);
+    if (!len) {
+        send_rsp(seq, HOST_CMD_GET_PROFILE_SUMMARY, HOST_STATUS_ERR_STATE, 0, 0);
+        return;
+    }
+    send_rsp(seq, HOST_CMD_GET_PROFILE_SUMMARY, HOST_STATUS_OK, s_rsp_buf, len);
+}
+
+static void handle_get_peer_profiles(u8 seq)
+{
+    u8 count;
+    u8 i;
+    u8 included = 0;
+    u16 offset = 1;
+
+    count = app_profile_copy_peers(s_scratch.profile_snapshot, APP_PROFILE_PEER_CACHE_COUNT);
+    for (i = 0; i < count; i++) {
+        const app_profile_peer_record_t *cached = &s_scratch.profile_snapshot[i];
+        const app_peer_record_t *peer = app_peer_table_find(&cached->eid);
+        const app_peer_profile_t *profile = &cached->profile;
+        u32 short_id;
+        u8 level = PEER_LEVEL_NONE;
+        s8 rssi = cached->rssi;
+        s8 rssi_avg = cached->rssi;
+        u8 peer_flags = 0;
+        u16 need;
+
+        if (!cached->in_use || !(profile->flags & APP_PROFILE_PEER_FLAG_VALID)) {
+            continue;
+        }
+        need = (u16)(18 + APP_PROFILE_TAG_MAX_COUNT + profile->nickname_len + profile->signature_len);
+        if (profile->nickname_len > APP_PROFILE_NICKNAME_MAX_LEN ||
+            profile->signature_len > APP_PROFILE_SIGNATURE_MAX_LEN ||
+            profile->tag_count > APP_PROFILE_TAG_MAX_COUNT ||
+            offset + need > HOST_PROFILE_LIST_RSP_MAX_LEN) {
+            break;
+        }
+
+        short_id = ((u32)cached->eid.bytes[0]) |
+                   ((u32)cached->eid.bytes[1] << 8) |
+                   ((u32)cached->eid.bytes[2] << 16) |
+                   ((u32)cached->eid.bytes[3] << 24);
+        if (peer) {
+            level = (u8)peer->level;
+            rssi = peer->rssi;
+            rssi_avg = peer->rssi_avg;
+            peer_flags = peer->flags;
+        }
+
+        wr32(&s_rsp_buf[offset], short_id); offset = (u16)(offset + 4);
+        s_rsp_buf[offset++] = level;
+        s_rsp_buf[offset++] = (u8)rssi;
+        s_rsp_buf[offset++] = (u8)rssi_avg;
+        s_rsp_buf[offset++] = peer_flags;
+        s_rsp_buf[offset++] = profile->flags;
+        wr16(&s_rsp_buf[offset], profile->seq); offset = (u16)(offset + 2);
+        wr32(&s_rsp_buf[offset], profile->avatar_seed); offset = (u16)(offset + 4);
+        s_rsp_buf[offset++] = profile->tag_count;
+        s_rsp_buf[offset++] = profile->nickname_len;
+        s_rsp_buf[offset++] = profile->signature_len;
+        memcpy(&s_rsp_buf[offset], profile->tags, APP_PROFILE_TAG_MAX_COUNT); offset = (u16)(offset + APP_PROFILE_TAG_MAX_COUNT);
+        if (profile->nickname_len) {
+            memcpy(&s_rsp_buf[offset], profile->nickname, profile->nickname_len);
+            offset = (u16)(offset + profile->nickname_len);
+        }
+        if (profile->signature_len) {
+            memcpy(&s_rsp_buf[offset], profile->signature, profile->signature_len);
+            offset = (u16)(offset + profile->signature_len);
+        }
+        included++;
+    }
+
+    s_rsp_buf[0] = included;
+    send_rsp(seq, HOST_CMD_GET_PEER_PROFILES, HOST_STATUS_OK, s_rsp_buf, offset);
 }
 
 static void handle_set_rssi_config(u8 seq, const u8 *payload, u16 len)
@@ -545,6 +626,25 @@ static void handle_p2p_chat_send(u8 seq, const u8 *payload, u16 len)
     memcpy(s_pending.data.payload, payload, len);
 }
 
+static void handle_set_profile_summary(u8 seq, const u8 *payload, u16 len)
+{
+    if (!payload || !len || len > sizeof(s_pending.data.payload)) {
+        send_rsp(seq, HOST_CMD_SET_PROFILE_SUMMARY, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
+    }
+    if (s_pending.active) {
+        send_rsp(seq, HOST_CMD_SET_PROFILE_SUMMARY, HOST_STATUS_ERR_BUSY, 0, 0);
+        return;
+    }
+
+    memset(&s_pending, 0, sizeof(s_pending));
+    s_pending.active = 1;
+    s_pending.seq = seq;
+    s_pending.cmd = HOST_CMD_SET_PROFILE_SUMMARY;
+    s_pending.len = len;
+    memcpy(s_pending.data.payload, payload, len);
+}
+
 static void handle_p2p_chat_pending(void)
 {
     app_peer_record_t peer;
@@ -670,6 +770,7 @@ static void handle_shell_pending(void)
 static void handle_flash_pending(void)
 {
     app_unique_id_t id;
+    app_profile_summary_t profile;
     app_status_t st;
     u32 test_mask;
     u32 result_mask = 0;
@@ -685,6 +786,22 @@ static void handle_flash_pending(void)
 
     if (s_pending.cmd == HOST_CMD_P2P_CHAT_SEND) {
         handle_p2p_chat_pending();
+        return;
+    }
+
+    if (s_pending.cmd == HOST_CMD_SET_PROFILE_SUMMARY) {
+        seq = s_pending.seq;
+        st = app_profile_parse_host_payload(s_pending.data.payload, s_pending.len, &profile);
+        if (st == APP_OK) {
+            st = app_profile_set_summary(&profile);
+        }
+        s_pending.active = 0;
+        if (st == APP_OK) {
+            app_adv_scheduler_request_beacon_update();
+            handle_get_profile_summary(seq);
+        } else {
+            send_rsp(seq, HOST_CMD_SET_PROFILE_SUMMARY, host_status_from_app(st), 0, 0);
+        }
         return;
     }
 
@@ -793,6 +910,12 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
     case HOST_CMD_GET_PEER_TABLE:
         handle_get_peer_table(seq);
         break;
+    case HOST_CMD_GET_PROFILE_SUMMARY:
+        handle_get_profile_summary(seq);
+        break;
+    case HOST_CMD_GET_PEER_PROFILES:
+        handle_get_peer_profiles(seq);
+        break;
     case HOST_CMD_SET_RSSI_CONFIG:
         handle_set_rssi_config(seq, payload, len);
         break;
@@ -831,6 +954,9 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
         break;
     case HOST_CMD_P2P_CHAT_SEND:
         handle_p2p_chat_send(seq, payload, len);
+        break;
+    case HOST_CMD_SET_PROFILE_SUMMARY:
+        handle_set_profile_summary(seq, payload, len);
         break;
     default:
         send_rsp(seq, cmd, HOST_STATUS_ERR_UNSUPPORTED, 0, 0);

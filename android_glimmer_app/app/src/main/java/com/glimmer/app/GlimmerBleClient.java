@@ -223,6 +223,26 @@ final class GlimmerBleClient {
         sendPackets(HostProtocol.makeEmptyCommand(nextSeq(), HostProtocol.CMD_GET_PEER_TABLE));
     }
 
+    void requestProfileSummary() {
+        sendPackets(HostProtocol.makeEmptyCommand(nextSeq(), HostProtocol.CMD_GET_PROFILE_SUMMARY));
+    }
+
+    void requestPeerProfiles() {
+        sendPackets(HostProtocol.makeEmptyCommand(nextSeq(), HostProtocol.CMD_GET_PEER_PROFILES));
+    }
+
+    void setProfileSummary(String nickname, String signature) {
+        int seed = (int) (System.currentTimeMillis() & 0x7fffffff);
+        sendPackets(HostProtocol.makeSetProfileSummary(nextSeq(), nickname, signature, seed, new int[]{1, 2, 3}));
+    }
+
+    void requestFullSync() {
+        requestDeviceInfo();
+        handler.postDelayed(this::requestPeerTable, 250);
+        handler.postDelayed(this::requestProfileSummary, 500);
+        handler.postDelayed(this::requestPeerProfiles, 750);
+    }
+
     private void refreshAdapter() {
         if (adapter == null) {
             BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
@@ -412,8 +432,7 @@ final class GlimmerBleClient {
             debugReady = true;
             listener.onBleStatus("我的 Glimmer 已连接");
             listener.onDebugReady(true);
-            requestDeviceInfo();
-            requestPeerTable();
+            requestFullSync();
             return;
         }
 

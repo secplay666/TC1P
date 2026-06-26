@@ -22,6 +22,9 @@ typedef enum {
     HOST_CMD_RUN_FACTORY_TEST = 0x0F,
     HOST_CMD_SHELL_EXEC = 0x10,
     HOST_CMD_P2P_CHAT_SEND = 0x11,
+    HOST_CMD_GET_PROFILE_SUMMARY = 0x12,
+    HOST_CMD_SET_PROFILE_SUMMARY = 0x13,
+    HOST_CMD_GET_PEER_PROFILES = 0x14,
 } app_host_cmd_id_t;
 
 typedef enum {

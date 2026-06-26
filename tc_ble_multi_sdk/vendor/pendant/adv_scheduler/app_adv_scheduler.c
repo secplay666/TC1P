@@ -5,6 +5,7 @@
 #include "../battery/app_battery.h"
 #include "../charge/app_charge.h"
 #include "../peer_table/app_peer_table.h"
+#include "../profile/app_profile.h"
 #include "../common/app_debug_print.h"
 #include "common/string.h"
 #include "drivers.h"
@@ -15,7 +16,9 @@ static u8 s_adv_dirty;
 static u32 s_last_update_tick;
 static u8 s_data_hold_active;
 static u8 s_adv_buf[APP_ADV_FRAME_MAX_LEN];
-static u8 s_payload_buf[32];
+#define APP_ADV_BEACON_LEGACY_PAYLOAD_LEN 21
+#define APP_ADV_BEACON_PAYLOAD_BUF_LEN (APP_ADV_BEACON_LEGACY_PAYLOAD_LEN + APP_PROFILE_ADV_BLOCK_MAX_LEN)
+static u8 s_payload_buf[APP_ADV_BEACON_PAYLOAD_BUF_LEN];
 static app_adv_scheduler_debug_t s_debug;
 
 #define APP_ADV_SCHED_QUEUE_SIZE 1
@@ -103,6 +106,8 @@ static void build_beacon_payload(u8 *payload, u8 *len)
     app_charge_state_t charge;
     u32 uptime = 0;
     app_system_snapshot_t sys;
+    u8 profile_len = 0;
+    u8 offset;
 
     app_battery_get_state(&bat);
     charge = app_charge_get_state();
@@ -130,7 +135,11 @@ static void build_beacon_payload(u8 *payload, u8 *len)
     payload[18] = (u8)(uptime >> 8);
     payload[19] = (u8)(uptime >> 16);
     payload[20] = (u8)(uptime >> 24);
-    *len = 21;
+    offset = APP_ADV_BEACON_LEGACY_PAYLOAD_LEN;
+    if (app_profile_build_adv_block(&payload[offset], (u8)(APP_ADV_BEACON_PAYLOAD_BUF_LEN - offset), &profile_len) == APP_OK) {
+        offset = (u8)(offset + profile_len);
+    }
+    *len = offset;
 }
 
 app_status_t app_adv_scheduler_build_next_adv_data(u8 *buf, u8 max_len, u8 *out_len)

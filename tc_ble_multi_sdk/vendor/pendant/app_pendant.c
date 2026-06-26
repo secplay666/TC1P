@@ -6,6 +6,7 @@
 #include "crypto/app_crypto.h"
 #include "config/app_config_store.h"
 #include "identity/app_identity.h"
+#include "profile/app_profile.h"
 #include "factory/app_factory.h"
 #include "battery/app_battery.h"
 #include "charge/app_charge.h"
@@ -64,6 +65,7 @@ void app_pendant_init(void)
     app_crypto_init();
     app_config_init();
     app_identity_init();
+    app_profile_init();
     app_factory_init();
     app_battery_init();
     app_charge_init();

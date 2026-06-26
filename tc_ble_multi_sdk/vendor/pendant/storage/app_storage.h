@@ -7,10 +7,12 @@ typedef enum {
     APP_STORAGE_PART_IDENTITY = 0,
     APP_STORAGE_PART_CONFIG,
     APP_STORAGE_PART_BOND,
-    APP_STORAGE_PART_EVENT_LOG,
+    APP_STORAGE_PART_PROFILE,
     APP_STORAGE_PART_FACTORY,
     APP_STORAGE_PART_COUNT,
 } app_storage_part_t;
+
+#define APP_STORAGE_PART_EVENT_LOG APP_STORAGE_PART_PROFILE
 
 typedef struct {
     app_storage_part_t part;
