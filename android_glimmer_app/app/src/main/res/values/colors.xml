@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="glimmer_bg">#F7F8F5</color>
+    <color name="glimmer_panel">#FFFFFF</color>
+    <color name="glimmer_text">#1F2420</color>
+    <color name="glimmer_muted">#667068</color>
+    <color name="glimmer_soft">#9AA39C</color>
+    <color name="glimmer_green">#2F8F7B</color>
+    <color name="glimmer_coral">#F06D5E</color>
+    <color name="glimmer_gold">#E5B84B</color>
+    <color name="glimmer_blue">#5967D8</color>
+    <color name="glimmer_error">#D94B5C</color>
+</resources>
