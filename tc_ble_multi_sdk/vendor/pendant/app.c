@@ -1327,10 +1327,14 @@ int main_idle_loop(void)
 	//sleep_ms(20);  //make RX FIFO block, to see RX report combination effect
 
 	////////////////////////////////////// BLE entry /////////////////////////////////
+	app_pendant_trace_set(0xa0);
+	app_system_watchdog_feed();
 	blc_sdk_main_loop();
+	app_pendant_trace_set(0xa1);
 
 #if (PENDANT_USB_ENABLE)
 	app_usb_download_poll();
+	app_pendant_trace_set(0xa2);
 #endif
 
 
@@ -1343,6 +1347,7 @@ int main_idle_loop(void)
 		proc_master_role_unpair();
 	#endif
 
+	app_pendant_trace_set(0xaf);
 	return 0; //must return 0 due to SDP flow
 }
 

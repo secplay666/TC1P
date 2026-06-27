@@ -35,7 +35,7 @@
 #define ACL_PERIPHR_MAX_NUM								1
 #define MASTER_ACL_PERIPHR_MAX_NUM						(ACL_CENTRAL_MAX_NUM+ACL_PERIPHR_MAX_NUM)
 
-#define PENDANT_USB_ENABLE                             1
+#define PENDANT_USB_ENABLE                             0
 #define PENDANT_USB_POLL_INTERVAL_US                  2000
 #define PENDANT_USB_AUTO_OFF_MS                       15000
 #define PENDANT_EXT_ADV_ENABLE                        1
@@ -43,7 +43,7 @@
 #define APP_HOST_ENABLE_ADV_TRANSPORT                 0
 #define PENDANT_BLE_AUTO_START                        1
 #define PENDANT_WATCHDOG_ENABLE                       1
-#define PENDANT_WATCHDOG_TIMEOUT_MS                   3000
+#define PENDANT_WATCHDOG_TIMEOUT_MS                   10000
 #define PENDANT_DEMO_CENTRAL_CONNECT_ENABLE           0
 
 #if (PENDANT_USB_ENABLE)

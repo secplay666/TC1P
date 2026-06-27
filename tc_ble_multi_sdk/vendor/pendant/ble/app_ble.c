@@ -27,8 +27,8 @@
 #define APP_BLE_SCAN_FILTER_DUP     DUPE_FLTR_DISABLE
 #define APP_BLE_SCAN_DURATION       SCAN_DURATION_CONTINUOUS
 #define APP_BLE_SCAN_PERIOD         SCAN_WINDOW_CONTINUOUS
-#define APP_BLE_SCAN_RESTART_US     1000000
-#define APP_BLE_SCAN_RESTART_CONNECTED_US 10000000
+#define APP_BLE_SCAN_RESTART_US     0
+#define APP_BLE_SCAN_RESTART_CONNECTED_US 0
 
 static app_ble_conn_info_t s_conn;
 static u8 s_adv_scan_started;
@@ -52,8 +52,8 @@ static ble_sts_t app_ble_configure_ext_scan(void)
      * be around 50 ms, so a 50/100 ms scan window can starve connection events
      * and cause HCI_ERR_CONNECTION_TOUT on Android.
      */
-    u16 scan_interval = s_conn.connected ? SCAN_INTERVAL_500MS : SCAN_INTERVAL_100MS;
-    u16 scan_window = s_conn.connected ? SCAN_WINDOW_20MS : SCAN_WINDOW_100MS;
+    u16 scan_interval = s_conn.connected ? SCAN_INTERVAL_500MS : SCAN_INTERVAL_300MS;
+    u16 scan_window = s_conn.connected ? SCAN_WINDOW_20MS : SCAN_WINDOW_30MS;
     return blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, s_scan_filter_policy, SCAN_PHY_1M,
                                   SCAN_TYPE_PASSIVE, scan_interval, scan_window,
                                   0, 0, 0);
@@ -312,7 +312,7 @@ void app_ble_poll(void)
 {
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
     u32 restart_us = s_conn.connected ? APP_BLE_SCAN_RESTART_CONNECTED_US : APP_BLE_SCAN_RESTART_US;
-    if (s_debug.scan_enabled && s_scan_restart_tick &&
+    if (restart_us && s_debug.scan_enabled && s_scan_restart_tick &&
         clock_time_exceed(s_scan_restart_tick, restart_us)) {
         blc_ll_setExtScanEnable(BLC_SCAN_DISABLE,
                                 DUP_FILTER_DISABLE,

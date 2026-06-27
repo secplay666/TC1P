@@ -5,16 +5,29 @@
 
 static app_sleep_reason_t s_sleep_reason;
 static app_wakeup_reason_t s_wakeup_reason;
+static u8 s_raw_wakeup_src;
 
 void app_pm_init(void)
 {
     s_sleep_reason = PM_SLEEP_REASON_IDLE;
-    s_wakeup_reason = PM_WAKEUP_REASON_UNKNOWN;
+    s_raw_wakeup_src = (u8)pm_get_wakeup_src();
+    if (s_raw_wakeup_src & WAKEUP_STATUS_WD) {
+        s_wakeup_reason = PM_WAKEUP_REASON_RESET;
+    } else if (s_raw_wakeup_src & WAKEUP_STATUS_PAD) {
+        s_wakeup_reason = PM_WAKEUP_REASON_MOTION;
+    } else {
+        s_wakeup_reason = PM_WAKEUP_REASON_UNKNOWN;
+    }
 }
 
 app_wakeup_reason_t app_pm_get_wakeup_reason(void)
 {
     return s_wakeup_reason;
+}
+
+u8 app_pm_get_raw_wakeup_src(void)
+{
+    return s_raw_wakeup_src;
 }
 
 app_status_t app_pm_prepare_sleep(app_sleep_reason_t reason)

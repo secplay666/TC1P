@@ -29,6 +29,18 @@
 #include "drivers.h"
 #include "timer.h"
 
+#define APP_PENDANT_TRACE_REG DEEP_ANA_REG1
+
+void app_pendant_trace_set(u8 stage)
+{
+    analog_write(APP_PENDANT_TRACE_REG, stage);
+}
+
+u8 app_pendant_trace_get(void)
+{
+    return analog_read(APP_PENDANT_TRACE_REG);
+}
+
 static void app_pendant_on_peer_message(const app_eid_t *src_eid,
                                         app_peer_msg_type_t type,
                                         const u8 *payload,
@@ -90,21 +102,38 @@ void app_pendant_init(void)
 void app_pendant_poll(void)
 {
     u32 now = clock_time();
+    app_pendant_trace_set(0x80);
+    app_pendant_trace_set(0x81);
     app_debug_shell_poll();
+    app_pendant_trace_set(0x82);
     app_ble_poll();
+    app_pendant_trace_set(0x83);
     app_system_poll();
+    app_pendant_trace_set(0x84);
     app_scan_poll();
+    app_pendant_trace_set(0x85);
     app_peer_transport_poll();
+    app_pendant_trace_set(0x86);
     app_host_cmd_poll();
+    app_pendant_trace_set(0x87);
     app_host_transport_poll();
+    app_pendant_trace_set(0x88);
     app_host_gatt_poll();
+    app_pendant_trace_set(0x89);
     app_discovery_poll(now);
+    app_pendant_trace_set(0x8a);
     app_adv_scheduler_poll();
+    app_pendant_trace_set(0x8b);
     app_battery_poll(now);
+    app_pendant_trace_set(0x8c);
     app_charge_poll(now);
+    app_pendant_trace_set(0x8d);
     app_motion_poll(now);
+    app_pendant_trace_set(0x8e);
     app_motor_poll(now);
+    app_pendant_trace_set(0x8f);
     app_pm_poll(now);
+    app_pendant_trace_set(0xff);
 }
 
 void app_pendant_on_adv_report(const u8 *adv_data, u8 adv_len, s8 rssi, const u8 *addr)

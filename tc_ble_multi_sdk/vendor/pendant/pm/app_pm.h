@@ -20,6 +20,7 @@ typedef enum {
 
 void app_pm_init(void);
 app_wakeup_reason_t app_pm_get_wakeup_reason(void);
+u8 app_pm_get_raw_wakeup_src(void);
 app_status_t app_pm_prepare_sleep(app_sleep_reason_t reason);
 void app_pm_enter_sleep(void);
 void app_pm_poll(u32 now_tick);

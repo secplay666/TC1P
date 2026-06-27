@@ -31,6 +31,7 @@
 #define HOST_P2P_CHAT_PLAIN_MAX_LEN        APP_HOST_P2P_CHAT_TEXT_MAX_LEN
 #define HOST_P2P_CHAT_SEND_TARGET_MODE     0x01
 #define HOST_P2P_CHAT_SEND_TARGET_HDR_LEN  5
+#define HOST_P2P_CHAT_REJECT_APP_CONNECTED 0x01
 #define HOST_PROFILE_LIST_RSP_MAX_LEN      72
 
 #define HOST_LOG_LEVEL_INFO  1
@@ -756,6 +757,13 @@ static void handle_p2p_chat_pending(void)
     if (!peer_count) {
         s_pending.active = 0;
         send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_NOT_FOUND, 0, 0);
+        return;
+    }
+    if (app_ble_is_app_connected()) {
+        s_pending.active = 0;
+        s_rsp_buf[0] = HOST_P2P_CHAT_REJECT_APP_CONNECTED;
+        s_rsp_buf[1] = peer_count;
+        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_STATE, s_rsp_buf, 2);
         return;
     }
     if (s_pending.target_short_id) {

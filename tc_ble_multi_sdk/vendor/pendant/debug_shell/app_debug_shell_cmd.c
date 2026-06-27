@@ -13,6 +13,8 @@
 #include "../system/app_system.h"
 #include "../board/app_board.h"
 #include "../build_info/app_build_info.h"
+#include "../app_pendant.h"
+#include "../pm/app_pm.h"
 #include "../app.h"
 #include "../app_config.h"
 #include "common/string.h"
@@ -170,6 +172,10 @@ void app_debug_shell_cmd_print_boot_info(void)
     app_debug_shell_cmd_print_u8(" ext_adv=", (u8)PENDANT_EXT_ADV_ENABLE);
     app_debug_shell_cmd_print_u8(" scan=", (u8)APP_BLE_ENABLE_DISCOVERY_SCAN);
     app_debug_shell_cmd_print_u8(" wdt=", (u8)PENDANT_WATCHDOG_ENABLE);
+    app_debug_shell_cmd_print_u32(" wdt_ms=", PENDANT_WATCHDOG_TIMEOUT_MS);
+    app_debug_shell_cmd_print_u8(" wake_src=", app_pm_get_raw_wakeup_src());
+    app_debug_shell_cmd_print_u8(" wake_wd=", (u8)((app_pm_get_raw_wakeup_src() & WAKEUP_STATUS_WD) ? 1 : 0));
+    app_debug_shell_cmd_print_u8(" trace=", app_pendant_trace_get());
     app_debug_shell_cmd_print_u32(" adv_max=", APP_ADV_FRAME_MAX_LEN);
     app_debug_shell_cmd_print_u32(" payload_max=", APP_ADV_PAYLOAD_MAX_LEN);
 }
@@ -689,6 +695,11 @@ static void cmd_p2psend(u8 argc, char **argv)
     u16 i;
     app_status_t st;
 
+    if (app_ble_is_app_connected()) {
+        app_debug_shell_cmd_puts("[DBG] p2psend blocked while app connected\r\n");
+        return;
+    }
+
     if (argc > 1) {
         if (!parse_u16_arg(argv[1], &len)) {
             app_debug_shell_cmd_puts("[DBG] usage: p2psend [len] [u|r]\r\n");
@@ -740,6 +751,11 @@ static void cmd_p2pchat(u8 argc, char **argv)
     u8 j;
     u8 truncated = 0;
     app_status_t st;
+
+    if (app_ble_is_app_connected()) {
+        app_debug_shell_cmd_puts("[DBG] p2pchat blocked while app connected\r\n");
+        return;
+    }
 
     if (argc < 2) {
         app_debug_shell_cmd_puts("[DBG] usage: p2pchat <text>\r\n");

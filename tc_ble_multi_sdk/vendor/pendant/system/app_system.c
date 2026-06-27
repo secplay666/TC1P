@@ -66,6 +66,7 @@ void app_system_init(void)
     s_system.previous_state = SYS_STATE_BOOT;
     s_system.error_code = 0;
     s_system.wakeup_reason = app_pm_get_wakeup_reason();
+    s_system.raw_wakeup_src = app_pm_get_raw_wakeup_src();
     s_system.uptime_s = 0;
     s_boot_tick = clock_time();
 #if (PENDANT_WATCHDOG_ENABLE)
@@ -76,13 +77,18 @@ void app_system_init(void)
     app_event_post(APP_EVT_BOOT_DONE, 0, 0);
 }
 
+void app_system_watchdog_feed(void)
+{
+#if (PENDANT_WATCHDOG_ENABLE)
+    wd_clear();
+#endif
+}
+
 void app_system_poll(void)
 {
     app_event_t evt;
 
-#if (PENDANT_WATCHDOG_ENABLE)
-    wd_clear();
-#endif
+    app_system_watchdog_feed();
 
     if (clock_time_exceed(s_boot_tick, 1000000)) {
         s_system.uptime_s++;
