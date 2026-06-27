@@ -18,11 +18,14 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputFilter;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -91,10 +94,13 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private SharedPreferences prefs;
     private LinearLayout root;
     private LinearLayout content;
+    private FrameLayout bodyContainer;
     private SwipeRefreshLayout refreshLayout;
+    private LinearLayout navBar;
     private TextView titleView;
     private TextView statusView;
     private int selectedTab;
+    private int mineDetailMode;
 
     private String connectionStatus = "我的 Glimmer 未连接";
     private HostProtocol.DeviceInfo deviceInfo;
@@ -153,6 +159,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         loadLocalState();
         bleClient = new GlimmerBleClient(this, this);
@@ -172,6 +179,22 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         unregisterDebugChatReceiver();
         super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (selectedTab == 1 && selectedConversationId != null) {
+            preserveCurrentChatDraft();
+            selectedConversationId = null;
+            showTab(1);
+            return;
+        }
+        if (selectedTab == 2 && mineDetailMode != 0) {
+            mineDetailMode = 0;
+            showTab(2);
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void loadLocalState() {
@@ -506,7 +529,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(color(0xF7F8F5));
-        root.setPadding(dp(18), dp(48), dp(18), dp(12));
+        root.setPadding(dp(18), dp(24), dp(18), dp(12));
 
         titleView = label("附近的微光", 28, color(0x1F2420), true);
         root.addView(titleView, new LinearLayout.LayoutParams(
@@ -534,12 +557,17 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         refreshLayout.addView(scrollView, new SwipeRefreshLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
-        root.addView(refreshLayout, new LinearLayout.LayoutParams(
+        bodyContainer = new FrameLayout(this);
+        bodyContainer.addView(refreshLayout, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(bodyContainer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1));
 
-        root.addView(buildNav(), new LinearLayout.LayoutParams(
+        navBar = buildNav();
+        root.addView(navBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(58)));
 
@@ -553,7 +581,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         nav.setBackground(rounded(0xFFFFFF, 8));
         nav.setPadding(dp(4), dp(4), dp(4), dp(4));
 
-        String[] labels = {"附近", "消息", "我的", "安全"};
+        String[] labels = {"附近", "消息", "我的"};
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
             Button button = new Button(this);
@@ -575,11 +603,21 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private void showTab(int index) {
         preserveCurrentChatDraft();
+        if (index < 0 || index > 2) {
+            index = 2;
+        }
         selectedTab = index;
-        String[] titles = {"附近的微光", "消息", "我的", "安全"};
+        if (index != 2) {
+            mineDetailMode = 0;
+        }
+        String[] titles = {"附近的微光", "消息", "我的"};
         Conversation selectedConversation = selectedConversation();
-        titleView.setText(index == 1 && selectedConversation != null ? selectedConversation.title : titles[index]);
+        boolean chatMode = index == 1 && selectedConversation != null;
+        titleView.setText(chatMode ? selectedConversation.title : titles[index]);
         statusView.setText(topStatusText(index));
+        if (navBar != null) {
+            navBar.setVisibility(chatMode ? View.GONE : View.VISIBLE);
+        }
 
         for (int i = 0; i < navButtons.size(); i++) {
             Button button = navButtons.get(i);
@@ -588,15 +626,38 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             button.setBackground(rounded(selected ? 0x2F8F7B : 0xFFFFFF, 8));
         }
 
+        chatInput = null;
+        if (bodyContainer != null) {
+            bodyContainer.removeAllViews();
+        }
+        if (chatMode) {
+            endRefreshing();
+            if (refreshLayout != null) {
+                refreshLayout.setEnabled(false);
+            }
+            if (bodyContainer != null) {
+                bodyContainer.addView(chatPageView(selectedConversation), new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            return;
+        }
+
+        if (refreshLayout != null) {
+            refreshLayout.setEnabled(true);
+        }
+        if (bodyContainer != null) {
+            bodyContainer.addView(refreshLayout, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
         content.removeAllViews();
         if (index == 0) {
             renderNearbyPage();
         } else if (index == 1) {
             renderMessagesPage();
-        } else if (index == 2) {
-            renderMinePage();
         } else {
-            renderSafetyPage();
+            renderMinePage();
         }
     }
 
@@ -659,7 +720,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         copy.addView(label(nearbyTitle(), 20, color(0x1F2420), true));
         copy.addView(terminalStatusRow(),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(6), 0, dp(8)));
-        copy.addView(label(scanHintText(), 12, color(0x667068), false));
+        String hint = scanHintText();
+        if (!hint.isEmpty()) {
+            copy.addView(label(hint, 12, color(0x667068), false));
+        }
         row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         panel.addView(row, new LinearLayout.LayoutParams(
@@ -722,7 +786,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void renderChatPage(Conversation conversation) {
+        content.addView(chatPageView(conversation), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private View chatPageView(Conversation conversation) {
         conversation.unread = 0;
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
 
         TextView back = label("‹ 消息", 16, color(0x2F8F7B), true);
         back.setPadding(dp(4), dp(2), dp(4), dp(8));
@@ -730,33 +803,48 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             selectedConversationId = null;
             showTab(1);
         });
-        content.addView(back, marginParams(
+        page.addView(back, marginParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 0, 0, 0, dp(4)));
 
+        LinearLayout messages = new LinearLayout(this);
+        messages.setOrientation(LinearLayout.VERTICAL);
         if (conversation.messages.isEmpty()) {
-            content.addView(chatSystemLine("向 " + conversation.title + " 打个招呼"), marginParams(
+            messages.addView(chatSystemLine("向 " + conversation.title + " 打个招呼"), marginParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     0, dp(12), 0, dp(10)));
         } else {
             for (ChatMessage message : conversation.messages) {
-                content.addView(chatBubble(message), marginParams(
+                messages.addView(chatBubble(message), marginParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         0, dp(6), 0, dp(6)));
             }
         }
 
-        int spacerHeight = chatBottomSpacerHeight(conversation);
-        content.addView(spacer(1, spacerHeight), new LinearLayout.LayoutParams(
+        messages.addView(spacer(1, dp(12)), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                spacerHeight));
-        content.addView(chatInputBar(conversation), marginParams(
+                dp(12)));
+
+        ScrollView messagesScroll = new ScrollView(this);
+        messagesScroll.setFillViewport(true);
+        messagesScroll.addView(messages, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        page.addView(messagesScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1));
+
+        page.addView(chatInputBar(conversation), marginParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                0, dp(14), 0, dp(12)));
+                0, dp(8), 0, 0));
+
+        messagesScroll.post(() -> messagesScroll.fullScroll(View.FOCUS_DOWN));
+        return page;
     }
 
     private LinearLayout conversationRow(Conversation conversation) {
@@ -960,6 +1048,41 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void renderMinePage() {
+        if (mineDetailMode == 1) {
+            renderProfileSettingsPage();
+            return;
+        }
+        if (mineDetailMode == 2) {
+            renderDeviceSettingsPage();
+            return;
+        }
+        if (mineDetailMode == 3) {
+            renderSafetySettingsPage();
+            return;
+        }
+
+        LinearLayout list = card();
+        list.addView(label("设置", 20, color(0x1F2420), true));
+        list.addView(settingsRow("附近预览卡片",
+                        myProfile == null ? "设置昵称和一句话签名" : myProfile.displayName() + " · " + myProfile.signatureText(),
+                        v -> openMineDetail(1)),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(12), 0, 0));
+        list.addView(settingsRow("我的 Glimmer",
+                        debugReady ? "已连接 · " + deviceInfoSummary().replace("\n", " · ") : deviceInfoSummary().replace("\n", " · "),
+                        v -> openMineDetail(2)),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
+        list.addView(settingsRow("隐私与安全",
+                        "隐身模式、屏蔽列表、陌生问候",
+                        v -> openMineDetail(3)),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
+        content.addView(list, cardParams());
+
+        renderRecentEvents("最近事件");
+    }
+
+    private void renderProfileSettingsPage() {
+        addSettingsBack();
+
         LinearLayout profile = card();
         profile.addView(label("附近预览卡片", 20, color(0x1F2420), true));
         profile.addView(label(myProfile == null ? "还没有从终端同步资料卡" : myProfile.displayName(), 18, color(0x2F8F7B), true),
@@ -973,6 +1096,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         profile.addView(primaryButton("保存到 Glimmer", v -> saveProfileCard()),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
         content.addView(profile, cardParams());
+    }
+
+    private void renderDeviceSettingsPage() {
+        addSettingsBack();
 
         LinearLayout device = card();
         device.addView(label("我的 Glimmer", 20, color(0x1F2420), true));
@@ -999,17 +1126,63 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         nearby.addView(label(peerSummary(), 14, color(0x667068), false),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
         content.addView(nearby, cardParams());
-
-        renderRecentEvents("最近事件");
     }
 
-    private void renderSafetyPage() {
+    private void renderSafetySettingsPage() {
+        addSettingsBack();
+
         LinearLayout card = card();
-        card.addView(label("随时保留退出和屏蔽", 20, color(0x1F2420), true));
-        card.addView(label("隐身模式、屏蔽列表和陌生问候开关会在后续接入资料协议后实现。", 15, color(0x667068), false),
-                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
+        card.addView(label("隐私与安全", 20, color(0x1F2420), true));
+        card.addView(settingsRow("隐身模式", "暂未开启，后续接入资料协议", v -> setLocalStatus("隐身设置待接入")),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(12), 0, 0));
+        card.addView(settingsRow("屏蔽列表", "管理不想再次遇见的人", v -> setLocalStatus("屏蔽列表待接入")),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
+        card.addView(settingsRow("陌生问候", "允许附近的人发来第一句微光", v -> setLocalStatus("陌生问候设置待接入")),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
         content.addView(card, cardParams());
-        addActionRow("隐身模式", v -> setLocalStatus("隐身设置待接入"), "屏蔽列表", v -> setLocalStatus("屏蔽列表待接入"));
+    }
+
+    private void openMineDetail(int mode) {
+        mineDetailMode = mode;
+        showTab(2);
+    }
+
+    private void addSettingsBack() {
+        TextView back = label("‹ 我的", 16, color(0x2F8F7B), true);
+        back.setPadding(dp(4), dp(2), dp(4), dp(8));
+        back.setOnClickListener(v -> {
+            mineDetailMode = 0;
+            showTab(2);
+        });
+        content.addView(back, marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, 0, 0, dp(4)));
+    }
+
+    private LinearLayout settingsRow(String title, String detail, View.OnClickListener listener) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
+        row.setBackground(rounded(0xF7F8F5, 8));
+        row.setOnClickListener(listener);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(label(title, 16, color(0x1F2420), true));
+        TextView detailView = label(detail == null ? "" : detail, 13, color(0x667068), false);
+        detailView.setSingleLine(true);
+        detailView.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(detailView, marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, dp(4), 0, 0));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(label("›", 24, color(0x9AA39C), true), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
     }
 
     private void renderRecentEvents(String title) {
@@ -1425,18 +1598,19 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 pushEvent(event.isDropped() ? "一条微光已过期" : "收到一条来自附近的微光");
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT_TX_RESULT) {
                 HostProtocol.ChatTxResult result = HostProtocol.parseChatTxResult(message.payload);
+                String txStatus = chatTxStatusText(result);
                 Conversation conversation = result.shortId == 0 ? null : findConversation(HostProtocol.shortIdText(result.shortId));
                 if (conversation == null) {
                     conversation = findConversation(lastOutgoingConversationId);
                 }
                 if (conversation != null) {
-                    markLatestOutgoing(conversation.id, result.isSuccess() ? "已送达" : "未送达");
+                    markLatestOutgoing(conversation.id, txStatus);
                     if (result.isSuccess()) {
                         rememberChattedPeer(conversation.shortId);
                         conversation.familiar = true;
                     }
                 }
-                pushEvent(result.isSuccess() ? "消息已送达" : "对方暂时不可达，消息未送达");
+                pushEvent(chatTxEventText(result));
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.status != 0) {
                 if (message.cmd == HostProtocol.CMD_P2P_CHAT_SEND) {
                     markLatestOutgoing(lastOutgoingConversationId, "未送达");
@@ -1517,7 +1691,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private String topStatusText(int index) {
         if (index == 0) {
             if (debugReady) {
-                return "✓ " + peerSummary();
+                return "✓ 我的 Glimmer 已连接";
             }
             if (!hasBoundDevice()) {
                 return bleClient.isScanning() ? "↻ 正在寻找可绑定终端" : "○ 我的 Glimmer 未绑定";
@@ -1539,9 +1713,18 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             return unread > 0 ? unread + " 条未读" : "最近对话";
         }
         if (index == 2) {
+            if (mineDetailMode == 1) {
+                return "附近预览卡片";
+            }
+            if (mineDetailMode == 2) {
+                return "终端绑定与状态";
+            }
+            if (mineDetailMode == 3) {
+                return "隐私与安全";
+            }
             return connectionStatus;
         }
-        return "隐私和安全";
+        return connectionStatus;
     }
 
     private String nearbyTitle() {
@@ -1575,7 +1758,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (!debugReady) {
             return bleClient.isScanning() ? "正在自动连接已绑定终端" : "下拉页面寻找已绑定终端";
         }
-        return "进入范围的人会自动出现在下方";
+        return "";
     }
 
     private String nearbyCountText() {
@@ -1707,6 +1890,23 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             return raw;
         }
         return raw.replace("GATT", "Glimmer");
+    }
+
+    private String chatTxStatusText(HostProtocol.ChatTxResult result) {
+        if (result.isSuccess()) {
+            return "已送达";
+        }
+        return result.isTimeout() ? "未确认" : "未送达";
+    }
+
+    private String chatTxEventText(HostProtocol.ChatTxResult result) {
+        if (result.isSuccess()) {
+            return "消息已送达";
+        }
+        if (result.isTimeout()) {
+            return "消息已发出，暂时未确认";
+        }
+        return "对方暂时不可达，消息未送达";
     }
 
     private String productResponseError(HostProtocol.HostMessage message) {

@@ -763,6 +763,10 @@ final class HostProtocol {
         boolean isSuccess() {
             return hostStatus == 0;
         }
+
+        boolean isTimeout() {
+            return appStatus == 5;
+        }
     }
 
     static final class ProfileSummary {

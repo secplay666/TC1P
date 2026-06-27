@@ -759,13 +759,6 @@ static void handle_p2p_chat_pending(void)
         send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_NOT_FOUND, 0, 0);
         return;
     }
-    if (app_ble_is_app_connected()) {
-        s_pending.active = 0;
-        s_rsp_buf[0] = HOST_P2P_CHAT_REJECT_APP_CONNECTED;
-        s_rsp_buf[1] = peer_count;
-        send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_ERR_STATE, s_rsp_buf, 2);
-        return;
-    }
     if (s_pending.target_short_id) {
         target_peer = app_peer_table_find_by_short_id(s_pending.target_short_id);
         if (!target_peer) {
