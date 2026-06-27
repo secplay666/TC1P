@@ -31,6 +31,20 @@ app_peer_record_t *app_peer_table_find(const app_eid_t *eid)
     return 0;
 }
 
+app_peer_record_t *app_peer_table_find_by_short_id(u32 short_id)
+{
+    u8 i;
+    if (!short_id) {
+        return 0;
+    }
+    for (i = 0; i < APP_PEER_MAX_COUNT; i++) {
+        if (s_peers[i].in_use && s_peers[i].short_id == short_id) {
+            return &s_peers[i];
+        }
+    }
+    return 0;
+}
+
 app_peer_record_t *app_peer_table_find_or_alloc(const app_eid_t *eid)
 {
     u8 i;

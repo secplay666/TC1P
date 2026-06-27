@@ -64,6 +64,10 @@ final class HostProtocol {
     }
 
     static List<byte[]> makeP2pChatSend(int seq, String text) {
+        return makeP2pChatSend(seq, 0, text);
+    }
+
+    static List<byte[]> makeP2pChatSend(int seq, long targetShortId, String text) {
         byte[] payload = text.getBytes(StandardCharsets.UTF_8);
         if (payload.length == 0) {
             throw new IllegalArgumentException("chat text is empty");
@@ -71,7 +75,14 @@ final class HostProtocol {
         if (payload.length > CHAT_TEXT_MAX_LEN) {
             throw new IllegalArgumentException("chat text too long: " + payload.length + " > " + CHAT_TEXT_MAX_LEN);
         }
-        return encodeMessage(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, payload);
+        if (targetShortId == 0) {
+            return encodeMessage(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, payload);
+        }
+        byte[] request = new byte[payload.length + 5];
+        request[0] = 0x01;
+        wr32le(request, 1, (int) targetShortId);
+        System.arraycopy(payload, 0, request, 5, payload.length);
+        return encodeMessage(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, request);
     }
 
     static List<byte[]> makePeerProfilesCommand(int seq, int startIndex) {
@@ -351,14 +362,18 @@ final class HostProtocol {
                     return new String(message.payload, StandardCharsets.UTF_8).trim();
                 case CMD_P2P_CHAT_SEND:
                     if (message.payload.length >= 8) {
+                        String target = message.payload.length >= 12
+                                ? String.format(Locale.US, ", target=0x%08X", u32le(message.payload, 8))
+                                : "";
                         return String.format(Locale.US,
-                                "%s: queued %d bytes, peers=%d, p2p_max=%d, frag_payload=%d, max_frag=%d",
+                                "%s: queued %d bytes, peers=%d, p2p_max=%d, frag_payload=%d, max_frag=%d%s",
                                 name,
                                 u16le(message.payload, 2),
                                 u8(message.payload[1]),
                                 u16le(message.payload, 4),
                                 u8(message.payload[6]),
-                                u8(message.payload[7]));
+                                u8(message.payload[7]),
+                                target);
                     }
                     return name + ": " + status;
                 case CMD_GET_PROFILE_SUMMARY:

@@ -1,16 +1,23 @@
 package com.glimmer.app;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputFilter;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -27,6 +34,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.Set;
 
 public class MainActivity extends Activity implements GlimmerBleClient.Listener {
@@ -38,6 +48,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final String KEY_CHATTED_PEERS = "chatted_peer_ids";
     private static final long AUTO_SYNC_INTERVAL_MS = 10000;
     private static final long AUTO_RECONNECT_INTERVAL_MS = 15000;
+    private static final String ACTION_DEBUG_CHAT = "com.glimmer.app.DEBUG_CHAT";
 
     private final List<Button> navButtons = new ArrayList<>();
     private final List<GlimmerBleClient.ScanDevice> scanDevices = new ArrayList<>();
@@ -45,6 +56,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private final List<HostProtocol.PeerProfileInfo> peerProfiles = new ArrayList<>();
     private final List<HostProtocol.PeerProfileInfo> pendingPeerProfiles = new ArrayList<>();
     private final Map<Integer, Integer> peerProfilePageStarts = new HashMap<>();
+    private final List<Conversation> conversations = new ArrayList<>();
+    private final Map<String, String> chatDrafts = new HashMap<>();
     private final List<String> eventLines = new ArrayList<>();
     private final Set<String> chattedPeerIds = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -67,6 +80,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
         }
     };
+    private final BroadcastReceiver debugChatReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            handleDebugChatIntent(intent);
+        }
+    };
 
     private GlimmerBleClient bleClient;
     private SharedPreferences prefs;
@@ -82,10 +101,54 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private HostProtocol.ProfileSummary myProfile;
     private EditText nicknameEdit;
     private EditText signatureEdit;
+    private EditText chatInput;
     private boolean debugReady;
     private String boundAddress;
     private String boundName;
     private String boundShortId;
+    private String selectedConversationId;
+    private String lastOutgoingConversationId;
+
+    private static final class Conversation {
+        final String id;
+        long shortId;
+        String title;
+        String subtitle;
+        String proximity;
+        String lastText;
+        String lastTime;
+        long updatedAt;
+        int unread;
+        boolean familiar;
+        final List<ChatMessage> messages = new ArrayList<>();
+
+        Conversation(String id, long shortId) {
+            this.id = id;
+            this.shortId = shortId;
+            this.title = "一束微光";
+            this.subtitle = "";
+            this.proximity = "附近";
+            this.lastText = "";
+            this.lastTime = "";
+            this.updatedAt = 0;
+        }
+    }
+
+    private static final class ChatMessage {
+        final boolean incoming;
+        final boolean system;
+        final String text;
+        String status;
+        final String time;
+
+        ChatMessage(boolean incoming, boolean system, String text, String status, String time) {
+            this.incoming = incoming;
+            this.system = system;
+            this.text = text;
+            this.status = status;
+            this.time = time;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -94,6 +157,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         loadLocalState();
         bleClient = new GlimmerBleClient(this, this);
         buildUi();
+        registerDebugChatReceiver();
         showTab(0);
         maybeStartBoundReconnect();
     }
@@ -106,6 +170,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             bleClient.stopScan();
             bleClient.disconnect();
         }
+        unregisterDebugChatReceiver();
         super.onDestroy();
     }
 
@@ -176,6 +241,180 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return chattedPeerIds.contains(HostProtocol.shortIdText(shortId));
     }
 
+    private Conversation findConversation(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (Conversation conversation : conversations) {
+            if (conversation.id.equals(id)) {
+                return conversation;
+            }
+        }
+        return null;
+    }
+
+    private Conversation selectedConversation() {
+        return findConversation(selectedConversationId);
+    }
+
+    private HostProtocol.PeerInfo findPeer(long shortId) {
+        String id = HostProtocol.shortIdText(shortId);
+        for (HostProtocol.PeerInfo peer : peers) {
+            if (HostProtocol.shortIdText(peer.shortId).equals(id)) {
+                return peer;
+            }
+        }
+        return null;
+    }
+
+    private HostProtocol.PeerProfileInfo findPeerProfile(long shortId) {
+        String id = HostProtocol.shortIdText(shortId);
+        for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+            if (HostProtocol.shortIdText(profile.shortId).equals(id)) {
+                return profile;
+            }
+        }
+        return null;
+    }
+
+    private Conversation ensureConversation(long shortId) {
+        String id = HostProtocol.shortIdText(shortId);
+        Conversation conversation = findConversation(id);
+        if (conversation == null) {
+            conversation = new Conversation(id, shortId);
+            conversations.add(conversation);
+        }
+        conversation.shortId = shortId;
+        conversation.familiar = hasChattedWith(shortId);
+        return conversation;
+    }
+
+    private void updateConversationFromPeer(Conversation conversation, HostProtocol.PeerInfo peer) {
+        if (conversation == null || peer == null) {
+            return;
+        }
+        conversation.shortId = peer.shortId;
+        conversation.proximity = peer.proximityText();
+        conversation.subtitle = peer.proximityText() + " · " + peer.signalText();
+        conversation.familiar = hasChattedWith(peer.shortId);
+        if (conversation.title == null || conversation.title.isEmpty() || "一束微光".equals(conversation.title)) {
+            conversation.title = conversation.familiar ? "再遇见的微光" : "一束微光";
+        }
+    }
+
+    private void updateConversationFromProfile(Conversation conversation, HostProtocol.PeerProfileInfo profile) {
+        if (conversation == null || profile == null) {
+            return;
+        }
+        conversation.shortId = profile.shortId;
+        conversation.title = profile.displayName();
+        conversation.subtitle = profile.signatureText();
+        conversation.proximity = profile.proximityText();
+        conversation.familiar = hasChattedWith(profile.shortId);
+    }
+
+    private void updateConversationFromKnownPeers(Conversation conversation) {
+        if (conversation == null) {
+            return;
+        }
+        HostProtocol.PeerProfileInfo profile = findPeerProfile(conversation.shortId);
+        if (profile != null) {
+            updateConversationFromProfile(conversation, profile);
+            return;
+        }
+        HostProtocol.PeerInfo peer = findPeer(conversation.shortId);
+        if (peer != null) {
+            updateConversationFromPeer(conversation, peer);
+        }
+    }
+
+    private void syncConversationProfiles() {
+        for (Conversation conversation : conversations) {
+            updateConversationFromKnownPeers(conversation);
+        }
+    }
+
+    private List<Conversation> sortedConversations() {
+        List<Conversation> sorted = new ArrayList<>(conversations);
+        sorted.sort((left, right) -> Long.compare(right.updatedAt, left.updatedAt));
+        return sorted;
+    }
+
+    private Conversation openConversation(HostProtocol.PeerInfo peer) {
+        Conversation conversation = ensureConversation(peer.shortId);
+        updateConversationFromPeer(conversation, peer);
+        selectedConversationId = conversation.id;
+        conversation.unread = 0;
+        if (conversation.updatedAt == 0) {
+            conversation.updatedAt = System.currentTimeMillis();
+        }
+        showTab(1);
+        return conversation;
+    }
+
+    private Conversation openConversation(HostProtocol.PeerProfileInfo profile) {
+        Conversation conversation = ensureConversation(profile.shortId);
+        updateConversationFromProfile(conversation, profile);
+        selectedConversationId = conversation.id;
+        conversation.unread = 0;
+        if (conversation.updatedAt == 0) {
+            conversation.updatedAt = System.currentTimeMillis();
+        }
+        showTab(1);
+        return conversation;
+    }
+
+    private void addChatMessage(Conversation conversation, ChatMessage message) {
+        if (conversation == null || message == null) {
+            return;
+        }
+        conversation.messages.add(message);
+        while (conversation.messages.size() > 80) {
+            conversation.messages.remove(0);
+        }
+        conversation.lastText = message.text;
+        conversation.lastTime = message.time;
+        conversation.updatedAt = System.currentTimeMillis();
+        if (message.incoming && !conversation.id.equals(selectedConversationId)) {
+            conversation.unread++;
+        }
+    }
+
+    private ChatMessage latestOutgoingMessage(Conversation conversation) {
+        if (conversation == null) {
+            return null;
+        }
+        for (int i = conversation.messages.size() - 1; i >= 0; i--) {
+            ChatMessage message = conversation.messages.get(i);
+            if (!message.incoming && !message.system) {
+                return message;
+            }
+        }
+        return null;
+    }
+
+    private void markLatestOutgoing(String conversationId, String status) {
+        Conversation conversation = findConversation(conversationId);
+        ChatMessage message = latestOutgoingMessage(conversation);
+        if (message != null) {
+            message.status = status;
+        }
+    }
+
+    private void markSendingMessagesFailed() {
+        for (Conversation conversation : conversations) {
+            for (ChatMessage message : conversation.messages) {
+                if (!message.incoming && !message.system && "发送中".equals(message.status)) {
+                    message.status = "未送达";
+                }
+            }
+        }
+    }
+
+    private String nowTimeText() {
+        return new SimpleDateFormat("HH:mm", Locale.CHINA).format(new Date());
+    }
+
     private void maybeStartBoundReconnect() {
         if (!hasBoundDevice() || debugReady) {
             return;
@@ -185,6 +424,82 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             handler.removeCallbacks(autoReconnectRunnable);
             handler.postDelayed(autoReconnectRunnable, AUTO_RECONNECT_INTERVAL_MS);
         }
+    }
+
+    private boolean isDebugBuild() {
+        return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
+    private void registerDebugChatReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(ACTION_DEBUG_CHAT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(debugChatReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(debugChatReceiver, filter);
+        }
+    }
+
+    private void unregisterDebugChatReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        try {
+            unregisterReceiver(debugChatReceiver);
+        } catch (IllegalArgumentException ignored) {
+            // Receiver may not be registered if activity setup was interrupted.
+        }
+    }
+
+    private void handleDebugChatIntent(Intent intent) {
+        if (intent == null || !ACTION_DEBUG_CHAT.equals(intent.getAction()) || !isDebugBuild()) {
+            return;
+        }
+
+        long shortId = intent.getLongExtra("short_id", 0);
+        Conversation selected = selectedConversation();
+        if (shortId == 0 && selected != null) {
+            shortId = selected.shortId;
+        }
+        if (shortId == 0) {
+            shortId = 0x44556677L;
+        }
+
+        Conversation conversation = ensureConversation(shortId);
+        String title = intent.getStringExtra("title");
+        if (title != null && !title.trim().isEmpty()) {
+            conversation.title = title.trim();
+        } else {
+            updateConversationFromKnownPeers(conversation);
+        }
+
+        String text = intent.getStringExtra("text");
+        if (text == null || text.trim().isEmpty()) {
+            text = "hello glimmer";
+        }
+        String dir = intent.getStringExtra("dir");
+        if ("real".equalsIgnoreCase(dir)) {
+            selectedConversationId = conversation.id;
+            selectedTab = 1;
+            sendChatMessageText(conversation, text);
+            return;
+        }
+        boolean incoming = dir == null || !"out".equalsIgnoreCase(dir);
+        String status = incoming ? "" : intent.getStringExtra("status");
+        if (status == null) {
+            status = "已送达";
+        }
+
+        addChatMessage(conversation, new ChatMessage(incoming, false, text, status, nowTimeText()));
+        rememberChattedPeer(conversation.shortId);
+        conversation.familiar = true;
+        if (intent.getBooleanExtra("open", true)) {
+            selectedConversationId = conversation.id;
+            selectedTab = 1;
+        }
+        rerenderCurrentTab();
     }
 
     private void buildUi() {
@@ -245,7 +560,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             button.setAllCaps(false);
             button.setText(labels[i]);
             button.setTextSize(14);
-            button.setOnClickListener(v -> showTab(index));
+            button.setOnClickListener(v -> {
+                if (index == 1 && selectedTab == 1 && selectedConversationId != null) {
+                    selectedConversationId = null;
+                }
+                showTab(index);
+            });
             navButtons.add(button);
             nav.addView(button, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
         }
@@ -254,9 +574,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void showTab(int index) {
+        preserveCurrentChatDraft();
         selectedTab = index;
         String[] titles = {"附近的微光", "消息", "我的", "安全"};
-        titleView.setText(titles[index]);
+        Conversation selectedConversation = selectedConversation();
+        titleView.setText(index == 1 && selectedConversation != null ? selectedConversation.title : titles[index]);
         statusView.setText(topStatusText(index));
 
         for (int i = 0; i < navButtons.size(); i++) {
@@ -275,6 +597,18 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             renderMinePage();
         } else {
             renderSafetyPage();
+        }
+    }
+
+    private void preserveCurrentChatDraft() {
+        if (chatInput == null || selectedConversationId == null) {
+            return;
+        }
+        String draft = chatInput.getText().toString();
+        if (draft.isEmpty()) {
+            chatDrafts.remove(selectedConversationId);
+        } else {
+            chatDrafts.put(selectedConversationId, draft);
         }
     }
 
@@ -370,13 +704,259 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void renderMessagesPage() {
-        LinearLayout card = card();
-        card.addView(label("暂无新的对话", 20, color(0x1F2420), true));
-        card.addView(label("收到或发出的微光消息会出现在这里。Glimmer 终端会加密转发，对方暂时不可达时会明确提示。", 15, color(0x667068), false),
-                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
-        content.addView(card, cardParams());
+        Conversation selected = selectedConversation();
+        if (selected != null) {
+            renderChatPage(selected);
+            return;
+        }
 
-        renderRecentEvents("最近状态");
+        syncConversationProfiles();
+        if (conversations.isEmpty()) {
+            content.addView(simpleEmptyRow("还没有对话"), cardParams());
+            return;
+        }
+
+        for (Conversation conversation : sortedConversations()) {
+            content.addView(conversationRow(conversation), cardParams());
+        }
+    }
+
+    private void renderChatPage(Conversation conversation) {
+        conversation.unread = 0;
+
+        TextView back = label("‹ 消息", 16, color(0x2F8F7B), true);
+        back.setPadding(dp(4), dp(2), dp(4), dp(8));
+        back.setOnClickListener(v -> {
+            selectedConversationId = null;
+            showTab(1);
+        });
+        content.addView(back, marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, 0, 0, dp(4)));
+
+        if (conversation.messages.isEmpty()) {
+            content.addView(chatSystemLine("向 " + conversation.title + " 打个招呼"), marginParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    0, dp(12), 0, dp(10)));
+        } else {
+            for (ChatMessage message : conversation.messages) {
+                content.addView(chatBubble(message), marginParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        0, dp(6), 0, dp(6)));
+            }
+        }
+
+        int spacerHeight = chatBottomSpacerHeight(conversation);
+        content.addView(spacer(1, spacerHeight), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                spacerHeight));
+        content.addView(chatInputBar(conversation), marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, dp(14), 0, dp(12)));
+    }
+
+    private LinearLayout conversationRow(Conversation conversation) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(12), dp(14), dp(12));
+        row.setBackground(rounded(0xFFFFFF, 8));
+        row.setOnClickListener(v -> {
+            selectedConversationId = conversation.id;
+            conversation.unread = 0;
+            showTab(1);
+        });
+
+        row.addView(avatar(conversationInitial(conversation), conversation.familiar ? 0xC08A24 : 0x2F8F7B),
+                new LinearLayout.LayoutParams(dp(46), dp(46)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setPadding(dp(12), 0, dp(8), 0);
+
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = label(conversation.title, 16, color(0x1F2420), true);
+        title.setSingleLine(true);
+        titleRow.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        if (!conversation.lastTime.isEmpty()) {
+            titleRow.addView(label(conversation.lastTime, 11, color(0x9AA39C), false));
+        }
+        copy.addView(titleRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        String preview = conversation.lastText.isEmpty() ? conversation.subtitle : conversation.lastText;
+        TextView previewView = label(preview.isEmpty() ? conversation.proximity : preview, 13, color(0x667068), false);
+        previewView.setSingleLine(true);
+        copy.addView(previewView, marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, dp(4), 0, 0));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        if (conversation.unread > 0) {
+            TextView unread = label(String.valueOf(Math.min(conversation.unread, 99)), 11, Color.WHITE, true);
+            unread.setGravity(Gravity.CENTER);
+            unread.setBackground(rounded(0xF06D5E, 8));
+            row.addView(unread, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        } else {
+            row.addView(label("›", 22, color(0x9AA39C), true));
+        }
+        return row;
+    }
+
+    private LinearLayout simpleEmptyRow(String text) {
+        LinearLayout row = card();
+        row.setGravity(Gravity.CENTER);
+        row.setPadding(dp(18), dp(28), dp(18), dp(28));
+        TextView label = label(text, 15, color(0x9AA39C), false);
+        label.setGravity(Gravity.CENTER);
+        row.addView(label, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
+    }
+
+    private TextView chatSystemLine(String text) {
+        TextView view = label(text, 12, color(0x9AA39C), false);
+        view.setGravity(Gravity.CENTER);
+        return view;
+    }
+
+    private View chatBubble(ChatMessage message) {
+        if (message.system) {
+            return chatSystemLine(message.text);
+        }
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(message.incoming ? Gravity.START : Gravity.END);
+
+        if (message.incoming) {
+            row.addView(avatar("微", 0x2F8F7B), marginParams(dp(34), dp(34), 0, 0, dp(8), 0));
+        }
+
+        LinearLayout bubbleColumn = new LinearLayout(this);
+        bubbleColumn.setOrientation(LinearLayout.VERTICAL);
+        bubbleColumn.setGravity(message.incoming ? Gravity.START : Gravity.END);
+
+        TextView bubble = label(message.text, 15, color(0x1F2420), false);
+        bubble.setPadding(dp(12), dp(9), dp(12), dp(9));
+        bubble.setMaxWidth(Math.max(dp(180), getResources().getDisplayMetrics().widthPixels - dp(126)));
+        bubble.setBackground(rounded(message.incoming ? 0xFFFFFF : 0xDCEFE9, 8));
+        bubbleColumn.addView(bubble, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        if (message.status != null && !message.status.isEmpty()) {
+            TextView status = label(message.status, 11,
+                    "未送达".equals(message.status) ? color(0xF06D5E) : color(0x9AA39C),
+                    false);
+            status.setGravity(Gravity.END);
+            bubbleColumn.addView(status, marginParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    0, dp(3), 0, 0));
+        }
+
+        row.addView(bubbleColumn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        if (!message.incoming) {
+            row.addView(avatar("我", 0x1F6F60), marginParams(dp(34), dp(34), dp(8), 0, 0, 0));
+        }
+        return row;
+    }
+
+    private LinearLayout chatInputBar(Conversation conversation) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(8), dp(8), dp(8), dp(8));
+        bar.setBackground(rounded(0xFFFFFF, 8));
+
+        chatInput = new EditText(this);
+        chatInput.setHint("消息");
+        chatInput.setTextSize(15);
+        chatInput.setTextColor(color(0x1F2420));
+        chatInput.setHintTextColor(color(0x9AA39C));
+        chatInput.setMinLines(1);
+        chatInput.setMaxLines(4);
+        chatInput.setPadding(dp(12), 0, dp(12), 0);
+        chatInput.setBackground(rounded(0xF1F6F2, 8));
+        chatInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(HostProtocol.CHAT_TEXT_MAX_LEN)});
+        String draft = chatDrafts.get(conversation.id);
+        if (draft != null && !draft.isEmpty()) {
+            chatInput.setText(draft);
+            chatInput.setSelection(chatInput.getText().length());
+        }
+        bar.addView(chatInput, new LinearLayout.LayoutParams(0, dp(44), 1));
+
+        Button send = primaryButton("发送", v -> sendChatMessage(conversation));
+        send.setEnabled(debugReady);
+        send.setTextColor(debugReady ? Color.WHITE : color(0x9AA39C));
+        send.setBackground(rounded(debugReady ? 0x2F8F7B : 0xE4E8E3, 8));
+        bar.addView(send, marginParams(dp(72), dp(44), dp(8), 0, 0, 0));
+        return bar;
+    }
+
+    private void sendChatMessage(Conversation conversation) {
+        if (conversation == null || chatInput == null) {
+            return;
+        }
+        String text = chatInput.getText().toString().trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        sendChatMessageText(conversation, text);
+    }
+
+    private void sendChatMessageText(Conversation conversation, String text) {
+        if (conversation == null || text == null || text.trim().isEmpty()) {
+            return;
+        }
+        text = text.trim();
+        if (!debugReady) {
+            addChatMessage(conversation, new ChatMessage(false, true, "我的 Glimmer 未连接", "", nowTimeText()));
+            rerenderCurrentTab();
+            return;
+        }
+
+        lastOutgoingConversationId = conversation.id;
+        chatDrafts.remove(conversation.id);
+        if (chatInput != null) {
+            chatInput.setText("");
+        }
+        addChatMessage(conversation, new ChatMessage(false, false, text, "发送中", nowTimeText()));
+        try {
+            bleClient.sendP2pChat(conversation.shortId, text);
+        } catch (RuntimeException e) {
+            markLatestOutgoing(conversation.id, "未送达");
+        }
+        rerenderCurrentTab();
+    }
+
+    private String conversationInitial(Conversation conversation) {
+        if (conversation == null || conversation.title == null || conversation.title.isEmpty()) {
+            return "微";
+        }
+        return conversation.title.substring(0, 1);
+    }
+
+    private int chatBottomSpacerHeight(Conversation conversation) {
+        int viewport = refreshLayout == null ? 0 : refreshLayout.getHeight();
+        if (viewport <= 0) {
+            viewport = getResources().getDisplayMetrics().heightPixels - dp(420);
+        }
+        int messageRows = conversation == null ? 0 : Math.max(1, conversation.messages.size());
+        int estimatedUsed = dp(170) + messageRows * dp(66);
+        return Math.max(dp(16), viewport - estimatedUsed);
     }
 
     private void renderMinePage() {
@@ -494,6 +1074,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(13), dp(14), dp(13));
         row.setBackground(rounded(familiar ? 0xFFF7DF : 0xFFFFFF, 8));
+        row.setOnClickListener(v -> openConversation(peer));
 
         row.addView(avatar(familiar ? "↻" : "微", familiar ? 0xC08A24 : 0x2F8F7B),
                 new LinearLayout.LayoutParams(dp(44), dp(44)));
@@ -519,6 +1100,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(13), dp(14), dp(13));
         row.setBackground(rounded(familiar ? 0xFFF7DF : 0xFFFFFF, 8));
+        row.setOnClickListener(v -> openConversation(profile));
 
         row.addView(avatar(familiar ? "↻" : profile.displayName().substring(0, 1),
                         familiar ? 0xC08A24 : 0x2F8F7B),
@@ -758,6 +1340,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     public void onDebugReady(boolean ready) {
         debugReady = ready;
         if (!ready) {
+            markSendingMessagesFailed();
             deviceInfo = null;
             myProfile = null;
             peers.clear();
@@ -826,17 +1409,38 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 }
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT) {
                 HostProtocol.ChatEvent event = HostProtocol.parseChatEvent(message.payload);
-                if (!event.isDropped()) {
+                Conversation conversation = ensureConversation(event.shortId);
+                updateConversationFromKnownPeers(conversation);
+                if (event.isDropped()) {
+                    addChatMessage(conversation, new ChatMessage(true, true, "一条消息已过期", "", nowTimeText()));
+                } else {
+                    String text = event.text == null || event.text.isEmpty() ? " " : event.text;
+                    if (event.isTruncated()) {
+                        text = text + "…";
+                    }
+                    addChatMessage(conversation, new ChatMessage(true, false, text, "", nowTimeText()));
                     rememberChattedPeer(event.shortId);
+                    conversation.familiar = true;
                 }
                 pushEvent(event.isDropped() ? "一条微光已过期" : "收到一条来自附近的微光");
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT_TX_RESULT) {
                 HostProtocol.ChatTxResult result = HostProtocol.parseChatTxResult(message.payload);
-                if (result.isSuccess()) {
-                    rememberChattedPeer(result.shortId);
+                Conversation conversation = result.shortId == 0 ? null : findConversation(HostProtocol.shortIdText(result.shortId));
+                if (conversation == null) {
+                    conversation = findConversation(lastOutgoingConversationId);
+                }
+                if (conversation != null) {
+                    markLatestOutgoing(conversation.id, result.isSuccess() ? "已送达" : "未送达");
+                    if (result.isSuccess()) {
+                        rememberChattedPeer(conversation.shortId);
+                        conversation.familiar = true;
+                    }
                 }
                 pushEvent(result.isSuccess() ? "消息已送达" : "对方暂时不可达，消息未送达");
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.status != 0) {
+                if (message.cmd == HostProtocol.CMD_P2P_CHAT_SEND) {
+                    markLatestOutgoing(lastOutgoingConversationId, "未送达");
+                }
                 pushEvent(productResponseError(message));
             }
         } catch (RuntimeException e) {
@@ -920,10 +1524,24 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
             return bleClient.isScanning() ? "↻ 正在找回已绑定终端" : "○ 等待已绑定 Glimmer";
         }
+        if (index == 1) {
+            Conversation conversation = selectedConversation();
+            if (conversation != null) {
+                if (conversation.subtitle != null && !conversation.subtitle.isEmpty()) {
+                    return conversation.subtitle;
+                }
+                return conversation.proximity == null || conversation.proximity.isEmpty() ? "微光对话" : conversation.proximity;
+            }
+            int unread = 0;
+            for (Conversation item : conversations) {
+                unread += item.unread;
+            }
+            return unread > 0 ? unread + " 条未读" : "最近对话";
+        }
         if (index == 2) {
             return connectionStatus;
         }
-        return "微光范围内的消息状态";
+        return "隐私和安全";
     }
 
     private String nearbyTitle() {

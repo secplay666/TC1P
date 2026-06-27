@@ -62,7 +62,7 @@ final class GlimmerBleClient {
             "01000056-4544-3159-4b45-000550544e44",
     };
     private static final UUID CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    private static final boolean CMD_WRITE_WITHOUT_RESPONSE = true;
+    private static final boolean CMD_WRITE_WITHOUT_RESPONSE = false;
     private static final long CMD_WRITE_PACE_MS = 35;
 
     private final Context context;
@@ -264,6 +264,14 @@ final class GlimmerBleClient {
     void setProfileSummary(String nickname, String signature) {
         int seed = (int) (System.currentTimeMillis() & 0x7fffffff);
         sendPackets(HostProtocol.makeSetProfileSummary(nextSeq(), nickname, signature, seed, new int[]{1, 2, 3}));
+    }
+
+    void sendP2pChat(String text) {
+        sendPackets(HostProtocol.makeP2pChatSend(nextSeq(), text));
+    }
+
+    void sendP2pChat(long targetShortId, String text) {
+        sendPackets(HostProtocol.makeP2pChatSend(nextSeq(), targetShortId, text));
     }
 
     void requestFullSync() {

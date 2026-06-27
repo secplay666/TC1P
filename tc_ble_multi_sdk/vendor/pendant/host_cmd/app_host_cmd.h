@@ -43,11 +43,21 @@ typedef struct {
     u8 p2p_chat_event_flags;
     u8 p2p_chat_event_last_status;
     u8 host_ready;
+    u8 last_rx_status;
+    u8 last_rx_seq;
+    u8 last_rx_cmd;
+    u8 last_rx_frag;
+    u8 last_rx_frag_count;
+    u8 last_rx_frame_len;
     u16 p2p_chat_event_len;
     u16 p2p_chat_event_text_len;
     u16 p2p_chat_event_rx_count;
     u16 p2p_chat_event_drop_count;
     u16 p2p_chat_event_sent_count;
+    u16 rx_frame_count;
+    u16 rx_message_count;
+    u16 cmd_count;
+    u16 crc_error_count;
 } app_host_cmd_debug_t;
 
 void app_host_cmd_init(void);

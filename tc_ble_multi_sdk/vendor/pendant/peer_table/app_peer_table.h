@@ -21,6 +21,7 @@ typedef struct {
 void app_peer_table_init(void);
 void app_peer_table_clear(void);
 app_peer_record_t *app_peer_table_find(const app_eid_t *eid);
+app_peer_record_t *app_peer_table_find_by_short_id(u32 short_id);
 app_peer_record_t *app_peer_table_find_or_alloc(const app_eid_t *eid);
 app_status_t app_peer_table_remove(const app_eid_t *eid);
 u8 app_peer_table_count(void);
