@@ -8,11 +8,14 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -30,6 +33,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -42,6 +46,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -51,6 +58,7 @@ import java.util.Set;
 public class MainActivity extends Activity implements GlimmerBleClient.Listener {
     private static final String TAG_CHAT = "GlimmerChat";
     private static final int REQUEST_APP_PERMISSIONS = 1201;
+    private static final int REQUEST_PICK_IMAGE = 1202;
     private static final String PREFS_NAME = "glimmer_app";
     private static final String KEY_BOUND_ADDRESS = "bound_address";
     private static final String KEY_BOUND_NAME = "bound_name";
@@ -65,6 +73,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final String CHAT_STATUS_DELIVERED = "已送达";
     private static final String CHAT_STATUS_UNCONFIRMED = "未确认";
     private static final String CHAT_STATUS_FAILED = "未送达";
+    private static final String CHAT_STATUS_COMPRESSING = "处理中";
 
     private final List<Button> navButtons = new ArrayList<>();
     private final List<GlimmerBleClient.ScanDevice> scanDevices = new ArrayList<>();
@@ -151,6 +160,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private String boundName;
     private String boundShortId;
     private String selectedConversationId;
+    private String pendingImagePickConversationId;
     private long nextChatMessageId = 1;
     private PendingChatSend activeChatSend;
 
@@ -180,22 +190,40 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private static final class ChatMessage {
+        static final int KIND_TEXT = 0;
+        static final int KIND_IMAGE = 1;
+
         final long localId;
         final boolean incoming;
         final boolean system;
+        final int kind;
         final String text;
+        final byte[] imageBytes;
         String status;
         final String time;
 
         ChatMessage(boolean incoming, boolean system, String text, String status, String time) {
-            this(0, incoming, system, text, status, time);
+            this(0, incoming, system, KIND_TEXT, text, null, status, time);
         }
 
         ChatMessage(long localId, boolean incoming, boolean system, String text, String status, String time) {
+            this(localId, incoming, system, KIND_TEXT, text, null, status, time);
+        }
+
+        static ChatMessage image(long localId, boolean incoming, byte[] imageBytes,
+                                 String caption, String status, String time) {
+            return new ChatMessage(localId, incoming, false, KIND_IMAGE,
+                    caption, imageBytes, status, time);
+        }
+
+        ChatMessage(long localId, boolean incoming, boolean system, int kind,
+                    String text, byte[] imageBytes, String status, String time) {
             this.localId = localId;
             this.incoming = incoming;
             this.system = system;
+            this.kind = kind;
             this.text = text;
+            this.imageBytes = imageBytes;
             this.status = status;
             this.time = time;
         }
@@ -224,12 +252,49 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         loadLocalState();
         bleClient = new GlimmerBleClient(this, this);
-        fileTransfer = new GlimmerFileTransfer(bleClient, handler);
+        fileTransfer = new GlimmerFileTransfer(bleClient, handler, new GlimmerFileTransfer.Listener() {
+            @Override
+            public void onFileTxStarted(long clientTag, long targetShortId, int fileId,
+                                        int objectKind, int totalLen, int totalChunks) {
+                handleFileTxStarted(clientTag, targetShortId, objectKind, totalLen);
+            }
+
+            @Override
+            public void onFileTxCompleted(long clientTag, long targetShortId, int fileId,
+                                          int objectKind, int totalLen) {
+                handleFileTxCompleted(clientTag, targetShortId, objectKind, totalLen);
+            }
+
+            @Override
+            public void onFileTxFailed(long clientTag, long targetShortId, int fileId, String reason) {
+                handleFileTxFailed(clientTag, targetShortId, reason);
+            }
+
+            @Override
+            public void onFileRxStarted(long srcShortId, int fileId, int objectKind,
+                                        int totalLen, int totalChunks) {
+                handleFileRxStarted(srcShortId, objectKind, totalLen);
+            }
+
+            @Override
+            public void onFileRxCompleted(long srcShortId, int fileId, int objectKind,
+                                          byte[] data, boolean ok) {
+                handleFileRxCompleted(srcShortId, objectKind, data, ok);
+            }
+        });
         buildUi();
         registerDebugChatReceiver();
         registerDebugFileReceiver();
         showTab(0);
         maybeStartBoundReconnect();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_PICK_IMAGE) {
+            handlePickedImage(resultCode, data);
+        }
     }
 
     private void configureSystemInsets() {
@@ -1308,10 +1373,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         bubbleColumn.setOrientation(LinearLayout.VERTICAL);
         bubbleColumn.setGravity(message.incoming ? Gravity.START : Gravity.END);
 
-        TextView bubble = label(message.text, 15, color(0x1F2420), false);
-        bubble.setPadding(dp(12), dp(9), dp(12), dp(9));
-        bubble.setMaxWidth(Math.max(dp(180), getResources().getDisplayMetrics().widthPixels - dp(126)));
-        bubble.setBackground(rounded(message.incoming ? 0xFFFFFF : 0xDCEFE9, 8));
+        View bubble;
+        if (message.kind == ChatMessage.KIND_IMAGE) {
+            bubble = imageBubble(message);
+        } else {
+            TextView textBubble = label(message.text, 15, color(0x1F2420), false);
+            textBubble.setPadding(dp(12), dp(9), dp(12), dp(9));
+            textBubble.setMaxWidth(Math.max(dp(180), getResources().getDisplayMetrics().widthPixels - dp(126)));
+            textBubble.setBackground(rounded(message.incoming ? 0xFFFFFF : 0xDCEFE9, 8));
+            bubble = textBubble;
+        }
         bubbleColumn.addView(bubble, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1338,12 +1409,50 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return row;
     }
 
+    private View imageBubble(ChatMessage message) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(8), dp(8), dp(8), dp(8));
+        box.setBackground(rounded(message.incoming ? 0xFFFFFF : 0xDCEFE9, 8));
+
+        Bitmap bitmap = message.imageBytes == null ? null
+                : BitmapFactory.decodeByteArray(message.imageBytes, 0, message.imageBytes.length);
+        if (bitmap != null) {
+            ImageView image = new ImageView(this);
+            image.setImageBitmap(bitmap);
+            image.setAdjustViewBounds(true);
+            image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            int maxWidth = Math.min(dp(210), getResources().getDisplayMetrics().widthPixels - dp(150));
+            int maxHeight = dp(180);
+            box.addView(image, new LinearLayout.LayoutParams(maxWidth, maxHeight));
+        }
+
+        TextView caption = label(message.text == null || message.text.isEmpty()
+                        ? "图片" : message.text,
+                12, color(0x667068), false);
+        caption.setMaxWidth(Math.max(dp(160), getResources().getDisplayMetrics().widthPixels - dp(150)));
+        box.addView(caption, marginParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, dp(6), 0, 0));
+        return box;
+    }
+
     private LinearLayout chatInputBar(Conversation conversation) {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(8), dp(8), dp(8), dp(8));
         bar.setBackground(rounded(0xFFFFFF, 8));
+
+        Button image = secondaryButton("+", v -> pickImageForConversation(conversation));
+        image.setTextSize(20);
+        image.setFocusable(false);
+        image.setFocusableInTouchMode(false);
+        image.setEnabled(debugReady);
+        image.setTextColor(debugReady ? color(0x1F6F60) : color(0x9AA39C));
+        image.setBackground(rounded(debugReady ? 0xDCEFE9 : 0xE4E8E3, 8));
+        bar.addView(image, marginParams(dp(44), dp(44), 0, 0, dp(8), 0));
 
         chatInput = new EditText(this);
         chatInput.setHint("消息");
@@ -1423,6 +1532,212 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             return;
         }
         rerenderCurrentTabKeepingChatInput();
+    }
+
+    private void pickImageForConversation(Conversation conversation) {
+        if (conversation == null) {
+            return;
+        }
+        if (!debugReady) {
+            addChatMessage(conversation, new ChatMessage(false, true,
+                    "我的 Glimmer 未连接", "", nowTimeText()));
+            refreshAfterSendingChat(conversation);
+            return;
+        }
+        pendingImagePickConversationId = conversation.id;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        try {
+            startActivityForResult(intent, REQUEST_PICK_IMAGE);
+        } catch (RuntimeException e) {
+            pendingImagePickConversationId = null;
+            addChatMessage(conversation, new ChatMessage(false, true,
+                    "暂时打不开图片选择器", "", nowTimeText()));
+            refreshAfterSendingChat(conversation);
+        }
+    }
+
+    private void handlePickedImage(int resultCode, Intent data) {
+        String conversationId = pendingImagePickConversationId;
+        pendingImagePickConversationId = null;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null || conversationId == null) {
+            return;
+        }
+        Conversation conversation = findConversation(conversationId);
+        if (conversation == null) {
+            return;
+        }
+
+        Uri uri = data.getData();
+        long messageId = nextChatMessageId();
+        addChatMessage(conversation, new ChatMessage(messageId, false, false,
+                "图片处理中", CHAT_STATUS_COMPRESSING, nowTimeText()));
+        refreshAfterSendingChat(conversation);
+
+        new Thread(() -> {
+            try {
+                byte[] imageBytes = compressImageForTransfer(uri);
+                handler.post(() -> sendImageMessage(conversation, messageId, imageBytes));
+            } catch (IOException | RuntimeException e) {
+                handler.post(() -> {
+                    ChatMessage message = findChatMessage(conversation.id, messageId);
+                    if (message != null) {
+                        message.status = CHAT_STATUS_FAILED;
+                    }
+                    pushEvent("图片处理失败");
+                    refreshConversationAfterFileUpdate(conversation.id, true);
+                });
+            }
+        }, "glimmer-image-compress").start();
+    }
+
+    private void sendImageMessage(Conversation conversation, long messageId, byte[] imageBytes) {
+        if (conversation == null || imageBytes == null || imageBytes.length == 0) {
+            return;
+        }
+        ChatMessage oldMessage = findChatMessage(conversation.id, messageId);
+        if (oldMessage != null) {
+            conversation.messages.remove(oldMessage);
+        }
+        ChatMessage imageMessage = ChatMessage.image(messageId, false, imageBytes,
+                "图片 · " + formatBytes(imageBytes.length), CHAT_STATUS_QUEUED, nowTimeText());
+        addChatMessage(conversation, imageMessage);
+        refreshConversationAfterFileUpdate(conversation.id, true);
+        if (fileTransfer == null || !fileTransfer.sendImage(conversation.shortId, imageBytes, messageId)) {
+            markChatMessageStatus(conversation.id, messageId, CHAT_STATUS_FAILED);
+            refreshConversationAfterFileUpdate(conversation.id, true);
+        }
+    }
+
+    private byte[] compressImageForTransfer(Uri uri) throws IOException {
+        Bitmap source;
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            source = BitmapFactory.decodeStream(input);
+        }
+        if (source == null) {
+            throw new IOException("decode image failed");
+        }
+
+        byte[] best = null;
+        int[] maxEdges = {520, 420, 320, 240, 180, 140};
+        int[] qualities = {76, 64, 52, 42, 34};
+        for (int maxEdge : maxEdges) {
+            Bitmap scaled = scaleBitmap(source, maxEdge);
+            for (int quality : qualities) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                scaled.compress(Bitmap.CompressFormat.JPEG, quality, out);
+                byte[] candidate = out.toByteArray();
+                best = candidate;
+                if (candidate.length <= GlimmerFileTransfer.MAX_USER_OBJECT_BYTES) {
+                    if (scaled != source) {
+                        scaled.recycle();
+                    }
+                    if (!source.isRecycled()) {
+                        source.recycle();
+                    }
+                    return candidate;
+                }
+            }
+            if (scaled != source) {
+                scaled.recycle();
+            }
+        }
+        if (!source.isRecycled()) {
+            source.recycle();
+        }
+        if (best != null && best.length <= GlimmerFileTransfer.MAX_TRANSFER_BYTES) {
+            return best;
+        }
+        throw new IOException("compressed image too large");
+    }
+
+    private Bitmap scaleBitmap(Bitmap source, int maxEdge) {
+        int width = source.getWidth();
+        int height = source.getHeight();
+        int longest = Math.max(width, height);
+        if (longest <= maxEdge) {
+            return source;
+        }
+        float scale = maxEdge / (float) longest;
+        int outWidth = Math.max(1, Math.round(width * scale));
+        int outHeight = Math.max(1, Math.round(height * scale));
+        return Bitmap.createScaledBitmap(source, outWidth, outHeight, true);
+    }
+
+    private void handleFileTxStarted(long clientTag, long targetShortId, int objectKind, int totalLen) {
+        if (objectKind != GlimmerFileTransfer.KIND_IMAGE || clientTag == 0) {
+            return;
+        }
+        Conversation conversation = ensureConversation(targetShortId);
+        markChatMessageStatus(conversation.id, clientTag, CHAT_STATUS_SENDING);
+        refreshConversationAfterFileUpdate(conversation.id, true);
+    }
+
+    private void handleFileTxCompleted(long clientTag, long targetShortId, int objectKind, int totalLen) {
+        if (objectKind != GlimmerFileTransfer.KIND_IMAGE || clientTag == 0) {
+            return;
+        }
+        Conversation conversation = ensureConversation(targetShortId);
+        markChatMessageStatus(conversation.id, clientTag, CHAT_STATUS_DELIVERED);
+        rememberChattedPeer(targetShortId);
+        conversation.familiar = true;
+        pushEvent("图片已送达");
+        refreshConversationAfterFileUpdate(conversation.id, true);
+    }
+
+    private void handleFileTxFailed(long clientTag, long targetShortId, String reason) {
+        if (clientTag == 0) {
+            return;
+        }
+        Conversation conversation = ensureConversation(targetShortId);
+        markChatMessageStatus(conversation.id, clientTag, CHAT_STATUS_FAILED);
+        pushEvent("图片未送达");
+        refreshConversationAfterFileUpdate(conversation.id, true);
+    }
+
+    private void handleFileRxStarted(long srcShortId, int objectKind, int totalLen) {
+        if (objectKind == GlimmerFileTransfer.KIND_IMAGE) {
+            pushEvent("正在接收图片 · " + formatBytes(totalLen));
+        }
+    }
+
+    private void handleFileRxCompleted(long srcShortId, int objectKind, byte[] data, boolean ok) {
+        if (objectKind != GlimmerFileTransfer.KIND_IMAGE) {
+            return;
+        }
+        Conversation conversation = ensureConversation(srcShortId);
+        updateConversationFromKnownPeers(conversation);
+        if (ok) {
+            addChatMessage(conversation, ChatMessage.image(0, true, data,
+                    "图片 · " + formatBytes(data == null ? 0 : data.length), "", nowTimeText()));
+            rememberChattedPeer(srcShortId);
+            conversation.familiar = true;
+            pushEvent("收到一张图片");
+        } else {
+            addChatMessage(conversation, new ChatMessage(true, true,
+                    "一张图片接收失败", "", nowTimeText()));
+            pushEvent("图片接收失败");
+        }
+        refreshConversationAfterFileUpdate(conversation.id, conversation.id.equals(selectedConversationId));
+    }
+
+    private void refreshConversationAfterFileUpdate(String conversationId, boolean scrollToBottom) {
+        if (conversationId != null && conversationId.equals(selectedConversationId)
+                && refreshCurrentChatMessages(scrollToBottom)) {
+            if (isChatInputActive()) {
+                keepChatInputEditing();
+            }
+            return;
+        }
+        rerenderCurrentTabForBackgroundUpdate();
+    }
+
+    private String formatBytes(int bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        return String.format(Locale.CHINA, "%.1f KB", bytes / 1024.0f);
     }
 
     private String conversationInitial(Conversation conversation) {

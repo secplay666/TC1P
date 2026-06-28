@@ -13,6 +13,10 @@ import java.util.zip.CRC32;
 final class GlimmerFileTransfer {
     static final String TAG = "GlimmerFile";
     static final String ACTION_DEBUG_FILE = "com.glimmer.app.DEBUG_FILE";
+    static final int KIND_TEST = 0;
+    static final int KIND_IMAGE = 1;
+    static final int MAX_TRANSFER_BYTES = 16 * 1024;
+    static final int MAX_USER_OBJECT_BYTES = 14 * 1024;
 
     private static final int MAGIC_G = 0x47;
     private static final int MAGIC_F = 0x46;
@@ -26,7 +30,6 @@ final class GlimmerFileTransfer {
     private static final int MIN_CHUNK_BYTES = 16;
     private static final int DEFAULT_CHUNK_BYTES = 48;
     private static final int MAX_CHUNK_BYTES = 48;
-    private static final int MAX_TRANSFER_BYTES = 16 * 1024;
     private static final int MAX_CHUNKS = 384;
     private static final int SEND_RETRY_MAX = 40;
     private static final long SEND_RETRY_DELAY_MS = 140;
@@ -37,6 +40,7 @@ final class GlimmerFileTransfer {
 
     private final GlimmerBleClient bleClient;
     private final Handler handler;
+    private final Listener listener;
     private final Queue<OutboundFrame> txQueue = new ArrayDeque<>();
     private final Runnable drainRunnable = this::drainTxQueue;
     private final Runnable reportRunnable = this::sendPendingReport;
@@ -49,8 +53,13 @@ final class GlimmerFileTransfer {
     private int fileSerial = 1;
 
     GlimmerFileTransfer(GlimmerBleClient bleClient, Handler handler) {
+        this(bleClient, handler, null);
+    }
+
+    GlimmerFileTransfer(GlimmerBleClient bleClient, Handler handler, Listener listener) {
         this.bleClient = bleClient;
         this.handler = handler;
+        this.listener = listener;
     }
 
     void onDebugReadyChanged(boolean ready) {
@@ -65,7 +74,34 @@ final class GlimmerFileTransfer {
         }
         activeFrame = null;
         txQueue.clear();
+        if (sendSession != null) {
+            notifyTxFailed(sendSession.clientTag, sendSession.targetShortId,
+                    sendSession.fileId, "not_ready");
+        }
+        sendSession = null;
         handler.removeCallbacks(senderWatchdogRunnable);
+    }
+
+    boolean sendImage(long targetShortId, byte[] imageBytes, long clientTag) {
+        if (imageBytes == null || imageBytes.length == 0) {
+            notifyTxFailed(clientTag, targetShortId, 0, "empty_image");
+            return false;
+        }
+        if (imageBytes.length > MAX_TRANSFER_BYTES) {
+            notifyTxFailed(clientTag, targetShortId, 0, "too_large");
+            return false;
+        }
+        if (!bleClient.isDebugReady()) {
+            notifyTxFailed(clientTag, targetShortId, 0, "not_ready");
+            return false;
+        }
+        if (sendSession != null || activeFrame != null || !txQueue.isEmpty()) {
+            notifyTxFailed(clientTag, targetShortId, 0, "busy");
+            return false;
+        }
+        startTransfer(targetShortId, imageBytes, DEFAULT_CHUNK_BYTES, 0, -1,
+                KIND_IMAGE, clientTag, "image");
+        return true;
     }
 
     void onDebugFileIntent(Intent intent) {
@@ -128,19 +164,40 @@ final class GlimmerFileTransfer {
             return;
         }
 
+        byte[] data = makeTestData(fileSerial, safeSize);
+        startTransfer(targetShortId, data, safeChunk, Math.max(0, dropEvery), dropOnce,
+                KIND_TEST, 0, "test");
+    }
+
+    private void startTransfer(long targetShortId, byte[] data, int chunkBytes, int dropEvery,
+                               int dropOnce, int objectKind, long clientTag, String label) {
+        int safeSize = clamp(data.length, 1, MAX_TRANSFER_BYTES);
+        int safeChunk = clamp(chunkBytes, MIN_CHUNK_BYTES, MAX_CHUNK_BYTES);
+        int totalChunks = (safeSize + safeChunk - 1) / safeChunk;
+        if (totalChunks > MAX_CHUNKS) {
+            safeChunk = (safeSize + MAX_CHUNKS - 1) / MAX_CHUNKS;
+            safeChunk = clamp(safeChunk, MIN_CHUNK_BYTES, MAX_CHUNK_BYTES);
+            totalChunks = (safeSize + safeChunk - 1) / safeChunk;
+        }
+        if (totalChunks > MAX_CHUNKS) {
+            Log.w(TAG, "start_failed reason=too_many_chunks size=" + safeSize + " chunk=" + safeChunk);
+            notifyTxFailed(clientTag, targetShortId, 0, "too_many_chunks");
+            return;
+        }
+
         int fileId = nextFileId(targetShortId);
-        byte[] data = makeTestData(fileId, safeSize);
         int crc = crc32(data);
         activeFrame = null;
         txQueue.clear();
         sendSession = new SendSession(targetShortId, fileId, data, safeChunk, totalChunks, crc,
-                Math.max(0, dropEvery), dropOnce);
+                dropEvery, dropOnce, objectKind, clientTag);
         handler.removeCallbacks(senderWatchdogRunnable);
 
         Log.i(TAG, String.format(Locale.US,
-                "start_tx file=%08X target=%s size=%d chunk=%d chunks=%d crc=%08X drop_every=%d drop_once=%d",
-                fileId, shortId(targetShortId), safeSize, safeChunk, totalChunks, crc,
+                "start_tx file=%08X target=%s kind=%d label=%s size=%d chunk=%d chunks=%d crc=%08X drop_every=%d drop_once=%d",
+                fileId, shortId(targetShortId), objectKind, label, safeSize, safeChunk, totalChunks, crc,
                 sendSession.dropEvery, sendSession.dropOnce));
+        notifyTxStarted(clientTag, targetShortId, fileId, objectKind, data.length, totalChunks);
 
         enqueueFrame(targetShortId, fileId, TYPE_START, buildStartFrame(sendSession), "START");
         sendSession.pendingInitialFrames++;
@@ -191,6 +248,8 @@ final class GlimmerFileTransfer {
         if (sendSession != null && frame.fileId == sendSession.fileId) {
             Log.w(TAG, String.format(Locale.US, "tx_abort file=%08X reason=host_status_%d",
                     sendSession.fileId, message.status));
+            notifyTxFailed(sendSession.clientTag, sendSession.targetShortId,
+                    sendSession.fileId, "host_status_" + message.status);
             sendSession = null;
             txQueue.clear();
             handler.removeCallbacks(senderWatchdogRunnable);
@@ -230,12 +289,15 @@ final class GlimmerFileTransfer {
                         frame.fileId, shortId(event.shortId), frame.status,
                         frame.totalLen, frame.crc32));
                 if (sendSession != null && sendSession.fileId == frame.fileId && frame.status == 0) {
+                    SendSession completed = sendSession;
                     clearQueuedFramesForFile(frame.fileId);
                     sendSession = null;
                     handler.removeCallbacks(senderWatchdogRunnable);
                     Log.i(TAG, String.format(Locale.US,
                             "tx_complete_by_done file=%08X size=%d crc=%08X",
                             frame.fileId, frame.totalLen, frame.crc32));
+                    notifyTxCompleted(completed.clientTag, completed.targetShortId,
+                            completed.fileId, completed.objectKind, completed.data.length);
                 }
                 break;
             case TYPE_CANCEL:
@@ -260,11 +322,12 @@ final class GlimmerFileTransfer {
             return;
         }
         receiveSession = new ReceiveSession(srcShortId, frame.fileId, frame.totalLen,
-                frame.chunkSize, frame.totalChunks, frame.crc32);
+                frame.chunkSize, frame.totalChunks, frame.crc32, frame.objectKind);
         Log.i(TAG, String.format(Locale.US,
-                "rx_start file=%08X src=%s rssi=%d size=%d chunk=%d chunks=%d crc=%08X",
-                frame.fileId, shortId(srcShortId), rssi, frame.totalLen, frame.chunkSize,
+                "rx_start file=%08X src=%s rssi=%d kind=%d size=%d chunk=%d chunks=%d crc=%08X",
+                frame.fileId, shortId(srcShortId), rssi, frame.objectKind, frame.totalLen, frame.chunkSize,
                 frame.totalChunks, frame.crc32));
+        notifyRxStarted(srcShortId, frame.fileId, frame.objectKind, frame.totalLen, frame.totalChunks);
         scheduleReport(REPORT_DELAY_MS);
     }
 
@@ -325,6 +388,7 @@ final class GlimmerFileTransfer {
                 frame.fileId, shortId(srcShortId), frame.receivedCount, frame.totalChunks, missing));
 
         if (missing == 0 && frame.receivedCount >= session.totalChunks) {
+            SendSession completed = session;
             clearQueuedFramesForFile(session.fileId);
             enqueueFrame(srcShortId, session.fileId, TYPE_DONE, buildDoneFrame(session, 0), "DONE");
             Log.i(TAG, String.format(Locale.US,
@@ -332,6 +396,8 @@ final class GlimmerFileTransfer {
                     session.fileId, session.data.length, session.crc32));
             sendSession = null;
             handler.removeCallbacks(senderWatchdogRunnable);
+            notifyTxCompleted(completed.clientTag, completed.targetShortId,
+                    completed.fileId, completed.objectKind, completed.data.length);
             drainTxQueue();
             return;
         }
@@ -348,6 +414,8 @@ final class GlimmerFileTransfer {
             Log.w(TAG, String.format(Locale.US,
                     "tx_abort file=%08X reason=too_many_repairs missing=%d",
                     session.fileId, missing));
+            notifyTxFailed(session.clientTag, session.targetShortId,
+                    session.fileId, "too_many_repairs");
             sendSession = null;
             clearQueuedFramesForFile(frame.fileId);
             handler.removeCallbacks(senderWatchdogRunnable);
@@ -376,6 +444,7 @@ final class GlimmerFileTransfer {
         Log.i(TAG, String.format(Locale.US,
                 "rx_complete file=%08X size=%d crc=%08X expected=%08X ok=%d",
                 rx.fileId, rx.totalLen, gotCrc, rx.crc32, ok ? 1 : 0));
+        notifyRxCompleted(rx.srcShortId, rx.fileId, rx.objectKind, rx.data, ok);
         sendReport(rx);
         enqueueFrame(rx.srcShortId, rx.fileId, TYPE_DONE,
                 buildDoneFrame(rx.fileId, rx.totalLen, gotCrc, ok ? 0 : 1), "DONE");
@@ -488,6 +557,8 @@ final class GlimmerFileTransfer {
         if (session.watchdogResends >= WATCHDOG_RESEND_MAX) {
             Log.w(TAG, String.format(Locale.US,
                     "tx_abort file=%08X reason=report_timeout", session.fileId));
+            notifyTxFailed(session.clientTag, session.targetShortId,
+                    session.fileId, "report_timeout");
             sendSession = null;
             return;
         }
@@ -510,7 +581,7 @@ final class GlimmerFileTransfer {
         wr16(frame, 12, session.chunkSize);
         wr16(frame, 14, session.totalChunks);
         wr32(frame, 16, session.crc32);
-        frame[20] = 0;
+        frame[20] = (byte) session.objectKind;
         return frame;
     }
 
@@ -572,6 +643,7 @@ final class GlimmerFileTransfer {
                 out.chunkSize = rd16(frame, 12);
                 out.totalChunks = rd16(frame, 14);
                 out.crc32 = rd32(frame, 16);
+                out.objectKind = u8(frame[20]);
                 break;
             case TYPE_DATA:
                 if (frame.length < 10) {
@@ -686,6 +758,57 @@ final class GlimmerFileTransfer {
         return String.format(Locale.US, "%08X", value & 0xffffffffL);
     }
 
+    private void notifyTxStarted(long clientTag, long targetShortId, int fileId,
+                                 int objectKind, int totalLen, int totalChunks) {
+        if (listener != null) {
+            listener.onFileTxStarted(clientTag, targetShortId, fileId,
+                    objectKind, totalLen, totalChunks);
+        }
+    }
+
+    private void notifyTxCompleted(long clientTag, long targetShortId, int fileId,
+                                   int objectKind, int totalLen) {
+        if (listener != null) {
+            listener.onFileTxCompleted(clientTag, targetShortId, fileId, objectKind, totalLen);
+        }
+    }
+
+    private void notifyTxFailed(long clientTag, long targetShortId, int fileId, String reason) {
+        if (listener != null) {
+            listener.onFileTxFailed(clientTag, targetShortId, fileId, reason);
+        }
+    }
+
+    private void notifyRxStarted(long srcShortId, int fileId, int objectKind,
+                                 int totalLen, int totalChunks) {
+        if (listener != null) {
+            listener.onFileRxStarted(srcShortId, fileId, objectKind, totalLen, totalChunks);
+        }
+    }
+
+    private void notifyRxCompleted(long srcShortId, int fileId, int objectKind,
+                                   byte[] data, boolean ok) {
+        if (listener != null) {
+            listener.onFileRxCompleted(srcShortId, fileId, objectKind, data, ok);
+        }
+    }
+
+    interface Listener {
+        void onFileTxStarted(long clientTag, long targetShortId, int fileId,
+                             int objectKind, int totalLen, int totalChunks);
+
+        void onFileTxCompleted(long clientTag, long targetShortId, int fileId,
+                               int objectKind, int totalLen);
+
+        void onFileTxFailed(long clientTag, long targetShortId, int fileId, String reason);
+
+        void onFileRxStarted(long srcShortId, int fileId, int objectKind,
+                             int totalLen, int totalChunks);
+
+        void onFileRxCompleted(long srcShortId, int fileId, int objectKind,
+                               byte[] data, boolean ok);
+    }
+
     private static final class OutboundFrame {
         final long targetShortId;
         final int fileId;
@@ -713,13 +836,16 @@ final class GlimmerFileTransfer {
         final int crc32;
         final int dropEvery;
         final int dropOnce;
+        final int objectKind;
+        final long clientTag;
         int pendingInitialFrames;
         int pendingRepairFrames;
         int repairRound;
         int watchdogResends;
 
         SendSession(long targetShortId, int fileId, byte[] data, int chunkSize,
-                    int totalChunks, int crc32, int dropEvery, int dropOnce) {
+                    int totalChunks, int crc32, int dropEvery, int dropOnce,
+                    int objectKind, long clientTag) {
             this.targetShortId = targetShortId;
             this.fileId = fileId;
             this.data = data;
@@ -728,6 +854,8 @@ final class GlimmerFileTransfer {
             this.crc32 = crc32;
             this.dropEvery = dropEvery;
             this.dropOnce = dropOnce;
+            this.objectKind = objectKind;
+            this.clientTag = clientTag;
         }
 
         boolean shouldSkipInitial(int index) {
@@ -761,6 +889,7 @@ final class GlimmerFileTransfer {
         final int chunkSize;
         final int totalChunks;
         final int crc32;
+        final int objectKind;
         final byte[] data;
         final boolean[] received;
         int receivedCount;
@@ -768,13 +897,14 @@ final class GlimmerFileTransfer {
         boolean completed;
 
         ReceiveSession(long srcShortId, int fileId, int totalLen, int chunkSize,
-                       int totalChunks, int crc32) {
+                       int totalChunks, int crc32, int objectKind) {
             this.srcShortId = srcShortId;
             this.fileId = fileId;
             this.totalLen = totalLen;
             this.chunkSize = chunkSize;
             this.totalChunks = totalChunks;
             this.crc32 = crc32;
+            this.objectKind = objectKind;
             this.data = new byte[totalLen];
             this.received = new boolean[totalChunks];
         }
@@ -787,6 +917,7 @@ final class GlimmerFileTransfer {
         int chunkSize;
         int totalChunks;
         int crc32;
+        int objectKind;
         int chunkIndex;
         byte[] data;
         int receivedCount;
