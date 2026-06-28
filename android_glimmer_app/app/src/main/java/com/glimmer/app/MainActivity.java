@@ -20,6 +20,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.text.InputFilter;
 import android.text.TextUtils;
 import android.util.Log;
@@ -27,6 +28,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -40,33 +42,54 @@ import android.widget.TextView;
 
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import com.canhub.cropper.CropImageView;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Queue;
 import java.util.Set;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 public class MainActivity extends Activity implements GlimmerBleClient.Listener {
     private static final String TAG_CHAT = "GlimmerChat";
     private static final int REQUEST_APP_PERMISSIONS = 1201;
     private static final int REQUEST_PICK_IMAGE = 1202;
+    private static final int REQUEST_PICK_AVATAR = 1203;
+    private static final int AVATAR_OUTPUT_SIZE_PX = 96;
     private static final String PREFS_NAME = "glimmer_app";
     private static final String KEY_BOUND_ADDRESS = "bound_address";
     private static final String KEY_BOUND_NAME = "bound_name";
     private static final String KEY_BOUND_SHORT_ID = "bound_short_id";
     private static final String KEY_CHATTED_PEERS = "chatted_peer_ids";
+    private static final String KEY_LOCAL_AVATAR_TEXT = "local_avatar_text";
+    private static final String KEY_LOCAL_AVATAR_COLOR = "local_avatar_color";
+    private static final String KEY_LOCAL_AVATAR_HASH = "local_avatar_hash";
+    private static final String CHAT_HISTORY_FILE = "glimmer_chat_history.json";
+    private static final String LOCAL_AVATAR_FILE = "local_avatar.jpg";
+    private static final String PEER_AVATAR_PREFIX = "peer_avatar_";
+    private static final String PEER_AVATAR_SUFFIX = ".jpg";
     private static final long AUTO_SYNC_INTERVAL_MS = 10000;
     private static final long AUTO_RECONNECT_INTERVAL_MS = 15000;
     private static final long CHAT_SEND_TIMEOUT_MS = 25000;
+    private static final long AVATAR_SEND_DELAY_MS = 5000;
+    private static final long AVATAR_BUSY_RETRY_MS = 8000;
+    private static final long AVATAR_CLIENT_TAG = -1L;
     private static final String ACTION_DEBUG_CHAT = "com.glimmer.app.DEBUG_CHAT";
     private static final String CHAT_STATUS_QUEUED = "排队中";
     private static final String CHAT_STATUS_SENDING = "发送中";
@@ -85,8 +108,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private final Map<String, String> chatDrafts = new HashMap<>();
     private final Map<String, Integer> chatScrollPositions = new HashMap<>();
     private final Queue<PendingChatSend> chatSendQueue = new ArrayDeque<>();
+    private final Queue<Long> avatarSendQueue = new ArrayDeque<>();
     private final List<String> eventLines = new ArrayList<>();
     private final Set<String> chattedPeerIds = new HashSet<>();
+    private final Set<String> avatarQueuedKeys = new HashSet<>();
+    private final Set<String> avatarSentKeys = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable autoSyncRunnable = new Runnable() {
         @Override
@@ -127,6 +153,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             handleActiveChatSendTimeout();
         }
     };
+    private final Runnable avatarSendRunnable = this::trySendNextAvatar;
 
     private GlimmerBleClient bleClient;
     private GlimmerFileTransfer fileTransfer;
@@ -144,10 +171,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private int systemBottomInset;
     private int imeBottomInset;
     private boolean pendingRerenderAfterChatInput;
+    private Uri avatarEditUri;
+    private CropImageView avatarCropView;
 
     private String connectionStatus = "我的 Glimmer 未连接";
     private HostProtocol.DeviceInfo deviceInfo;
     private HostProtocol.ProfileSummary myProfile;
+    private String localAvatarText = "我";
+    private int localAvatarColor = 0x1F6F60;
+    private byte[] localAvatarBytes;
+    private int localAvatarHash;
     private EditText nicknameEdit;
     private EditText signatureEdit;
     private EditText chatInput;
@@ -175,6 +208,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         long updatedAt;
         int unread;
         boolean familiar;
+        String avatarText;
+        int avatarColor;
         final List<ChatMessage> messages = new ArrayList<>();
 
         Conversation(String id, long shortId) {
@@ -186,6 +221,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             this.lastText = "";
             this.lastTime = "";
             this.updatedAt = 0;
+            this.avatarText = "";
+            this.avatarColor = 0;
         }
     }
 
@@ -294,6 +331,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_PICK_IMAGE) {
             handlePickedImage(resultCode, data);
+        } else if (requestCode == REQUEST_PICK_AVATAR) {
+            handlePickedAvatar(resultCode, data);
         }
     }
 
@@ -316,10 +355,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     protected void onDestroy() {
         handler.removeCallbacks(autoSyncRunnable);
         handler.removeCallbacks(autoReconnectRunnable);
+        handler.removeCallbacks(avatarSendRunnable);
         if (bleClient != null) {
             bleClient.stopScan();
             bleClient.disconnect();
         }
+        clearAvatarEditor();
         unregisterDebugChatReceiver();
         unregisterDebugFileReceiver();
         super.onDestroy();
@@ -331,6 +372,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             preserveCurrentChatDraft();
             selectedConversationId = null;
             showTab(1);
+            return;
+        }
+        if (selectedTab == 2 && mineDetailMode == 4) {
+            clearAvatarEditor();
+            mineDetailMode = 1;
+            showTab(2);
             return;
         }
         if (selectedTab == 2 && mineDetailMode != 0) {
@@ -350,7 +397,210 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (savedPeers != null) {
             chattedPeerIds.addAll(savedPeers);
         }
+        localAvatarText = prefs.getString(KEY_LOCAL_AVATAR_TEXT, "我");
+        localAvatarColor = prefs.getInt(KEY_LOCAL_AVATAR_COLOR, 0x1F6F60);
+        localAvatarBytes = readOptionalFile(LOCAL_AVATAR_FILE);
+        localAvatarHash = prefs.getInt(KEY_LOCAL_AVATAR_HASH, hashBytes(localAvatarBytes));
+        loadChatHistory();
         connectionStatus = hasBoundDevice() ? "正在寻找已绑定的 Glimmer" : "我的 Glimmer 未绑定";
+    }
+
+    private void loadChatHistory() {
+        conversations.clear();
+        try (InputStream input = openFileInput(CHAT_HISTORY_FILE)) {
+            String json = new String(readAllBytes(input), "UTF-8");
+            JSONObject root = new JSONObject(json);
+            nextChatMessageId = Math.max(1, root.optLong("next_message_id", 1));
+            JSONArray items = root.optJSONArray("conversations");
+            if (items == null) {
+                return;
+            }
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.optJSONObject(i);
+                if (item == null) {
+                    continue;
+                }
+                String id = item.optString("id", "");
+                long shortId = parseShortIdOrZero(item.optString("short_id", id));
+                if (id.isEmpty()) {
+                    id = HostProtocol.shortIdText(shortId);
+                }
+                Conversation conversation = new Conversation(id, shortId);
+                conversation.title = item.optString("title", conversation.title);
+                conversation.subtitle = item.optString("subtitle", "");
+                conversation.proximity = item.optString("proximity", "附近");
+                conversation.lastText = item.optString("last_text", "");
+                conversation.lastTime = item.optString("last_time", "");
+                conversation.updatedAt = item.optLong("updated_at", 0);
+                conversation.unread = 0;
+                conversation.familiar = item.optBoolean("familiar", hasChattedWith(shortId));
+                conversation.avatarText = item.optString("avatar_text", "");
+                conversation.avatarColor = item.optInt("avatar_color", 0);
+                ensureConversationAvatar(conversation);
+                refreshConversationAvatarText(conversation);
+
+                JSONArray messages = item.optJSONArray("messages");
+                if (messages != null) {
+                    for (int j = 0; j < messages.length(); j++) {
+                        ChatMessage message = decodeChatMessage(messages.optJSONObject(j));
+                        if (message != null) {
+                            conversation.messages.add(message);
+                        }
+                    }
+                }
+                if (!conversation.messages.isEmpty()) {
+                    ChatMessage last = conversation.messages.get(conversation.messages.size() - 1);
+                    conversation.lastText = last.text;
+                    conversation.lastTime = last.time;
+                }
+                conversations.add(conversation);
+            }
+        } catch (FileNotFoundException ignored) {
+            // First launch.
+        } catch (IOException | JSONException e) {
+            Log.w(TAG_CHAT, "load chat history failed", e);
+        }
+    }
+
+    private ChatMessage decodeChatMessage(JSONObject item) {
+        if (item == null) {
+            return null;
+        }
+        int kind = item.optInt("kind", ChatMessage.KIND_TEXT);
+        long localId = item.optLong("local_id", 0);
+        boolean incoming = item.optBoolean("incoming", false);
+        boolean system = item.optBoolean("system", false);
+        String text = item.optString("text", "");
+        String status = restoreMessageStatus(item.optString("status", ""));
+        String time = item.optString("time", "");
+        byte[] imageBytes = null;
+        if (kind == ChatMessage.KIND_IMAGE) {
+            String encoded = item.optString("image", "");
+            if (!encoded.isEmpty()) {
+                try {
+                    imageBytes = android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP);
+                } catch (IllegalArgumentException e) {
+                    imageBytes = null;
+                }
+            }
+        }
+        return new ChatMessage(localId, incoming, system, kind, text, imageBytes, status, time);
+    }
+
+    private String restoreMessageStatus(String status) {
+        if (CHAT_STATUS_QUEUED.equals(status)
+                || CHAT_STATUS_SENDING.equals(status)
+                || CHAT_STATUS_COMPRESSING.equals(status)) {
+            return CHAT_STATUS_UNCONFIRMED;
+        }
+        return status == null ? "" : status;
+    }
+
+    private void saveChatHistory() {
+        try {
+            JSONObject root = new JSONObject();
+            root.put("version", 1);
+            root.put("next_message_id", nextChatMessageId);
+            JSONArray items = new JSONArray();
+            for (Conversation conversation : conversations) {
+                items.put(encodeConversation(conversation));
+            }
+            root.put("conversations", items);
+            byte[] data = root.toString().getBytes("UTF-8");
+            try (OutputStream output = openFileOutput(CHAT_HISTORY_FILE, MODE_PRIVATE)) {
+                output.write(data);
+            }
+        } catch (IOException | JSONException e) {
+            Log.w(TAG_CHAT, "save chat history failed", e);
+        }
+    }
+
+    private JSONObject encodeConversation(Conversation conversation) throws JSONException {
+        ensureConversationAvatar(conversation);
+        JSONObject item = new JSONObject();
+        item.put("id", conversation.id);
+        item.put("short_id", HostProtocol.shortIdText(conversation.shortId));
+        item.put("title", conversation.title);
+        item.put("subtitle", conversation.subtitle);
+        item.put("proximity", conversation.proximity);
+        item.put("last_text", conversation.lastText);
+        item.put("last_time", conversation.lastTime);
+        item.put("updated_at", conversation.updatedAt);
+        item.put("familiar", conversation.familiar);
+        item.put("avatar_text", conversation.avatarText);
+        item.put("avatar_color", conversation.avatarColor);
+        JSONArray messages = new JSONArray();
+        int start = Math.max(0, conversation.messages.size() - 80);
+        for (int i = start; i < conversation.messages.size(); i++) {
+            messages.put(encodeChatMessage(conversation.messages.get(i)));
+        }
+        item.put("messages", messages);
+        return item;
+    }
+
+    private JSONObject encodeChatMessage(ChatMessage message) throws JSONException {
+        JSONObject item = new JSONObject();
+        item.put("local_id", message.localId);
+        item.put("incoming", message.incoming);
+        item.put("system", message.system);
+        item.put("kind", message.kind);
+        item.put("text", message.text);
+        item.put("status", message.status);
+        item.put("time", message.time);
+        if (message.kind == ChatMessage.KIND_IMAGE
+                && message.imageBytes != null
+                && message.imageBytes.length <= GlimmerFileTransfer.MAX_TRANSFER_BYTES) {
+            item.put("image", android.util.Base64.encodeToString(
+                    message.imageBytes, android.util.Base64.NO_WRAP));
+        }
+        return item;
+    }
+
+    private byte[] readAllBytes(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = input.read(buffer)) >= 0) {
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
+    }
+
+    private byte[] readOptionalFile(String name) {
+        try (InputStream input = openFileInput(name)) {
+            return readAllBytes(input);
+        } catch (IOException ignored) {
+            return null;
+        }
+    }
+
+    private void writeFileBytes(String name, byte[] bytes) throws IOException {
+        try (OutputStream output = openFileOutput(name, MODE_PRIVATE)) {
+            output.write(bytes == null ? new byte[0] : bytes);
+        }
+    }
+
+    private String peerAvatarFileName(long shortId) {
+        return PEER_AVATAR_PREFIX + HostProtocol.shortIdText(shortId) + PEER_AVATAR_SUFFIX;
+    }
+
+    private byte[] peerAvatarBytes(long shortId) {
+        return readOptionalFile(peerAvatarFileName(shortId));
+    }
+
+    private int hashBytes(byte[] data) {
+        return data == null ? 0 : Arrays.hashCode(data);
+    }
+
+    private long parseShortIdOrZero(String value) {
+        if (value == null || value.isEmpty()) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(value, 16) & 0xffffffffL;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private boolean hasBoundDevice() {
@@ -408,6 +658,149 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return chattedPeerIds.contains(HostProtocol.shortIdText(shortId));
     }
 
+    private void ensureConversationAvatar(Conversation conversation) {
+        if (conversation == null) {
+            return;
+        }
+        if (conversation.avatarText == null || conversation.avatarText.isEmpty()) {
+            conversation.avatarText = firstAvatarText(conversation.title);
+        }
+        if (conversation.avatarColor == 0) {
+            conversation.avatarColor = avatarColorFor(conversation.id);
+        }
+    }
+
+    private void refreshConversationAvatarText(Conversation conversation) {
+        if (conversation == null) {
+            return;
+        }
+        String text = firstAvatarText(conversation.title);
+        if (conversation.avatarText == null
+                || conversation.avatarText.isEmpty()
+                || "一".equals(conversation.avatarText)
+                || "微".equals(conversation.avatarText)
+                || "再".equals(conversation.avatarText)) {
+            conversation.avatarText = text;
+        }
+        if (conversation.avatarColor == 0) {
+            conversation.avatarColor = avatarColorFor(conversation.id);
+        }
+    }
+
+    private String firstAvatarText(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return "微";
+        }
+        String trimmed = text.trim();
+        int end = trimmed.offsetByCodePoints(0, 1);
+        return trimmed.substring(0, end);
+    }
+
+    private int avatarColorFor(String key) {
+        int[] colors = avatarPalette();
+        int hash = key == null ? 0 : key.hashCode();
+        int index = Math.abs(hash == Integer.MIN_VALUE ? 0 : hash) % colors.length;
+        return colors[index];
+    }
+
+    private int[] avatarPalette() {
+        return new int[]{
+                0x2F8F7B, 0x3B6EA8, 0x8A6BBE, 0xC08A24,
+                0xB95F6A, 0x527A45, 0x7A5C3E, 0x4D7E8A
+        };
+    }
+
+    private void saveLocalAvatar() {
+        prefs.edit()
+                .putString(KEY_LOCAL_AVATAR_TEXT, localAvatarText)
+                .putInt(KEY_LOCAL_AVATAR_COLOR, localAvatarColor)
+                .putInt(KEY_LOCAL_AVATAR_HASH, localAvatarHash)
+                .apply();
+    }
+
+    private void cycleLocalAvatar() {
+        int[] colors = avatarPalette();
+        int next = 0;
+        for (int i = 0; i < colors.length; i++) {
+            if (colors[i] == localAvatarColor) {
+                next = (i + 1) % colors.length;
+                break;
+            }
+        }
+        localAvatarColor = colors[next];
+        if (myProfile != null) {
+            localAvatarText = firstAvatarText(myProfile.displayName());
+        }
+        saveLocalAvatar();
+        saveChatHistory();
+        setLocalStatus("头像颜色已更新");
+        rerenderCurrentTab();
+    }
+
+    private void enqueueAvatarForKnownPeers() {
+        for (HostProtocol.PeerInfo peer : peers) {
+            enqueueAvatarForPeer(peer.shortId);
+        }
+        for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+            enqueueAvatarForPeer(profile.shortId);
+        }
+    }
+
+    private void enqueueAvatarForPeer(long shortId) {
+        if (shortId == 0 || localAvatarBytes == null || localAvatarBytes.length == 0) {
+            return;
+        }
+        String key = avatarSendKey(shortId);
+        if (avatarSentKeys.contains(key) || avatarQueuedKeys.contains(key)) {
+            return;
+        }
+        avatarQueuedKeys.add(key);
+        avatarSendQueue.add(shortId);
+        scheduleAvatarSend(AVATAR_SEND_DELAY_MS);
+    }
+
+    private String avatarSendKey(long shortId) {
+        return HostProtocol.shortIdText(shortId) + ":" + localAvatarHash;
+    }
+
+    private void scheduleAvatarSend(long delayMs) {
+        handler.removeCallbacks(avatarSendRunnable);
+        handler.postDelayed(avatarSendRunnable, delayMs);
+    }
+
+    private boolean hasPendingChatWork() {
+        return activeChatSend != null || !chatSendQueue.isEmpty();
+    }
+
+    private void trySendNextAvatar() {
+        if (!debugReady || localAvatarBytes == null || localAvatarBytes.length == 0) {
+            return;
+        }
+        if (hasPendingChatWork() || fileTransfer == null || !fileTransfer.isIdle()) {
+            scheduleAvatarSend(AVATAR_BUSY_RETRY_MS);
+            return;
+        }
+
+        while (!avatarSendQueue.isEmpty()) {
+            long target = avatarSendQueue.poll();
+            String key = avatarSendKey(target);
+            avatarQueuedKeys.remove(key);
+            if (avatarSentKeys.contains(key) || target == 0) {
+                continue;
+            }
+            if (fileTransfer.sendAvatar(target, localAvatarBytes, AVATAR_CLIENT_TAG)) {
+                avatarSentKeys.add(key);
+                Log.i(TAG_CHAT, "avatar_tx_start dst=" + HostProtocol.shortIdText(target)
+                        + " bytes=" + localAvatarBytes.length);
+                return;
+            }
+            avatarSendQueue.add(target);
+            avatarQueuedKeys.add(key);
+            scheduleAvatarSend(AVATAR_BUSY_RETRY_MS);
+            return;
+        }
+    }
+
     private Conversation findConversation(String id) {
         if (id == null) {
             return null;
@@ -449,10 +842,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         Conversation conversation = findConversation(id);
         if (conversation == null) {
             conversation = new Conversation(id, shortId);
+            ensureConversationAvatar(conversation);
             conversations.add(conversation);
         }
         conversation.shortId = shortId;
         conversation.familiar = hasChattedWith(shortId);
+        ensureConversationAvatar(conversation);
         return conversation;
     }
 
@@ -467,6 +862,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (conversation.title == null || conversation.title.isEmpty() || "一束微光".equals(conversation.title)) {
             conversation.title = conversation.familiar ? "再遇见的微光" : "一束微光";
         }
+        refreshConversationAvatarText(conversation);
     }
 
     private void updateConversationFromProfile(Conversation conversation, HostProtocol.PeerProfileInfo profile) {
@@ -478,6 +874,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         conversation.subtitle = profile.signatureText();
         conversation.proximity = profile.proximityText();
         conversation.familiar = hasChattedWith(profile.shortId);
+        refreshConversationAvatarText(conversation);
     }
 
     private void updateConversationFromKnownPeers(Conversation conversation) {
@@ -499,6 +896,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         for (Conversation conversation : conversations) {
             updateConversationFromKnownPeers(conversation);
         }
+        if (!conversations.isEmpty()) {
+            saveChatHistory();
+        }
     }
 
     private List<Conversation> sortedConversations() {
@@ -516,6 +916,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (conversation.updatedAt == 0) {
             conversation.updatedAt = System.currentTimeMillis();
         }
+        saveChatHistory();
         showTab(1);
         return conversation;
     }
@@ -529,6 +930,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (conversation.updatedAt == 0) {
             conversation.updatedAt = System.currentTimeMillis();
         }
+        saveChatHistory();
         showTab(1);
         return conversation;
     }
@@ -551,6 +953,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (message.incoming && !conversation.id.equals(selectedConversationId)) {
             conversation.unread++;
         }
+        saveChatHistory();
     }
 
     private long nextChatMessageId() {
@@ -583,6 +986,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             return false;
         }
         message.status = status;
+        saveChatHistory();
         return true;
     }
 
@@ -614,6 +1018,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 activeChatSend = null;
             }
         }
+        if (!hasPendingChatWork() && !avatarSendQueue.isEmpty()) {
+            scheduleAvatarSend(AVATAR_SEND_DELAY_MS);
+        }
         return refreshCurrentChat;
     }
 
@@ -632,6 +1039,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 + " text=" + finished.text);
         boolean refreshCurrentChat = isSelectedConversation(finished.conversationId);
         refreshCurrentChat |= dispatchNextChatSend();
+        if (!hasPendingChatWork() && !avatarSendQueue.isEmpty()) {
+            scheduleAvatarSend(AVATAR_SEND_DELAY_MS);
+        }
         return refreshCurrentChat;
     }
 
@@ -651,6 +1061,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             if (conversation != null) {
                 rememberChattedPeer(conversation.shortId);
                 conversation.familiar = true;
+                saveChatHistory();
             }
         }
         return refreshCurrentChat;
@@ -700,6 +1111,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 }
             }
         }
+        saveChatHistory();
     }
 
     private String nowTimeText() {
@@ -789,6 +1201,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         String title = intent.getStringExtra("title");
         if (title != null && !title.trim().isEmpty()) {
             conversation.title = title.trim();
+            refreshConversationAvatarText(conversation);
         } else {
             updateConversationFromKnownPeers(conversation);
         }
@@ -814,6 +1227,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         addChatMessage(conversation, new ChatMessage(incoming, false, text, status, nowTimeText()));
         rememberChattedPeer(conversation.shortId);
         conversation.familiar = true;
+        saveChatHistory();
         if (intent.getBooleanExtra("open", true)) {
             selectedConversationId = conversation.id;
             selectedTab = 1;
@@ -948,6 +1362,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         selectedTab = index;
         if (index != 2) {
+            clearAvatarEditor();
             mineDetailMode = 0;
         }
         String[] titles = {"附近的微光", "消息", "我的"};
@@ -988,7 +1403,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
 
         if (refreshLayout != null) {
-            refreshLayout.setEnabled(true);
+            refreshLayout.setEnabled(!(index == 2 && mineDetailMode == 4));
         }
         if (bodyContainer != null) {
             bodyContainer.addView(refreshLayout, new FrameLayout.LayoutParams(
@@ -1244,7 +1659,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                     0, dp(12), 0, dp(10)));
         } else {
             for (ChatMessage message : conversation.messages) {
-                messages.addView(chatBubble(message), marginParams(
+                messages.addView(chatBubble(conversation, message), marginParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         0, dp(6), 0, dp(6)));
@@ -1298,7 +1713,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             showTab(1);
         });
 
-        row.addView(avatar(conversationInitial(conversation), conversation.familiar ? 0xC08A24 : 0x2F8F7B),
+        ensureConversationAvatar(conversation);
+        row.addView(conversationAvatar(conversation),
                 new LinearLayout.LayoutParams(dp(46), dp(46)));
 
         LinearLayout copy = new LinearLayout(this);
@@ -1356,17 +1772,19 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return view;
     }
 
-    private View chatBubble(ChatMessage message) {
+    private View chatBubble(Conversation conversation, ChatMessage message) {
         if (message.system) {
             return chatSystemLine(message.text);
         }
+        ensureConversationAvatar(conversation);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(message.incoming ? Gravity.START : Gravity.END);
 
         if (message.incoming) {
-            row.addView(avatar("微", 0x2F8F7B), marginParams(dp(34), dp(34), 0, 0, dp(8), 0));
+            row.addView(conversationAvatar(conversation),
+                    marginParams(dp(34), dp(34), 0, 0, dp(8), 0));
         }
 
         LinearLayout bubbleColumn = new LinearLayout(this);
@@ -1404,7 +1822,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         if (!message.incoming) {
-            row.addView(avatar("我", 0x1F6F60), marginParams(dp(34), dp(34), dp(8), 0, 0, 0));
+            row.addView(localAvatar(),
+                    marginParams(dp(34), dp(34), dp(8), 0, 0, 0));
         }
         return row;
     }
@@ -1503,6 +1922,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         text = text.trim();
         pendingChatScrollToBottom = true;
+        handler.removeCallbacks(avatarSendRunnable);
         if (!debugReady) {
             Log.i(TAG_CHAT, "drop_not_ready text=" + text);
             addChatMessage(conversation, new ChatMessage(false, true, "我的 Glimmer 未连接", "", nowTimeText()));
@@ -1555,6 +1975,119 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             addChatMessage(conversation, new ChatMessage(false, true,
                     "暂时打不开图片选择器", "", nowTimeText()));
             refreshAfterSendingChat(conversation);
+        }
+    }
+
+    private void pickLocalAvatarImage() {
+        try {
+            startActivityForResult(systemPhotoPickerIntent(), REQUEST_PICK_AVATAR);
+        } catch (RuntimeException primaryError) {
+            try {
+                startActivityForResult(fileImagePickerIntent(), REQUEST_PICK_AVATAR);
+            } catch (RuntimeException fallbackError) {
+                setLocalStatus("暂时打不开图片选择器");
+            }
+        }
+    }
+
+    private Intent systemPhotoPickerIntent() {
+        Intent intent;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+        } else {
+            intent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+        }
+        intent.setType("image/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        return intent;
+    }
+
+    private Intent fileImagePickerIntent() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        return intent;
+    }
+
+    private void handlePickedAvatar(int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        openAvatarEditor(data.getData());
+    }
+
+    private void openAvatarEditor(Uri uri) {
+        if (uri == null) {
+            setLocalStatus("头像处理失败");
+            return;
+        }
+        clearAvatarEditor();
+        avatarEditUri = uri;
+        mineDetailMode = 4;
+        showTab(2);
+    }
+
+    private void cancelAvatarEdit() {
+        clearAvatarEditor();
+        mineDetailMode = 1;
+        showTab(2);
+    }
+
+    private void saveEditedAvatar() {
+        if (avatarCropView == null || avatarEditUri == null) {
+            setLocalStatus("头像处理失败");
+            return;
+        }
+        Bitmap cropped = null;
+        try {
+            cropped = avatarCropView.getCroppedImage(
+                    AVATAR_OUTPUT_SIZE_PX,
+                    AVATAR_OUTPUT_SIZE_PX,
+                    CropImageView.RequestSizeOptions.RESIZE_EXACT);
+            if (cropped == null) {
+                throw new IOException("crop image failed");
+            }
+            byte[] avatarBytes = compressAvatarBitmap(cropped);
+            clearAvatarEditor();
+            mineDetailMode = 1;
+            savePickedAvatar(avatarBytes);
+        } catch (IOException | RuntimeException e) {
+            setLocalStatus("头像处理失败");
+        } finally {
+            if (cropped != null && !cropped.isRecycled()) {
+                cropped.recycle();
+            }
+        }
+    }
+
+    private void clearAvatarEditor() {
+        if (avatarCropView != null) {
+            avatarCropView.clearImage();
+        }
+        avatarCropView = null;
+        avatarEditUri = null;
+    }
+
+    private void savePickedAvatar(byte[] avatarBytes) {
+        if (avatarBytes == null || avatarBytes.length == 0) {
+            setLocalStatus("头像处理失败");
+            return;
+        }
+        try {
+            writeFileBytes(LOCAL_AVATAR_FILE, avatarBytes);
+            localAvatarBytes = avatarBytes;
+            localAvatarHash = hashBytes(avatarBytes);
+            saveLocalAvatar();
+            avatarSentKeys.clear();
+            avatarQueuedKeys.clear();
+            avatarSendQueue.clear();
+            enqueueAvatarForKnownPeers();
+            scheduleAvatarSend(1200);
+            setLocalStatus("头像已更新，会在附近空闲时同步");
+            rerenderCurrentTab();
+        } catch (IOException e) {
+            setLocalStatus("头像保存失败");
         }
     }
 
@@ -1652,6 +2185,81 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         throw new IOException("compressed image too large");
     }
 
+    private byte[] compressAvatarForTransfer(Uri uri) throws IOException {
+        Bitmap source;
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            source = BitmapFactory.decodeStream(input);
+        }
+        if (source == null) {
+            throw new IOException("decode avatar failed");
+        }
+
+        byte[] best = null;
+        int[] maxEdges = {96, 72, 56, 48};
+        int[] qualities = {78, 64, 52, 42};
+        for (int maxEdge : maxEdges) {
+            Bitmap scaled = scaleBitmap(source, maxEdge);
+            for (int quality : qualities) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                scaled.compress(Bitmap.CompressFormat.JPEG, quality, out);
+                byte[] candidate = out.toByteArray();
+                best = candidate;
+                if (candidate.length <= GlimmerFileTransfer.MAX_AVATAR_BYTES) {
+                    if (scaled != source) {
+                        scaled.recycle();
+                    }
+                    if (!source.isRecycled()) {
+                        source.recycle();
+                    }
+                    return candidate;
+                }
+            }
+            if (scaled != source) {
+                scaled.recycle();
+            }
+        }
+        if (!source.isRecycled()) {
+            source.recycle();
+        }
+        if (best != null && best.length <= GlimmerFileTransfer.MAX_AVATAR_BYTES) {
+            return best;
+        }
+        throw new IOException("compressed avatar too large");
+    }
+
+    private byte[] compressAvatarBitmap(Bitmap source) throws IOException {
+        if (source == null || source.isRecycled()) {
+            throw new IOException("avatar bitmap missing");
+        }
+        byte[] best = null;
+        int[] sizes = {AVATAR_OUTPUT_SIZE_PX, 80, 64, 48};
+        int[] qualities = {82, 74, 66, 58, 50, 42, 34};
+        for (int size : sizes) {
+            Bitmap scaled = source.getWidth() == size && source.getHeight() == size
+                    ? source
+                    : Bitmap.createScaledBitmap(source, size, size, true);
+            for (int quality : qualities) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                scaled.compress(Bitmap.CompressFormat.JPEG, quality, out);
+                byte[] candidate = out.toByteArray();
+                best = candidate;
+                if (candidate.length <= GlimmerFileTransfer.MAX_AVATAR_BYTES) {
+                    if (scaled != source && !scaled.isRecycled()) {
+                        scaled.recycle();
+                    }
+                    return candidate;
+                }
+            }
+            if (scaled != source && !scaled.isRecycled()) {
+                scaled.recycle();
+            }
+        }
+        if (best != null && best.length <= GlimmerFileTransfer.MAX_AVATAR_BYTES) {
+            return best;
+        }
+        throw new IOException("compressed avatar too large");
+    }
+
     private Bitmap scaleBitmap(Bitmap source, int maxEdge) {
         int width = source.getWidth();
         int height = source.getHeight();
@@ -1666,6 +2274,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void handleFileTxStarted(long clientTag, long targetShortId, int objectKind, int totalLen) {
+        if (objectKind == GlimmerFileTransfer.KIND_AVATAR) {
+            return;
+        }
         if (objectKind != GlimmerFileTransfer.KIND_IMAGE || clientTag == 0) {
             return;
         }
@@ -1675,6 +2286,14 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void handleFileTxCompleted(long clientTag, long targetShortId, int objectKind, int totalLen) {
+        if (objectKind == GlimmerFileTransfer.KIND_AVATAR) {
+            Log.i(TAG_CHAT, "avatar_tx_done dst=" + HostProtocol.shortIdText(targetShortId)
+                    + " bytes=" + totalLen);
+            if (!avatarSendQueue.isEmpty()) {
+                scheduleAvatarSend(AVATAR_SEND_DELAY_MS);
+            }
+            return;
+        }
         if (objectKind != GlimmerFileTransfer.KIND_IMAGE || clientTag == 0) {
             return;
         }
@@ -1682,11 +2301,24 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         markChatMessageStatus(conversation.id, clientTag, CHAT_STATUS_DELIVERED);
         rememberChattedPeer(targetShortId);
         conversation.familiar = true;
+        saveChatHistory();
         pushEvent("图片已送达");
         refreshConversationAfterFileUpdate(conversation.id, true);
     }
 
     private void handleFileTxFailed(long clientTag, long targetShortId, String reason) {
+        if (clientTag == AVATAR_CLIENT_TAG) {
+            String key = avatarSendKey(targetShortId);
+            avatarSentKeys.remove(key);
+            if (!avatarQueuedKeys.contains(key)) {
+                avatarQueuedKeys.add(key);
+                avatarSendQueue.add(targetShortId);
+            }
+            scheduleAvatarSend(AVATAR_BUSY_RETRY_MS);
+            Log.i(TAG_CHAT, "avatar_tx_retry dst=" + HostProtocol.shortIdText(targetShortId)
+                    + " reason=" + reason);
+            return;
+        }
         if (clientTag == 0) {
             return;
         }
@@ -1697,12 +2329,21 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void handleFileRxStarted(long srcShortId, int objectKind, int totalLen) {
+        if (objectKind == GlimmerFileTransfer.KIND_AVATAR) {
+            Log.i(TAG_CHAT, "avatar_rx_start src=" + HostProtocol.shortIdText(srcShortId)
+                    + " bytes=" + totalLen);
+            return;
+        }
         if (objectKind == GlimmerFileTransfer.KIND_IMAGE) {
             pushEvent("正在接收图片 · " + formatBytes(totalLen));
         }
     }
 
     private void handleFileRxCompleted(long srcShortId, int objectKind, byte[] data, boolean ok) {
+        if (objectKind == GlimmerFileTransfer.KIND_AVATAR) {
+            handleAvatarRxCompleted(srcShortId, data, ok);
+            return;
+        }
         if (objectKind != GlimmerFileTransfer.KIND_IMAGE) {
             return;
         }
@@ -1713,6 +2354,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                     "图片 · " + formatBytes(data == null ? 0 : data.length), "", nowTimeText()));
             rememberChattedPeer(srcShortId);
             conversation.familiar = true;
+            saveChatHistory();
             pushEvent("收到一张图片");
         } else {
             addChatMessage(conversation, new ChatMessage(true, true,
@@ -1720,6 +2362,25 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             pushEvent("图片接收失败");
         }
         refreshConversationAfterFileUpdate(conversation.id, conversation.id.equals(selectedConversationId));
+    }
+
+    private void handleAvatarRxCompleted(long srcShortId, byte[] data, boolean ok) {
+        if (!ok || data == null || data.length == 0 || data.length > GlimmerFileTransfer.MAX_AVATAR_BYTES) {
+            Log.i(TAG_CHAT, "avatar_rx_drop src=" + HostProtocol.shortIdText(srcShortId));
+            return;
+        }
+        try {
+            writeFileBytes(peerAvatarFileName(srcShortId), data);
+            Conversation conversation = ensureConversation(srcShortId);
+            updateConversationFromKnownPeers(conversation);
+            saveChatHistory();
+            pushEvent("收到一张头像");
+            Log.i(TAG_CHAT, "avatar_rx_done src=" + HostProtocol.shortIdText(srcShortId)
+                    + " bytes=" + data.length);
+            rerenderCurrentTabForBackgroundUpdate();
+        } catch (IOException e) {
+            Log.w(TAG_CHAT, "avatar_rx_save_failed src=" + HostProtocol.shortIdText(srcShortId), e);
+        }
     }
 
     private void refreshConversationAfterFileUpdate(String conversationId, boolean scrollToBottom) {
@@ -1738,13 +2399,6 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             return bytes + " B";
         }
         return String.format(Locale.CHINA, "%.1f KB", bytes / 1024.0f);
-    }
-
-    private String conversationInitial(Conversation conversation) {
-        if (conversation == null || conversation.title == null || conversation.title.isEmpty()) {
-            return "微";
-        }
-        return conversation.title.substring(0, 1);
     }
 
     private int chatBottomSpacerHeight(Conversation conversation) {
@@ -1768,6 +2422,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         if (mineDetailMode == 3) {
             renderSafetySettingsPage();
+            return;
+        }
+        if (mineDetailMode == 4) {
+            renderAvatarEditorPage();
             return;
         }
 
@@ -1795,6 +2453,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
         LinearLayout profile = card();
         profile.addView(label("附近预览卡片", 20, color(0x1F2420), true));
+        profile.addView(localAvatarRow(), marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, dp(12), 0, 0));
         profile.addView(label(myProfile == null ? "还没有从终端同步资料卡" : myProfile.displayName(), 18, color(0x2F8F7B), true),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
         profile.addView(label(myProfile == null ? "连接 Glimmer 后可以写入昵称和一句话。" : myProfile.signatureText(), 14, color(0x667068), false),
@@ -1806,6 +2468,70 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         profile.addView(primaryButton("保存到 Glimmer", v -> saveProfileCard()),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
         content.addView(profile, cardParams());
+    }
+
+    private void renderAvatarEditorPage() {
+        if (avatarEditUri == null) {
+            mineDetailMode = 1;
+            renderProfileSettingsPage();
+            return;
+        }
+
+        TextView back = label("‹ 附近预览卡片", 16, color(0x2F8F7B), true);
+        back.setPadding(dp(4), dp(2), dp(4), dp(8));
+        back.setOnClickListener(v -> cancelAvatarEdit());
+        content.addView(back, marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, 0, 0, dp(4)));
+
+        LinearLayout editor = card();
+        editor.addView(label("调整头像", 20, color(0x1F2420), true));
+        editor.addView(label("拖动画面调整位置，双指缩放。头像会保存为 96x96，并压缩到 6KB 以内。",
+                        13, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, dp(12)));
+
+        CropImageView crop = new CropImageView(this);
+        crop.setBackground(rounded(0xF7F8F5, 8));
+        crop.setFixedAspectRatio(true);
+        crop.setAspectRatio(1, 1);
+        crop.setGuidelines(CropImageView.Guidelines.ON_TOUCH);
+        crop.setCropShape(CropImageView.CropShape.RECTANGLE);
+        crop.setScaleType(CropImageView.ScaleType.FIT_CENTER);
+        crop.setAutoZoomEnabled(true);
+        crop.setMultiTouchEnabled(true);
+        crop.setMaxZoom(6);
+        crop.setShowProgressBar(true);
+        crop.setOnTouchListener((view, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
+                disallowParentIntercept(view, true);
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                disallowParentIntercept(view, false);
+            }
+            return false;
+        });
+        crop.setOnSetImageUriCompleteListener((view, uri, error) -> {
+            if (error != null) {
+                setLocalStatus("头像处理失败");
+            }
+        });
+        crop.setImageUriAsync(avatarEditUri);
+        avatarCropView = crop;
+        editor.addView(crop, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(320)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button cancel = secondaryButton("取消", v -> cancelAvatarEdit());
+        Button save = primaryButton("保存头像", v -> saveEditedAvatar());
+        actions.setPadding(0, dp(14), 0, 0);
+        actions.addView(cancel, new LinearLayout.LayoutParams(0, dp(46), 1));
+        actions.addView(spacer(dp(10), 1));
+        actions.addView(save, new LinearLayout.LayoutParams(0, dp(46), 1));
+        editor.addView(actions);
+
+        content.addView(editor, cardParams());
     }
 
     private void renderDeviceSettingsPage() {
@@ -1850,6 +2576,37 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         card.addView(settingsRow("陌生问候", "允许附近的人发来第一句微光", v -> setLocalStatus("陌生问候设置待接入")),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
         content.addView(card, cardParams());
+    }
+
+    private LinearLayout localAvatarRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
+        row.setBackground(rounded(0xF7F8F5, 8));
+
+        row.addView(localAvatar(),
+                new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setPadding(dp(12), 0, dp(8), 0);
+        copy.addView(label("我的头像", 16, color(0x1F2420), true));
+        copy.addView(label(localAvatarBytes == null
+                        ? "用于聊天气泡右侧头像，本地保存"
+                        : "图片头像会在进入范围后低优先级同步",
+                13, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(4), 0, 0));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        Button image = secondaryButton("图片", v -> pickLocalAvatarImage());
+        actions.addView(image, new LinearLayout.LayoutParams(dp(72), dp(38)));
+        Button change = secondaryButton("换色", v -> cycleLocalAvatar());
+        actions.addView(change, marginParams(dp(72), dp(38), 0, dp(6), 0, 0));
+        row.addView(actions, new LinearLayout.LayoutParams(dp(72), ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
     }
 
     private void openMineDetail(int mode) {
@@ -1959,7 +2716,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         row.setBackground(rounded(familiar ? 0xFFF7DF : 0xFFFFFF, 8));
         row.setOnClickListener(v -> openConversation(peer));
 
-        row.addView(avatar(familiar ? "↻" : "微", familiar ? 0xC08A24 : 0x2F8F7B),
+        String peerId = HostProtocol.shortIdText(peer.shortId);
+        row.addView(avatarView(familiar ? "↻" : "微",
+                        familiar ? 0xC08A24 : avatarColorFor(peerId),
+                        peerAvatarBytes(peer.shortId)),
                 new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         LinearLayout copy = new LinearLayout(this);
@@ -1985,8 +2745,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         row.setBackground(rounded(familiar ? 0xFFF7DF : 0xFFFFFF, 8));
         row.setOnClickListener(v -> openConversation(profile));
 
-        row.addView(avatar(familiar ? "↻" : profile.displayName().substring(0, 1),
-                        familiar ? 0xC08A24 : 0x2F8F7B),
+        String profileId = HostProtocol.shortIdText(profile.shortId);
+        row.addView(avatarView(familiar ? "↻" : firstAvatarText(profile.displayName()),
+                        familiar ? 0xC08A24 : avatarColorFor(profileId),
+                        peerAvatarBytes(profile.shortId)),
                 new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         LinearLayout copy = new LinearLayout(this);
@@ -2076,6 +2838,35 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return avatar;
     }
 
+    private View localAvatar() {
+        return avatarView(localAvatarText, localAvatarColor, localAvatarBytes);
+    }
+
+    private View conversationAvatar(Conversation conversation) {
+        ensureConversationAvatar(conversation);
+        byte[] image = conversation == null ? null : peerAvatarBytes(conversation.shortId);
+        int color = conversation != null && conversation.familiar ? 0xC08A24 : conversation.avatarColor;
+        String text = conversation == null ? "微" : conversation.avatarText;
+        return avatarView(text, color, image);
+    }
+
+    private View avatarView(String text, int backgroundColor, byte[] imageBytes) {
+        if (imageBytes != null && imageBytes.length > 0) {
+            Bitmap bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
+            if (bitmap != null) {
+                ImageView image = new ImageView(this);
+                image.setImageBitmap(bitmap);
+                image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                image.setBackground(rounded(backgroundColor, 8));
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    image.setClipToOutline(true);
+                }
+                return image;
+            }
+        }
+        return avatar(text, backgroundColor);
+    }
+
     private TextView infoPill(String text) {
         TextView pill = label(text, 12, color(0x1F6F60), true);
         pill.setGravity(Gravity.CENTER);
@@ -2145,6 +2936,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         String nickname = nicknameEdit == null ? "" : nicknameEdit.getText().toString();
         String signature = signatureEdit == null ? "" : signatureEdit.getText().toString();
+        localAvatarText = firstAvatarText(nickname);
+        saveLocalAvatar();
         bleClient.setProfileSummary(nickname, signature);
         setLocalStatus("正在保存附近预览卡片");
     }
@@ -2227,6 +3020,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         if (!ready) {
             markSendingMessagesFailed();
+            handler.removeCallbacks(avatarSendRunnable);
             deviceInfo = null;
             myProfile = null;
             peers.clear();
@@ -2241,6 +3035,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             handler.removeCallbacks(autoSyncRunnable);
             handler.postDelayed(() -> requestPeerProfilesPage(0), 900);
             handler.postDelayed(autoSyncRunnable, AUTO_SYNC_INTERVAL_MS);
+            enqueueAvatarForKnownPeers();
         }
         rerenderCurrentTabForBackgroundUpdate();
     }
@@ -2262,6 +3057,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 for (HostProtocol.PeerInfo peer : HostProtocol.parsePeerTable(message.payload)) {
                     if (peer.level > 0) {
                         peers.add(peer);
+                        enqueueAvatarForPeer(peer.shortId);
                     }
                 }
                 if (peers.isEmpty()) {
@@ -2271,6 +3067,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 }
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PROFILE_SUMMARY && message.status == 0) {
                 myProfile = HostProtocol.parseProfileSummary(message.payload);
+                localAvatarText = firstAvatarText(myProfile.displayName());
+                saveLocalAvatar();
                 setLocalStatus("附近预览卡片已同步");
                 pushEvent("附近预览卡片已同步");
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_PROFILES && message.status == 0) {
@@ -2283,6 +3081,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 for (HostProtocol.PeerProfileInfo profile : page.profiles) {
                     if (profile.level > 0) {
                         upsertPeerProfile(pendingPeerProfiles, profile);
+                        enqueueAvatarForPeer(profile.shortId);
                     }
                 }
                 if (page.hasMore()) {
@@ -2291,6 +3090,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                     peerProfiles.clear();
                     peerProfiles.addAll(pendingPeerProfiles);
                     pendingPeerProfiles.clear();
+                    syncConversationProfiles();
                     if (hasNewPeerProfile(previousIds)) {
                         pushEvent("有新的微光进入范围");
                     } else if (!peerProfiles.isEmpty()) {
@@ -2315,6 +3115,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                     addChatMessage(conversation, new ChatMessage(true, false, text, "", nowTimeText()));
                     rememberChattedPeer(event.shortId);
                     conversation.familiar = true;
+                    saveChatHistory();
                 }
                 pushEvent(event.isDropped() ? "一条微光已过期" : "收到一条来自附近的微光");
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT_TX_RESULT) {
@@ -2414,6 +3215,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private void rerenderCurrentTab() {
         if (content != null) {
+            if (isAvatarEditorVisible()) {
+                refreshCurrentHeaderOnly();
+                return;
+            }
             if (shouldDelayRerenderForChatInput()) {
                 pendingRerenderAfterChatInput = true;
                 preserveCurrentChatDraft();
@@ -2436,11 +3241,15 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void rerenderCurrentTabForBackgroundUpdate() {
-        if (isChatDetailVisible()) {
+        if (isChatDetailVisible() || isAvatarEditorVisible()) {
             refreshCurrentHeaderOnly();
             return;
         }
         rerenderCurrentTab();
+    }
+
+    private boolean isAvatarEditorVisible() {
+        return selectedTab == 2 && mineDetailMode == 4;
     }
 
     private boolean isChatDetailVisible() {
@@ -2554,6 +3363,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
             if (mineDetailMode == 3) {
                 return "隐私与安全";
+            }
+            if (mineDetailMode == 4) {
+                return "调整头像";
             }
             return connectionStatus;
         }
@@ -2844,6 +3656,14 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         View view = new View(this);
         view.setLayoutParams(new LinearLayout.LayoutParams(width, height));
         return view;
+    }
+
+    private void disallowParentIntercept(View view, boolean disallow) {
+        ViewParent parent = view == null ? null : view.getParent();
+        while (parent != null) {
+            parent.requestDisallowInterceptTouchEvent(disallow);
+            parent = parent.getParent();
+        }
     }
 
     private LinearLayout.LayoutParams marginParams(int width, int height, int left, int top, int right, int bottom) {

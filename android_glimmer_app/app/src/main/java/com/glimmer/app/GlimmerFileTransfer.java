@@ -15,8 +15,10 @@ final class GlimmerFileTransfer {
     static final String ACTION_DEBUG_FILE = "com.glimmer.app.DEBUG_FILE";
     static final int KIND_TEST = 0;
     static final int KIND_IMAGE = 1;
+    static final int KIND_AVATAR = 2;
     static final int MAX_TRANSFER_BYTES = 16 * 1024;
     static final int MAX_USER_OBJECT_BYTES = 14 * 1024;
+    static final int MAX_AVATAR_BYTES = 6 * 1024;
 
     private static final int MAGIC_G = 0x47;
     private static final int MAGIC_F = 0x46;
@@ -83,11 +85,25 @@ final class GlimmerFileTransfer {
     }
 
     boolean sendImage(long targetShortId, byte[] imageBytes, long clientTag) {
+        return sendObject(targetShortId, imageBytes, clientTag, KIND_IMAGE, "image");
+    }
+
+    boolean sendAvatar(long targetShortId, byte[] avatarBytes, long clientTag) {
+        return sendObject(targetShortId, avatarBytes, clientTag, KIND_AVATAR, "avatar");
+    }
+
+    boolean isIdle() {
+        return sendSession == null && activeFrame == null && txQueue.isEmpty();
+    }
+
+    private boolean sendObject(long targetShortId, byte[] imageBytes, long clientTag,
+                               int objectKind, String label) {
+        int maxBytes = objectKind == KIND_AVATAR ? MAX_AVATAR_BYTES : MAX_TRANSFER_BYTES;
         if (imageBytes == null || imageBytes.length == 0) {
             notifyTxFailed(clientTag, targetShortId, 0, "empty_image");
             return false;
         }
-        if (imageBytes.length > MAX_TRANSFER_BYTES) {
+        if (imageBytes.length > maxBytes) {
             notifyTxFailed(clientTag, targetShortId, 0, "too_large");
             return false;
         }
@@ -100,7 +116,7 @@ final class GlimmerFileTransfer {
             return false;
         }
         startTransfer(targetShortId, imageBytes, DEFAULT_CHUNK_BYTES, 0, -1,
-                KIND_IMAGE, clientTag, "image");
+                objectKind, clientTag, label);
         return true;
     }
 
