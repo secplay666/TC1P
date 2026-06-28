@@ -4,6 +4,7 @@
 #include "../discovery/app_discovery.h"
 #include "../host_adv/app_host_adv.h"
 #include "../identity/app_identity.h"
+#include "../peer_table/app_peer_table.h"
 #include "../profile/app_profile.h"
 #include "../peer_transport/app_peer_transport.h"
 #include "../common/app_debug_print.h"
@@ -34,13 +35,36 @@ static u8 s_beacon_pending;
 static app_eid_t s_beacon_eid;
 static s8 s_beacon_rssi;
 
+static void refresh_peer_activity(const app_adv_frame_t *frame, s8 rssi)
+{
+    app_peer_record_t *peer;
+
+    if (!frame || app_eid_is_zero(&frame->src_eid)) {
+        return;
+    }
+
+    peer = app_peer_table_find_or_alloc(&frame->src_eid);
+    if (!peer) {
+        return;
+    }
+
+    peer->last_seen_tick = clock_time();
+    peer->rssi = rssi;
+    if (!peer->rssi_avg) {
+        peer->rssi_avg = rssi;
+    }
+}
+
 static u8 app_scan_defer_frame(const app_adv_frame_t *frame, s8 rssi)
 {
     app_scan_deferred_frame_t *item;
 
     if (!frame || frame->payload_len > APP_SCAN_DEFER_PAYLOAD_MAX_LEN ||
-        (frame->payload_len && !frame->payload) ||
-        s_defer_count >= APP_SCAN_DEFER_QUEUE_SIZE) {
+        (frame->payload_len && !frame->payload)) {
+        return 0;
+    }
+    if (s_defer_count >= APP_SCAN_DEFER_QUEUE_SIZE) {
+        s_debug.defer_full++;
         return 0;
     }
 
@@ -153,6 +177,7 @@ void app_scan_on_report(const app_scan_report_t *report)
         }
     } else if (frame.type == ADV_FRAME_DATA) {
         s_debug.data_rx++;
+        refresh_peer_activity(&frame, report->rssi);
 #if APP_SCAN_RX_LOG_ENABLE
         if (s_data_log_count < 20) {
             u_printf("[SCAN] data frame\r\n");
@@ -171,6 +196,7 @@ void app_scan_on_report(const app_scan_report_t *report)
         }
     } else if (frame.type == ADV_FRAME_ACK) {
         s_debug.data_rx++;
+        refresh_peer_activity(&frame, report->rssi);
         if (!app_scan_defer_frame(&frame, report->rssi)) {
             s_debug.other_rx++;
         }
@@ -231,5 +257,6 @@ void app_scan_get_debug(app_scan_debug_t *debug)
 {
     if (debug) {
         *debug = s_debug;
+        debug->defer_count = s_defer_count;
     }
 }

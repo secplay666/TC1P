@@ -48,12 +48,11 @@ static ble_sts_t app_ble_configure_ext_scan(void)
 {
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
     /*
-     * Keep connected scanning low duty-cycle.  The phone connection interval can
-     * be around 50 ms, so a 50/100 ms scan window can starve connection events
-     * and cause HCI_ERR_CONNECTION_TOUT on Android.
+     * Keep connected scanning below continuous duty, while still giving P2P ACK
+     * frames enough receive opportunities during app-connected chat.
      */
-    u16 scan_interval = s_conn.connected ? SCAN_INTERVAL_500MS : SCAN_INTERVAL_300MS;
-    u16 scan_window = s_conn.connected ? SCAN_WINDOW_20MS : SCAN_WINDOW_30MS;
+    u16 scan_interval = s_conn.connected ? SCAN_INTERVAL_100MS : SCAN_INTERVAL_300MS;
+    u16 scan_window = SCAN_WINDOW_30MS;
     return blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, s_scan_filter_policy, SCAN_PHY_1M,
                                   SCAN_TYPE_PASSIVE, scan_interval, scan_window,
                                   0, 0, 0);

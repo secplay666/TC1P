@@ -266,12 +266,18 @@ final class GlimmerBleClient {
         sendPackets(HostProtocol.makeSetProfileSummary(nextSeq(), nickname, signature, seed, new int[]{1, 2, 3}));
     }
 
-    void sendP2pChat(String text) {
-        sendPackets(HostProtocol.makeP2pChatSend(nextSeq(), text));
+    int sendP2pChat(String text) {
+        ensureCommandReady();
+        int seq = nextSeq();
+        sendPackets(HostProtocol.makeP2pChatSend(seq, text));
+        return seq;
     }
 
-    void sendP2pChat(long targetShortId, String text) {
-        sendPackets(HostProtocol.makeP2pChatSend(nextSeq(), targetShortId, text));
+    int sendP2pChat(long targetShortId, String text) {
+        ensureCommandReady();
+        int seq = nextSeq();
+        sendPackets(HostProtocol.makeP2pChatSend(seq, targetShortId, text));
+        return seq;
     }
 
     void requestFullSync() {
@@ -530,6 +536,12 @@ final class GlimmerBleClient {
         txQueue.addAll(packets);
         if (!writeInProgress) {
             writeNextPacket();
+        }
+    }
+
+    private void ensureCommandReady() {
+        if (!debugReady || gatt == null || cmdChar == null) {
+            throw new IllegalStateException("Glimmer is not ready for host commands");
         }
     }
 

@@ -19,11 +19,13 @@ typedef struct {
     u32 beacon_rx;
     u32 data_rx;
     u32 other_rx;
+    u32 defer_full;
     u8 last_adv_len;
     u8 last_type;
     u8 last_payload_len;
     u8 last_src0;
     u8 last_src1;
+    u8 defer_count;
     s8 last_rssi;
 } app_scan_debug_t;
 

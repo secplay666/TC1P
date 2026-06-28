@@ -7,16 +7,16 @@
 
 #define APP_PEER_RX_CONTEXT_COUNT               1
 #define APP_PEER_COMPLETED_CACHE_COUNT          1
-#define APP_PEER_TX_ACK_WAIT_US                 1200000
-#define APP_PEER_TX_TOTAL_TIMEOUT_US            12000000
-#define APP_PEER_TX_MAX_RETRY_ROUNDS            4
+#define APP_PEER_TX_ACK_WAIT_US                 2600000
+#define APP_PEER_TX_TOTAL_TIMEOUT_US            22000000
+#define APP_PEER_TX_MAX_RETRY_ROUNDS            5
 #define APP_PEER_TX_FRAGMENT_GAP_US             600000
 #define APP_PEER_RX_TOTAL_TIMEOUT_US            8000000
 #define APP_PEER_RX_IDLE_TIMEOUT_US             3000000
-#define APP_PEER_ACK_INTERVAL_US                120000
+#define APP_PEER_ACK_INTERVAL_US                80000
 #define APP_PEER_COMPLETE_CACHE_TTL_US          30000000
 #define APP_PEER_ACK_REPEAT_PARTIAL             1
-#define APP_PEER_ACK_REPEAT_COMPLETE            8
+#define APP_PEER_ACK_REPEAT_COMPLETE            24
 #define APP_PEER_ACK_REPEAT_ERROR               4
 #define APP_PEER_ACK_FIRST_MISSING_NONE         0xff
 #define APP_PEER_INVALID_FRAGMENT_INDEX         0xff

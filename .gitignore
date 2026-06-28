@@ -9,3 +9,6 @@ pc_adv_probe/bin/
 pc_adv_probe/obj/
 .telink_workspace/
 tc_ble_multi_sdk/build/B85/pendant/
+artifacts/
+glimmer_*.log
+glimmer_*.xml

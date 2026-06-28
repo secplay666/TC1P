@@ -19,6 +19,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.InputFilter;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -35,6 +36,7 @@ import android.widget.TextView;
 
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -43,9 +45,11 @@ import java.util.Map;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Queue;
 import java.util.Set;
 
 public class MainActivity extends Activity implements GlimmerBleClient.Listener {
+    private static final String TAG_CHAT = "GlimmerChat";
     private static final int REQUEST_APP_PERMISSIONS = 1201;
     private static final String PREFS_NAME = "glimmer_app";
     private static final String KEY_BOUND_ADDRESS = "bound_address";
@@ -54,7 +58,13 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final String KEY_CHATTED_PEERS = "chatted_peer_ids";
     private static final long AUTO_SYNC_INTERVAL_MS = 10000;
     private static final long AUTO_RECONNECT_INTERVAL_MS = 15000;
+    private static final long CHAT_SEND_TIMEOUT_MS = 25000;
     private static final String ACTION_DEBUG_CHAT = "com.glimmer.app.DEBUG_CHAT";
+    private static final String CHAT_STATUS_QUEUED = "排队中";
+    private static final String CHAT_STATUS_SENDING = "发送中";
+    private static final String CHAT_STATUS_DELIVERED = "已送达";
+    private static final String CHAT_STATUS_UNCONFIRMED = "未确认";
+    private static final String CHAT_STATUS_FAILED = "未送达";
 
     private final List<Button> navButtons = new ArrayList<>();
     private final List<GlimmerBleClient.ScanDevice> scanDevices = new ArrayList<>();
@@ -65,6 +75,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private final List<Conversation> conversations = new ArrayList<>();
     private final Map<String, String> chatDrafts = new HashMap<>();
     private final Map<String, Integer> chatScrollPositions = new HashMap<>();
+    private final Queue<PendingChatSend> chatSendQueue = new ArrayDeque<>();
     private final List<String> eventLines = new ArrayList<>();
     private final Set<String> chattedPeerIds = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -91,6 +102,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         @Override
         public void onReceive(Context context, Intent intent) {
             handleDebugChatIntent(intent);
+        }
+    };
+    private final Runnable chatSendTimeoutRunnable = new Runnable() {
+        @Override
+        public void run() {
+            handleActiveChatSendTimeout();
         }
     };
 
@@ -125,7 +142,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private String boundName;
     private String boundShortId;
     private String selectedConversationId;
-    private String lastOutgoingConversationId;
+    private long nextChatMessageId = 1;
+    private PendingChatSend activeChatSend;
 
     private static final class Conversation {
         final String id;
@@ -153,6 +171,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private static final class ChatMessage {
+        final long localId;
         final boolean incoming;
         final boolean system;
         final String text;
@@ -160,11 +179,32 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         final String time;
 
         ChatMessage(boolean incoming, boolean system, String text, String status, String time) {
+            this(0, incoming, system, text, status, time);
+        }
+
+        ChatMessage(long localId, boolean incoming, boolean system, String text, String status, String time) {
+            this.localId = localId;
             this.incoming = incoming;
             this.system = system;
             this.text = text;
             this.status = status;
             this.time = time;
+        }
+    }
+
+    private static final class PendingChatSend {
+        final long localMessageId;
+        final String conversationId;
+        final long targetShortId;
+        final String text;
+        int seq;
+        long startedAt;
+
+        PendingChatSend(long localMessageId, String conversationId, long targetShortId, String text) {
+            this.localMessageId = localMessageId;
+            this.conversationId = conversationId;
+            this.targetShortId = targetShortId;
+            this.text = text;
         }
     }
 
@@ -436,32 +476,150 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
     }
 
-    private ChatMessage latestOutgoingMessage(Conversation conversation) {
-        if (conversation == null) {
+    private long nextChatMessageId() {
+        if (nextChatMessageId == Long.MAX_VALUE) {
+            nextChatMessageId = 1;
+        }
+        return nextChatMessageId++;
+    }
+
+    private boolean isSelectedConversation(String conversationId) {
+        return conversationId != null && conversationId.equals(selectedConversationId);
+    }
+
+    private ChatMessage findChatMessage(String conversationId, long localMessageId) {
+        Conversation conversation = findConversation(conversationId);
+        if (conversation == null || localMessageId == 0) {
             return null;
         }
-        for (int i = conversation.messages.size() - 1; i >= 0; i--) {
-            ChatMessage message = conversation.messages.get(i);
-            if (!message.incoming && !message.system) {
+        for (ChatMessage message : conversation.messages) {
+            if (message.localId == localMessageId) {
                 return message;
             }
         }
         return null;
     }
 
-    private void markLatestOutgoing(String conversationId, String status) {
-        Conversation conversation = findConversation(conversationId);
-        ChatMessage message = latestOutgoingMessage(conversation);
-        if (message != null) {
-            message.status = status;
+    private boolean markChatMessageStatus(String conversationId, long localMessageId, String status) {
+        ChatMessage message = findChatMessage(conversationId, localMessageId);
+        if (message == null) {
+            return false;
+        }
+        message.status = status;
+        return true;
+    }
+
+    private boolean dispatchNextChatSend() {
+        boolean refreshCurrentChat = false;
+        while (activeChatSend == null && !chatSendQueue.isEmpty()) {
+            PendingChatSend pending = chatSendQueue.poll();
+            if (!debugReady) {
+                markChatMessageStatus(pending.conversationId, pending.localMessageId, CHAT_STATUS_FAILED);
+                refreshCurrentChat |= isSelectedConversation(pending.conversationId);
+                continue;
+            }
+
+            activeChatSend = pending;
+            activeChatSend.startedAt = System.currentTimeMillis();
+            markChatMessageStatus(pending.conversationId, pending.localMessageId, CHAT_STATUS_SENDING);
+            refreshCurrentChat |= isSelectedConversation(pending.conversationId);
+            try {
+                activeChatSend.seq = bleClient.sendP2pChat(pending.targetShortId, pending.text);
+                Log.i(TAG_CHAT, "dispatch local=" + pending.localMessageId
+                        + " seq=" + activeChatSend.seq
+                        + " dst=" + HostProtocol.shortIdText(pending.targetShortId)
+                        + " text=" + pending.text);
+                handler.removeCallbacks(chatSendTimeoutRunnable);
+                handler.postDelayed(chatSendTimeoutRunnable, CHAT_SEND_TIMEOUT_MS);
+            } catch (RuntimeException e) {
+                handler.removeCallbacks(chatSendTimeoutRunnable);
+                markChatMessageStatus(pending.conversationId, pending.localMessageId, CHAT_STATUS_FAILED);
+                activeChatSend = null;
+            }
+        }
+        return refreshCurrentChat;
+    }
+
+    private boolean finishActiveChatSend(String status) {
+        if (activeChatSend == null) {
+            return false;
+        }
+        PendingChatSend finished = activeChatSend;
+        handler.removeCallbacks(chatSendTimeoutRunnable);
+        activeChatSend = null;
+        markChatMessageStatus(finished.conversationId, finished.localMessageId, status);
+        Log.i(TAG_CHAT, "finish local=" + finished.localMessageId
+                + " seq=" + finished.seq
+                + " dst=" + HostProtocol.shortIdText(finished.targetShortId)
+                + " status=" + status
+                + " text=" + finished.text);
+        boolean refreshCurrentChat = isSelectedConversation(finished.conversationId);
+        refreshCurrentChat |= dispatchNextChatSend();
+        return refreshCurrentChat;
+    }
+
+    private boolean completeActiveChatSend(HostProtocol.ChatTxResult result) {
+        if (activeChatSend == null || result == null) {
+            return false;
+        }
+        if (result.shortId != 0 && activeChatSend.targetShortId != 0
+                && result.shortId != activeChatSend.targetShortId) {
+            return false;
+        }
+
+        PendingChatSend finished = activeChatSend;
+        boolean refreshCurrentChat = finishActiveChatSend(chatTxStatusText(result));
+        if (result.isSuccess()) {
+            Conversation conversation = findConversation(finished.conversationId);
+            if (conversation != null) {
+                rememberChattedPeer(conversation.shortId);
+                conversation.familiar = true;
+            }
+        }
+        return refreshCurrentChat;
+    }
+
+    private boolean rejectActiveChatSend(HostProtocol.HostMessage message) {
+        if (activeChatSend == null || message == null) {
+            return false;
+        }
+        if (activeChatSend.seq != 0 && activeChatSend.seq != message.seq) {
+            return false;
+        }
+        return finishActiveChatSend(CHAT_STATUS_FAILED);
+    }
+
+    private void handleActiveChatSendTimeout() {
+        if (activeChatSend == null) {
+            return;
+        }
+        boolean refreshCurrentChat = finishActiveChatSend(CHAT_STATUS_UNCONFIRMED);
+        pushEvent("消息已发出，暂时未确认");
+        if (refreshCurrentChat) {
+            boolean keepEditing = isChatInputActive();
+            boolean scrollToBottom = keepEditing || pendingChatScrollToBottom || isChatScrolledNearBottom();
+            if (refreshCurrentChatMessages(scrollToBottom)) {
+                if (keepEditing) {
+                    keepChatInputEditing();
+                }
+            } else {
+                rerenderCurrentTab();
+            }
+        } else {
+            rerenderCurrentTabForBackgroundUpdate();
         }
     }
 
     private void markSendingMessagesFailed() {
+        handler.removeCallbacks(chatSendTimeoutRunnable);
+        activeChatSend = null;
+        chatSendQueue.clear();
         for (Conversation conversation : conversations) {
             for (ChatMessage message : conversation.messages) {
-                if (!message.incoming && !message.system && "发送中".equals(message.status)) {
-                    message.status = "未送达";
+                if (!message.incoming && !message.system
+                        && (CHAT_STATUS_SENDING.equals(message.status)
+                        || CHAT_STATUS_QUEUED.equals(message.status))) {
+                    message.status = CHAT_STATUS_FAILED;
                 }
             }
         }
@@ -513,6 +671,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (intent == null || !ACTION_DEBUG_CHAT.equals(intent.getAction()) || !isDebugBuild()) {
             return;
         }
+        Log.i(TAG_CHAT, "debug_intent dir=" + intent.getStringExtra("dir")
+                + " short=" + intent.getLongExtra("short_id", 0)
+                + " text=" + intent.getStringExtra("text")
+                + " ready=" + debugReady);
 
         long shortId = intent.getLongExtra("short_id", 0);
         Conversation selected = selectedConversation();
@@ -546,7 +708,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         boolean incoming = dir == null || !"out".equalsIgnoreCase(dir);
         String status = incoming ? "" : intent.getStringExtra("status");
         if (status == null) {
-            status = "已送达";
+            status = CHAT_STATUS_DELIVERED;
         }
 
         addChatMessage(conversation, new ChatMessage(incoming, false, text, status, nowTimeText()));
@@ -1121,7 +1283,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
         if (message.status != null && !message.status.isEmpty()) {
             TextView status = label(message.status, 11,
-                    "未送达".equals(message.status) ? color(0xF06D5E) : color(0x9AA39C),
+                    CHAT_STATUS_FAILED.equals(message.status)
+                            ? color(0xF06D5E)
+                            : (CHAT_STATUS_UNCONFIRMED.equals(message.status) ? color(0xD69A2D) : color(0x9AA39C)),
                     false);
             status.setGravity(Gravity.END);
             bubbleColumn.addView(status, marginParams(
@@ -1196,22 +1360,24 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         text = text.trim();
         pendingChatScrollToBottom = true;
         if (!debugReady) {
+            Log.i(TAG_CHAT, "drop_not_ready text=" + text);
             addChatMessage(conversation, new ChatMessage(false, true, "我的 Glimmer 未连接", "", nowTimeText()));
             refreshAfterSendingChat(conversation);
             return;
         }
 
-        lastOutgoingConversationId = conversation.id;
         chatDrafts.remove(conversation.id);
         if (chatInput != null) {
             chatInput.setText("");
         }
-        addChatMessage(conversation, new ChatMessage(false, false, text, "发送中", nowTimeText()));
-        try {
-            bleClient.sendP2pChat(conversation.shortId, text);
-        } catch (RuntimeException e) {
-            markLatestOutgoing(conversation.id, "未送达");
-        }
+        long messageId = nextChatMessageId();
+        addChatMessage(conversation, new ChatMessage(messageId, false, false,
+                text, CHAT_STATUS_QUEUED, nowTimeText()));
+        chatSendQueue.add(new PendingChatSend(messageId, conversation.id, conversation.shortId, text));
+        Log.i(TAG_CHAT, "enqueue local=" + messageId
+                + " dst=" + HostProtocol.shortIdText(conversation.shortId)
+                + " text=" + text);
+        dispatchNextChatSend();
         refreshAfterSendingChat(conversation);
     }
 
@@ -1787,6 +1953,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                     if (event.isTruncated()) {
                         text = text + "…";
                     }
+                    Log.i(TAG_CHAT, "rx src=" + HostProtocol.shortIdText(event.shortId)
+                            + " flags=" + event.flags
+                            + " text=" + text);
                     addChatMessage(conversation, new ChatMessage(true, false, text, "", nowTimeText()));
                     rememberChattedPeer(event.shortId);
                     conversation.familiar = true;
@@ -1794,25 +1963,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 pushEvent(event.isDropped() ? "一条微光已过期" : "收到一条来自附近的微光");
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT_TX_RESULT) {
                 HostProtocol.ChatTxResult result = HostProtocol.parseChatTxResult(message.payload);
-                String txStatus = chatTxStatusText(result);
-                Conversation conversation = result.shortId == 0 ? null : findConversation(HostProtocol.shortIdText(result.shortId));
-                if (conversation == null) {
-                    conversation = findConversation(lastOutgoingConversationId);
-                }
-                if (conversation != null) {
-                    markLatestOutgoing(conversation.id, txStatus);
-                    refreshCurrentChat = conversation.id.equals(selectedConversationId);
-                    if (result.isSuccess()) {
-                        rememberChattedPeer(conversation.shortId);
-                        conversation.familiar = true;
-                    }
-                }
+                Log.i(TAG_CHAT, "tx_result short=" + HostProtocol.shortIdText(result.shortId)
+                        + " host=" + result.hostStatus
+                        + " app=" + result.appStatus
+                        + " peerMsg=" + result.peerMessageId);
+                refreshCurrentChat = completeActiveChatSend(result);
                 pushEvent(chatTxEventText(result));
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.status != 0) {
                 if (message.cmd == HostProtocol.CMD_P2P_CHAT_SEND) {
-                    markLatestOutgoing(lastOutgoingConversationId, "未送达");
-                    refreshCurrentChat = lastOutgoingConversationId != null
-                            && lastOutgoingConversationId.equals(selectedConversationId);
+                    Log.i(TAG_CHAT, "send_reject seq=" + message.seq + " status=" + message.status);
+                    refreshCurrentChat = rejectActiveChatSend(message);
                 }
                 pushEvent(productResponseError(message));
             }
@@ -2208,9 +2368,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private String chatTxStatusText(HostProtocol.ChatTxResult result) {
         if (result.isSuccess()) {
-            return "已送达";
+            return CHAT_STATUS_DELIVERED;
         }
-        return result.isTimeout() ? "未确认" : "未送达";
+        return result.isTimeout() ? CHAT_STATUS_UNCONFIRMED : CHAT_STATUS_FAILED;
     }
 
     private String chatTxEventText(HostProtocol.ChatTxResult result) {

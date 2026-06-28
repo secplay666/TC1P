@@ -617,6 +617,8 @@ static void cmd_rxstat(u8 argc, char **argv)
     app_debug_shell_cmd_print_u32(" beacon=", scan.beacon_rx);
     app_debug_shell_cmd_print_u32(" data=", scan.data_rx);
     app_debug_shell_cmd_print_u32(" other=", scan.other_rx);
+    app_debug_shell_cmd_print_u32(" defer_full=", scan.defer_full);
+    app_debug_shell_cmd_print_u8(" defer_q=", scan.defer_count);
     app_debug_shell_cmd_print_u8(" adv_len=", scan.last_adv_len);
     app_debug_shell_cmd_print_u8(" type=", scan.last_type);
     app_debug_shell_cmd_print_u8(" payload=", scan.last_payload_len);
