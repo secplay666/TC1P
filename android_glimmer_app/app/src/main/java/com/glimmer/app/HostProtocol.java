@@ -107,13 +107,19 @@ final class HostProtocol {
                 new byte[]{(byte) Math.max(0, Math.min(255, startIndex))});
     }
 
-    static List<byte[]> makeSetProfileSummary(int seq, String nickname, String signature, int avatarSeed, int[] tags) {
+    static List<byte[]> makeSetProfileSummary(int seq, String nickname, String signature,
+                                              int avatarSeed, int[] tags) {
+        return makeSetProfileSummary(seq, nickname, signature, avatarSeed, tags, true);
+    }
+
+    static List<byte[]> makeSetProfileSummary(int seq, String nickname, String signature,
+                                              int avatarSeed, int[] tags, boolean visible) {
         byte[] nicknameBytes = utf8Limit(nickname == null ? "" : nickname.trim(), PROFILE_NICKNAME_MAX_BYTES);
         byte[] signatureBytes = utf8Limit(signature == null ? "" : signature.trim(), PROFILE_SIGNATURE_MAX_BYTES);
         byte[] payload = new byte[8 + PROFILE_TAG_MAX_COUNT + nicknameBytes.length + signatureBytes.length];
         int offset = 0;
 
-        payload[offset++] = PROFILE_FLAG_VISIBLE;
+        payload[offset++] = (byte) (visible ? PROFILE_FLAG_VISIBLE : 0);
         wr32le(payload, offset, avatarSeed);
         offset += 4;
         int tagCount = tags == null ? 0 : Math.min(tags.length, PROFILE_TAG_MAX_COUNT);

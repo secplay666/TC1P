@@ -443,6 +443,22 @@ const app_peer_profile_t *app_profile_find_peer(const app_eid_t *eid)
     return 0;
 }
 
+app_status_t app_profile_remove_peer(const app_eid_t *eid)
+{
+    u8 i;
+
+    if (!eid) {
+        return APP_ERR_PARAM;
+    }
+    for (i = 0; i < APP_PROFILE_PEER_CACHE_COUNT; i++) {
+        if (s_peer_cache[i].in_use && app_eid_equal(&s_peer_cache[i].eid, eid)) {
+            memset(&s_peer_cache[i], 0, sizeof(s_peer_cache[i]));
+            return APP_OK;
+        }
+    }
+    return APP_ERR_NOT_FOUND;
+}
+
 u8 app_profile_copy_peers(app_profile_peer_record_t *out, u8 max_count)
 {
     u8 i;

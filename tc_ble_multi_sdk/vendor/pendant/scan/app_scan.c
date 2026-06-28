@@ -174,6 +174,8 @@ void app_scan_on_report(const app_scan_report_t *report)
             APP_ERR_NOT_FOUND;
         if (profile_st == APP_OK) {
             app_profile_cache_peer(&frame.src_eid, report->rssi, &profile);
+        } else if (frame.payload_len <= 21) {
+            app_profile_remove_peer(&frame.src_eid);
         }
     } else if (frame.type == ADV_FRAME_DATA) {
         s_debug.data_rx++;

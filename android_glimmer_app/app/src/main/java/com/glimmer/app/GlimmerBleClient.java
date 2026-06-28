@@ -262,8 +262,12 @@ final class GlimmerBleClient {
     }
 
     void setProfileSummary(String nickname, String signature) {
+        setProfileSummary(nickname, signature, true);
+    }
+
+    void setProfileSummary(String nickname, String signature, boolean visible) {
         int seed = (int) (System.currentTimeMillis() & 0x7fffffff);
-        sendPackets(HostProtocol.makeSetProfileSummary(nextSeq(), nickname, signature, seed, new int[]{1, 2, 3}));
+        sendPackets(HostProtocol.makeSetProfileSummary(nextSeq(), nickname, signature, seed, new int[]{1, 2, 3}, visible));
     }
 
     int sendP2pChat(String text) {

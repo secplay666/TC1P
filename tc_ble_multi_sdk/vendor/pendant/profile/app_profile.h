@@ -62,6 +62,7 @@ app_status_t app_profile_build_adv_block(u8 *out, u8 max_len, u8 *out_len);
 app_status_t app_profile_parse_adv_block(const u8 *payload, u8 len, app_peer_profile_t *profile);
 app_status_t app_profile_cache_peer(const app_eid_t *eid, s8 rssi, const app_peer_profile_t *profile);
 const app_peer_profile_t *app_profile_find_peer(const app_eid_t *eid);
+app_status_t app_profile_remove_peer(const app_eid_t *eid);
 u8 app_profile_copy_peers(app_profile_peer_record_t *out, u8 max_count);
 
 #endif

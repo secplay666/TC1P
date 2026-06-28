@@ -38,6 +38,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
@@ -68,6 +69,7 @@ import org.json.JSONObject;
 
 public class MainActivity extends Activity implements GlimmerBleClient.Listener {
     private static final String TAG_CHAT = "GlimmerChat";
+    private static final String TAG_PRIVACY = "GlimmerPrivacy";
     private static final int REQUEST_APP_PERMISSIONS = 1201;
     private static final int REQUEST_PICK_IMAGE = 1202;
     private static final int REQUEST_PICK_AVATAR = 1203;
@@ -80,6 +82,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final String KEY_LOCAL_AVATAR_TEXT = "local_avatar_text";
     private static final String KEY_LOCAL_AVATAR_COLOR = "local_avatar_color";
     private static final String KEY_LOCAL_AVATAR_HASH = "local_avatar_hash";
+    private static final String KEY_STEALTH_MODE = "stealth_mode";
+    private static final String KEY_BLOCKED_PEERS = "blocked_peer_ids";
     private static final String CHAT_HISTORY_FILE = "glimmer_chat_history.json";
     private static final String LOCAL_AVATAR_FILE = "local_avatar.jpg";
     private static final String PEER_AVATAR_PREFIX = "peer_avatar_";
@@ -91,6 +95,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final long AVATAR_BUSY_RETRY_MS = 8000;
     private static final long AVATAR_CLIENT_TAG = -1L;
     private static final String ACTION_DEBUG_CHAT = "com.glimmer.app.DEBUG_CHAT";
+    private static final String ACTION_DEBUG_PRIVACY = "com.glimmer.app.DEBUG_PRIVACY";
     private static final String CHAT_STATUS_QUEUED = "排队中";
     private static final String CHAT_STATUS_SENDING = "发送中";
     private static final String CHAT_STATUS_DELIVERED = "已送达";
@@ -111,6 +116,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private final Queue<Long> avatarSendQueue = new ArrayDeque<>();
     private final List<String> eventLines = new ArrayList<>();
     private final Set<String> chattedPeerIds = new HashSet<>();
+    private final Set<String> blockedPeerIds = new HashSet<>();
     private final Set<String> avatarQueuedKeys = new HashSet<>();
     private final Set<String> avatarSentKeys = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -147,6 +153,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
         }
     };
+    private final BroadcastReceiver debugPrivacyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            handleDebugPrivacyIntent(intent);
+        }
+    };
     private final Runnable chatSendTimeoutRunnable = new Runnable() {
         @Override
         public void run() {
@@ -171,6 +183,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private int systemBottomInset;
     private int imeBottomInset;
     private boolean pendingRerenderAfterChatInput;
+    private boolean stealthMode;
     private Uri avatarEditUri;
     private CropImageView avatarCropView;
 
@@ -322,6 +335,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         buildUi();
         registerDebugChatReceiver();
         registerDebugFileReceiver();
+        registerDebugPrivacyReceiver();
         showTab(0);
         maybeStartBoundReconnect();
     }
@@ -363,6 +377,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         clearAvatarEditor();
         unregisterDebugChatReceiver();
         unregisterDebugFileReceiver();
+        unregisterDebugPrivacyReceiver();
         super.onDestroy();
     }
 
@@ -377,6 +392,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (selectedTab == 2 && mineDetailMode == 4) {
             clearAvatarEditor();
             mineDetailMode = 1;
+            showTab(2);
+            return;
+        }
+        if (selectedTab == 2 && mineDetailMode == 5) {
+            mineDetailMode = 3;
             showTab(2);
             return;
         }
@@ -397,6 +417,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (savedPeers != null) {
             chattedPeerIds.addAll(savedPeers);
         }
+        Set<String> savedBlockedPeers = prefs.getStringSet(KEY_BLOCKED_PEERS, null);
+        blockedPeerIds.clear();
+        if (savedBlockedPeers != null) {
+            blockedPeerIds.addAll(savedBlockedPeers);
+        }
+        stealthMode = prefs.getBoolean(KEY_STEALTH_MODE, false);
         localAvatarText = prefs.getString(KEY_LOCAL_AVATAR_TEXT, "我");
         localAvatarColor = prefs.getInt(KEY_LOCAL_AVATAR_COLOR, 0x1F6F60);
         localAvatarBytes = readOptionalFile(LOCAL_AVATAR_FILE);
@@ -658,6 +684,43 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return chattedPeerIds.contains(HostProtocol.shortIdText(shortId));
     }
 
+    private boolean isBlocked(long shortId) {
+        return blockedPeerIds.contains(HostProtocol.shortIdText(shortId));
+    }
+
+    private void blockPeer(long shortId) {
+        if (shortId == 0) {
+            return;
+        }
+        String id = HostProtocol.shortIdText(shortId);
+        if (!blockedPeerIds.add(id)) {
+            return;
+        }
+        saveBlockedPeers();
+        if (id.equals(selectedConversationId)) {
+            selectedConversationId = null;
+        }
+        avatarQueuedKeys.removeIf(key -> key.startsWith(id + ":"));
+        avatarSentKeys.removeIf(key -> key.startsWith(id + ":"));
+        avatarSendQueue.removeIf(value -> HostProtocol.shortIdText(value).equals(id));
+        pushEvent("已屏蔽一束微光");
+        rerenderCurrentTab();
+    }
+
+    private void unblockPeer(long shortId) {
+        String id = HostProtocol.shortIdText(shortId);
+        if (!blockedPeerIds.remove(id)) {
+            return;
+        }
+        saveBlockedPeers();
+        pushEvent("已解除屏蔽");
+        rerenderCurrentTab();
+    }
+
+    private void saveBlockedPeers() {
+        prefs.edit().putStringSet(KEY_BLOCKED_PEERS, new HashSet<>(blockedPeerIds)).apply();
+    }
+
     private void ensureConversationAvatar(Conversation conversation) {
         if (conversation == null) {
             return;
@@ -718,6 +781,46 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 .apply();
     }
 
+    private void setStealthMode(boolean enabled) {
+        if (stealthMode == enabled) {
+            return;
+        }
+        stealthMode = enabled;
+        prefs.edit().putBoolean(KEY_STEALTH_MODE, stealthMode).apply();
+        syncProfileVisibilityToDevice();
+        setLocalStatus(stealthMode
+                ? (debugReady ? "已进入隐身模式" : "已开启隐身，连接后同步")
+                : (debugReady ? "已退出隐身模式" : "已关闭隐身，连接后同步"));
+        rerenderCurrentTab();
+    }
+
+    private void syncProfileVisibilityToDevice() {
+        if (!debugReady || bleClient == null) {
+            return;
+        }
+        bleClient.setProfileSummary(profileNicknameForWrite(), profileSignatureForWrite(), !stealthMode);
+    }
+
+    private String profileNicknameForWrite() {
+        if (nicknameEdit != null) {
+            String value = nicknameEdit.getText().toString().trim();
+            if (!value.isEmpty()) {
+                return value;
+            }
+        }
+        return myProfile == null ? "微光旅人" : myProfile.displayName();
+    }
+
+    private String profileSignatureForWrite() {
+        if (signatureEdit != null) {
+            String value = signatureEdit.getText().toString().trim();
+            if (!value.isEmpty()) {
+                return value;
+            }
+        }
+        return myProfile == null ? "今晚想听温柔故事" : myProfile.signatureText();
+    }
+
     private void cycleLocalAvatar() {
         int[] colors = avatarPalette();
         int next = 0;
@@ -747,7 +850,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void enqueueAvatarForPeer(long shortId) {
-        if (shortId == 0 || localAvatarBytes == null || localAvatarBytes.length == 0) {
+        if (shortId == 0 || isBlocked(shortId) || localAvatarBytes == null || localAvatarBytes.length == 0) {
             return;
         }
         String key = avatarSendKey(shortId);
@@ -907,6 +1010,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return sorted;
     }
 
+    private List<Conversation> visibleSortedConversations() {
+        List<Conversation> visible = new ArrayList<>();
+        for (Conversation conversation : sortedConversations()) {
+            if (!isBlocked(conversation.shortId)) {
+                visible.add(conversation);
+            }
+        }
+        return visible;
+    }
+
     private Conversation openConversation(HostProtocol.PeerInfo peer) {
         Conversation conversation = ensureConversation(peer.shortId);
         updateConversationFromPeer(conversation, peer);
@@ -994,7 +1107,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         boolean refreshCurrentChat = false;
         while (activeChatSend == null && !chatSendQueue.isEmpty()) {
             PendingChatSend pending = chatSendQueue.poll();
-            if (!debugReady) {
+            if (!debugReady || isBlocked(pending.targetShortId)) {
                 markChatMessageStatus(pending.conversationId, pending.localMessageId, CHAT_STATUS_FAILED);
                 refreshCurrentChat |= isSelectedConversation(pending.conversationId);
                 continue;
@@ -1179,6 +1292,73 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
     }
 
+    private void registerDebugPrivacyReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(ACTION_DEBUG_PRIVACY);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(debugPrivacyReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(debugPrivacyReceiver, filter);
+        }
+    }
+
+    private void unregisterDebugPrivacyReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        try {
+            unregisterReceiver(debugPrivacyReceiver);
+        } catch (IllegalArgumentException ignored) {
+            // Receiver may not be registered if activity setup was interrupted.
+        }
+    }
+
+    private void handleDebugPrivacyIntent(Intent intent) {
+        if (intent == null || !ACTION_DEBUG_PRIVACY.equals(intent.getAction()) || !isDebugBuild()) {
+            return;
+        }
+        if (intent.hasExtra("stealth")) {
+            setStealthMode(intent.getBooleanExtra("stealth", false));
+        }
+        if (intent.getBooleanExtra("refresh", false)) {
+            if (debugReady) {
+                bleClient.requestPeerTable();
+                handler.postDelayed(() -> requestPeerProfilesPage(0), 300);
+            } else {
+                Log.i(TAG_PRIVACY, "debug_refresh skipped ready=false");
+            }
+        }
+        if (intent.getBooleanExtra("dump", true)) {
+            dumpPrivacyDebugState();
+        }
+    }
+
+    private void dumpPrivacyDebugState() {
+        Log.i(TAG_PRIVACY, "state ready=" + debugReady
+                + " stealth=" + stealthMode
+                + " visibleCount=" + nearbyVisibleCount()
+                + " rawPeers=" + peers.size()
+                + " profiles=" + peerProfiles.size()
+                + " myFlags=" + (myProfile == null ? -1 : myProfile.flags)
+                + " boundShort=" + (boundShortId == null ? "" : boundShortId));
+        for (HostProtocol.PeerInfo peer : peers) {
+            Log.i(TAG_PRIVACY, "raw_peer short=" + HostProtocol.shortIdText(peer.shortId)
+                    + " level=" + peer.level
+                    + " rssi=" + peer.rssi
+                    + " blocked=" + isBlocked(peer.shortId));
+        }
+        for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+            Log.i(TAG_PRIVACY, "profile short=" + HostProtocol.shortIdText(profile.shortId)
+                    + " flags=" + profile.profileFlags
+                    + " level=" + profile.level
+                    + " name=" + profile.displayName()
+                    + " sig=" + profile.signatureText()
+                    + " blocked=" + isBlocked(profile.shortId));
+        }
+    }
+
     private void handleDebugChatIntent(Intent intent) {
         if (intent == null || !ACTION_DEBUG_CHAT.equals(intent.getAction()) || !isDebugBuild()) {
             return;
@@ -1195,6 +1375,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         if (shortId == 0) {
             shortId = 0x44556677L;
+        }
+        if (isBlocked(shortId) && !"real".equalsIgnoreCase(intent.getStringExtra("dir"))) {
+            Log.i(TAG_CHAT, "debug_blocked short=" + HostProtocol.shortIdText(shortId));
+            return;
         }
 
         Conversation conversation = ensureConversation(shortId);
@@ -1486,17 +1670,14 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             } else {
                 content.addView(emptyStateCard("等待已绑定终端", "它进入范围后会自动连接，连接后附近的人会出现在这里。"), cardParams());
             }
-        } else if (peers.isEmpty() && peerProfiles.isEmpty()) {
+        } else if (nearbyVisibleCount() == 0) {
             content.addView(emptyStateCard("等待进入范围", "Glimmer 会自动把擦肩的人推到这里。"), cardParams());
         } else {
-            Set<String> profileIds = currentPeerProfileIds();
             for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
-                content.addView(peerProfileCard(profile), cardParams());
-            }
-            for (HostProtocol.PeerInfo peer : peers) {
-                if (!profileIds.contains(HostProtocol.shortIdText(peer.shortId))) {
-                    content.addView(peerCard(peer), cardParams());
+                if (isBlocked(profile.shortId)) {
+                    continue;
                 }
+                content.addView(peerProfileCard(profile), cardParams());
             }
         }
     }
@@ -1575,12 +1756,13 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
 
         syncConversationProfiles();
-        if (conversations.isEmpty()) {
+        List<Conversation> visible = visibleSortedConversations();
+        if (visible.isEmpty()) {
             content.addView(simpleEmptyRow("还没有对话"), cardParams());
             return;
         }
 
-        for (Conversation conversation : sortedConversations()) {
+        for (Conversation conversation : visible) {
             content.addView(conversationRow(conversation), cardParams());
         }
     }
@@ -1923,6 +2105,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         text = text.trim();
         pendingChatScrollToBottom = true;
         handler.removeCallbacks(avatarSendRunnable);
+        if (isBlocked(conversation.shortId)) {
+            addChatMessage(conversation, new ChatMessage(false, true, "已屏蔽对方，无法发送消息", "", nowTimeText()));
+            refreshAfterSendingChat(conversation);
+            return;
+        }
         if (!debugReady) {
             Log.i(TAG_CHAT, "drop_not_ready text=" + text);
             addChatMessage(conversation, new ChatMessage(false, true, "我的 Glimmer 未连接", "", nowTimeText()));
@@ -2329,6 +2516,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void handleFileRxStarted(long srcShortId, int objectKind, int totalLen) {
+        if (isBlocked(srcShortId)) {
+            return;
+        }
         if (objectKind == GlimmerFileTransfer.KIND_AVATAR) {
             Log.i(TAG_CHAT, "avatar_rx_start src=" + HostProtocol.shortIdText(srcShortId)
                     + " bytes=" + totalLen);
@@ -2340,6 +2530,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void handleFileRxCompleted(long srcShortId, int objectKind, byte[] data, boolean ok) {
+        if (isBlocked(srcShortId)) {
+            Log.i(TAG_CHAT, "file_rx_blocked src=" + HostProtocol.shortIdText(srcShortId)
+                    + " kind=" + objectKind);
+            return;
+        }
         if (objectKind == GlimmerFileTransfer.KIND_AVATAR) {
             handleAvatarRxCompleted(srcShortId, data, ok);
             return;
@@ -2426,6 +2621,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         if (mineDetailMode == 4) {
             renderAvatarEditorPage();
+            return;
+        }
+        if (mineDetailMode == 5) {
+            renderBlockedPeersPage();
             return;
         }
 
@@ -2569,13 +2768,164 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
         LinearLayout card = card();
         card.addView(label("隐私与安全", 20, color(0x1F2420), true));
-        card.addView(settingsRow("隐身模式", "暂未开启，后续接入资料协议", v -> setLocalStatus("隐身设置待接入")),
+        card.addView(stealthModeRow(),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(12), 0, 0));
-        card.addView(settingsRow("屏蔽列表", "管理不想再次遇见的人", v -> setLocalStatus("屏蔽列表待接入")),
+        card.addView(settingsRow("屏蔽列表", blockedPeerIds.isEmpty()
+                        ? "管理不想再次遇见的人"
+                        : "已屏蔽 " + blockedPeerIds.size() + " 位微光",
+                        v -> openMineDetail(5)),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
         card.addView(settingsRow("陌生问候", "允许附近的人发来第一句微光", v -> setLocalStatus("陌生问候设置待接入")),
                 marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, 0));
         content.addView(card, cardParams());
+    }
+
+    private LinearLayout stealthModeRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
+        row.setBackground(rounded(0xF7F8F5, 8));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(label("隐身模式", 16, color(0x1F2420), true));
+        copy.addView(label(stealthMode
+                        ? "已隐藏附近预览卡片，别人不会看到你的昵称和签名"
+                        : "附近的人可以看到你的昵称、头像和一句话",
+                13, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(4), 0, 0));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        Switch toggle = new Switch(this);
+        toggle.setChecked(stealthMode);
+        toggle.setOnCheckedChangeListener((button, checked) -> setStealthMode(checked));
+        row.setOnClickListener(v -> toggle.setChecked(!toggle.isChecked()));
+        row.addView(toggle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
+    }
+
+    private void renderBlockedPeersPage() {
+        TextView back = label("‹ 隐私与安全", 16, color(0x2F8F7B), true);
+        back.setPadding(dp(4), dp(2), dp(4), dp(8));
+        back.setOnClickListener(v -> {
+            mineDetailMode = 3;
+            showTab(2);
+        });
+        content.addView(back, marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                0, 0, 0, dp(4)));
+
+        LinearLayout blocked = card();
+        blocked.addView(label("已屏蔽", 20, color(0x1F2420), true));
+        if (blockedPeerIds.isEmpty()) {
+            blocked.addView(label("还没有屏蔽任何微光。", 13, color(0x667068), false),
+                    marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
+        } else {
+            for (Long shortId : blockListIds(true)) {
+                blocked.addView(blockPeerRow(shortId, true), marginParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        0, dp(10), 0, 0));
+            }
+        }
+        content.addView(blocked, cardParams());
+
+        LinearLayout candidates = card();
+        candidates.addView(label("可以屏蔽", 20, color(0x1F2420), true));
+        List<Long> available = blockListIds(false);
+        if (available.isEmpty()) {
+            candidates.addView(label("最近对话或进入范围的人会出现在这里。", 13, color(0x667068), false),
+                    marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(10), 0, 0));
+        } else {
+            for (Long shortId : available) {
+                candidates.addView(blockPeerRow(shortId, false), marginParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        0, dp(10), 0, 0));
+            }
+        }
+        content.addView(candidates, cardParams());
+    }
+
+    private LinearLayout blockPeerRow(long shortId, boolean blocked) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setBackground(rounded(0xF7F8F5, 8));
+
+        row.addView(avatarView(firstAvatarText(peerDisplayName(shortId)),
+                        blocked ? 0x9AA39C : avatarColorFor(HostProtocol.shortIdText(shortId)),
+                        peerAvatarBytes(shortId)),
+                new LinearLayout.LayoutParams(dp(40), dp(40)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setPadding(dp(12), 0, dp(8), 0);
+        copy.addView(label(peerDisplayName(shortId), 15, color(0x1F2420), true));
+        copy.addView(label(peerDetailText(shortId), 12, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(3), 0, 0));
+        row.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        Button action = blocked
+                ? secondaryButton("解除", v -> unblockPeer(shortId))
+                : secondaryButton("屏蔽", v -> blockPeer(shortId));
+        row.addView(action, new LinearLayout.LayoutParams(dp(72), dp(38)));
+        return row;
+    }
+
+    private List<Long> blockListIds(boolean blocked) {
+        List<Long> ids = new ArrayList<>();
+        for (Conversation conversation : sortedConversations()) {
+            addBlockListId(ids, conversation.shortId, blocked);
+        }
+        for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
+            addBlockListId(ids, profile.shortId, blocked);
+        }
+        for (HostProtocol.PeerInfo peer : peers) {
+            addBlockListId(ids, peer.shortId, blocked);
+        }
+        if (blocked) {
+            for (String id : blockedPeerIds) {
+                addBlockListId(ids, parseShortIdOrZero(id), true);
+            }
+        }
+        return ids;
+    }
+
+    private void addBlockListId(List<Long> ids, long shortId, boolean blocked) {
+        if (shortId == 0 || isBlocked(shortId) != blocked || ids.contains(shortId)) {
+            return;
+        }
+        ids.add(shortId);
+    }
+
+    private String peerDisplayName(long shortId) {
+        Conversation conversation = findConversation(HostProtocol.shortIdText(shortId));
+        if (conversation != null && conversation.title != null && !conversation.title.trim().isEmpty()) {
+            return conversation.title;
+        }
+        HostProtocol.PeerProfileInfo profile = findPeerProfile(shortId);
+        if (profile != null) {
+            return profile.displayName();
+        }
+        return "微光 " + HostProtocol.shortIdText(shortId);
+    }
+
+    private String peerDetailText(long shortId) {
+        HostProtocol.PeerProfileInfo profile = findPeerProfile(shortId);
+        if (profile != null) {
+            return profile.proximityText() + " · " + profile.shortCode();
+        }
+        HostProtocol.PeerInfo peer = findPeer(shortId);
+        if (peer != null) {
+            return peer.proximityText() + " · " + peer.signalText();
+        }
+        return HostProtocol.shortIdText(shortId);
     }
 
     private LinearLayout localAvatarRow() {
@@ -2938,7 +3288,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         String signature = signatureEdit == null ? "" : signatureEdit.getText().toString();
         localAvatarText = firstAvatarText(nickname);
         saveLocalAvatar();
-        bleClient.setProfileSummary(nickname, signature);
+        bleClient.setProfileSummary(nickname, signature, !stealthMode);
         setLocalStatus("正在保存附近预览卡片");
     }
 
@@ -3052,7 +3402,6 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 saveBoundDeviceInfo();
                 pushEvent("我的 Glimmer 信息已更新");
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_TABLE && message.status == 0) {
-                int previousCount = peers.size();
                 peers.clear();
                 for (HostProtocol.PeerInfo peer : HostProtocol.parsePeerTable(message.payload)) {
                     if (peer.level > 0) {
@@ -3060,13 +3409,15 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                         enqueueAvatarForPeer(peer.shortId);
                     }
                 }
-                if (peers.isEmpty()) {
-                    pushEvent("附近列表已刷新，暂时没有微光");
-                } else if (peers.size() != previousCount) {
-                    pushEvent("发现 " + peers.size() + " 束附近微光");
-                }
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PROFILE_SUMMARY && message.status == 0) {
                 myProfile = HostProtocol.parseProfileSummary(message.payload);
+                Log.i(TAG_PRIVACY, "my_profile flags=" + myProfile.flags
+                        + " stealth=" + stealthMode
+                        + " name=" + myProfile.displayName());
+                boolean terminalStealthMode = (myProfile.flags & HostProtocol.PROFILE_FLAG_VISIBLE) == 0;
+                if (terminalStealthMode != stealthMode) {
+                    syncProfileVisibilityToDevice();
+                }
                 localAvatarText = firstAvatarText(myProfile.displayName());
                 saveLocalAvatar();
                 setLocalStatus("附近预览卡片已同步");
@@ -3082,6 +3433,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                     if (profile.level > 0) {
                         upsertPeerProfile(pendingPeerProfiles, profile);
                         enqueueAvatarForPeer(profile.shortId);
+                        Log.i(TAG_PRIVACY, "peer_profile_page short="
+                                + HostProtocol.shortIdText(profile.shortId)
+                                + " flags=" + profile.profileFlags
+                                + " level=" + profile.level
+                                + " name=" + profile.displayName());
                     }
                 }
                 if (page.hasMore()) {
@@ -3099,6 +3455,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 }
             } else if (message.frameType == HostProtocol.TYPE_EVENT && message.cmd == HostProtocol.EVENT_P2P_CHAT) {
                 HostProtocol.ChatEvent event = HostProtocol.parseChatEvent(message.payload);
+                if (isBlocked(event.shortId)) {
+                    Log.i(TAG_CHAT, "rx_blocked src=" + HostProtocol.shortIdText(event.shortId));
+                    return;
+                }
                 Conversation conversation = ensureConversation(event.shortId);
                 updateConversationFromKnownPeers(conversation);
                 refreshCurrentChat = conversation.id.equals(selectedConversationId);
@@ -3196,17 +3556,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private int nearbyVisibleCount() {
         Set<String> ids = new HashSet<>();
         for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
-            ids.add(HostProtocol.shortIdText(profile.shortId));
-        }
-        for (HostProtocol.PeerInfo peer : peers) {
-            ids.add(HostProtocol.shortIdText(peer.shortId));
+            if (!isBlocked(profile.shortId)) {
+                ids.add(HostProtocol.shortIdText(profile.shortId));
+            }
         }
         return ids.size();
     }
 
     private boolean hasNewPeerProfile(Set<String> previousIds) {
         for (HostProtocol.PeerProfileInfo profile : peerProfiles) {
-            if (!previousIds.contains(HostProtocol.shortIdText(profile.shortId))) {
+            if (!isBlocked(profile.shortId) && !previousIds.contains(HostProtocol.shortIdText(profile.shortId))) {
                 return true;
             }
         }
@@ -3241,7 +3600,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void rerenderCurrentTabForBackgroundUpdate() {
-        if (isChatDetailVisible() || isAvatarEditorVisible()) {
+        if (isChatDetailVisible() || isAvatarEditorVisible() || isProfileInputActive()) {
             refreshCurrentHeaderOnly();
             return;
         }
@@ -3254,6 +3613,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private boolean isChatDetailVisible() {
         return selectedTab == 1 && selectedConversationId != null;
+    }
+
+    private boolean isProfileSettingsVisible() {
+        return selectedTab == 2 && mineDetailMode == 1;
+    }
+
+    private boolean isProfileInputActive() {
+        return isProfileSettingsVisible()
+                && ((nicknameEdit != null && nicknameEdit.hasFocus())
+                || (signatureEdit != null && signatureEdit.hasFocus()));
     }
 
     private void refreshCurrentHeaderOnly() {
@@ -3350,7 +3719,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
             int unread = 0;
             for (Conversation item : conversations) {
-                unread += item.unread;
+                if (!isBlocked(item.shortId)) {
+                    unread += item.unread;
+                }
             }
             return unread > 0 ? unread + " 条未读" : "最近对话";
         }
@@ -3367,6 +3738,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             if (mineDetailMode == 4) {
                 return "调整头像";
             }
+            if (mineDetailMode == 5) {
+                return "屏蔽列表";
+            }
             return connectionStatus;
         }
         return connectionStatus;
@@ -3379,7 +3753,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
             return bleClient.isScanning() ? "正在找回终端" : "等待自动连接";
         }
-        if (peers.isEmpty() && peerProfiles.isEmpty()) {
+        if (nearbyVisibleCount() == 0) {
             return "等待进入范围";
         }
         int count = nearbyVisibleCount();
@@ -3390,7 +3764,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (!debugReady) {
             return hasBoundDevice() ? "已绑定的终端进入范围后会自动连接。" : "一个 App 只绑定一台微光终端。";
         }
-        if (peers.isEmpty()) {
+        if (nearbyVisibleCount() == 0) {
             return "不显示精确距离，只显示可交流的强弱。";
         }
         return "不显示精确距离，只显示可交流的强弱。";
@@ -3474,7 +3848,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (!debugReady) {
             return hasBoundDevice() ? "等待已绑定终端进入范围" : "绑定终端后同步附近状态";
         }
-        if (peers.isEmpty() && peerProfiles.isEmpty()) {
+        if (nearbyVisibleCount() == 0) {
             return "附近暂时没有微光";
         }
         int count = nearbyVisibleCount();
