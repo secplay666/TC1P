@@ -47,11 +47,15 @@ static void app_pendant_on_peer_message(const app_eid_t *src_eid,
                                         u16 len,
                                         s8 rssi)
 {
-    if (type != APP_PEER_MSG_USER || !payload || !len) {
+    if (!payload || !len) {
         return;
     }
 
-    app_host_cmd_notify_p2p_chat_encrypted(src_eid, rssi, payload, len);
+    if (type == APP_PEER_MSG_USER) {
+        app_host_cmd_notify_p2p_chat_encrypted(src_eid, rssi, payload, len);
+    } else if (type == APP_PEER_MSG_FILE) {
+        app_host_cmd_notify_p2p_file(src_eid, rssi, payload, len);
+    }
 }
 
 static void app_pendant_on_peer_tx_result(const app_eid_t *dst_eid,

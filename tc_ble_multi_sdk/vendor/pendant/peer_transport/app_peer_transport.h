@@ -39,6 +39,7 @@ typedef enum {
 typedef enum {
     APP_PEER_MSG_TEST = 1,
     APP_PEER_MSG_USER = 2,
+    APP_PEER_MSG_FILE = 3,
 } app_peer_msg_type_t;
 
 typedef struct {

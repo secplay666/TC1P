@@ -280,6 +280,13 @@ final class GlimmerBleClient {
         return seq;
     }
 
+    int sendP2pFileFrame(long targetShortId, byte[] fileFrame) {
+        ensureCommandReady();
+        int seq = nextSeq();
+        sendPackets(HostProtocol.makeP2pFileSend(seq, targetShortId, fileFrame));
+        return seq;
+    }
+
     void requestFullSync() {
         requestDeviceInfo();
         handler.postDelayed(this::requestPeerTable, 250);

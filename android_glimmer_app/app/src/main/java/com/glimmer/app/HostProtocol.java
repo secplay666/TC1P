@@ -32,6 +32,7 @@ final class HostProtocol {
     static final int CMD_GET_PROFILE_SUMMARY = 0x12;
     static final int CMD_SET_PROFILE_SUMMARY = 0x13;
     static final int CMD_GET_PEER_PROFILES = 0x14;
+    static final int CMD_P2P_FILE_SEND = 0x15;
 
     static final int PROFILE_FLAG_VISIBLE = 0x01;
     static final int PROFILE_TAG_MAX_COUNT = 6;
@@ -40,9 +41,11 @@ final class HostProtocol {
 
     static final int EVENT_P2P_CHAT = 0x84;
     static final int EVENT_P2P_CHAT_TX_RESULT = 0x85;
+    static final int EVENT_P2P_FILE = 0x86;
 
     static final int P2P_CHAT_FLAG_TRUNCATED = 0x01;
     static final int P2P_CHAT_FLAG_DROPPED = 0x02;
+    static final int P2P_FILE_FLAG_TRUNCATED = 0x01;
 
     private HostProtocol() {
     }
@@ -83,6 +86,20 @@ final class HostProtocol {
         wr32le(request, 1, (int) targetShortId);
         System.arraycopy(payload, 0, request, 5, payload.length);
         return encodeMessage(TYPE_CMD, seq, CMD_P2P_CHAT_SEND, 0, request);
+    }
+
+    static List<byte[]> makeP2pFileSend(int seq, long targetShortId, byte[] fileFrame) {
+        if (targetShortId == 0) {
+            throw new IllegalArgumentException("file target is empty");
+        }
+        if (fileFrame == null || fileFrame.length == 0) {
+            throw new IllegalArgumentException("file frame is empty");
+        }
+        byte[] request = new byte[fileFrame.length + 5];
+        request[0] = 0x01;
+        wr32le(request, 1, (int) targetShortId);
+        System.arraycopy(fileFrame, 0, request, 5, fileFrame.length);
+        return encodeMessage(TYPE_CMD, seq, CMD_P2P_FILE_SEND, 0, request);
     }
 
     static List<byte[]> makePeerProfilesCommand(int seq, int startIndex) {
@@ -264,6 +281,18 @@ final class HostProtocol {
                 u32le(payload, 10));
     }
 
+    static FileEvent parseFileEvent(byte[] payload) {
+        if (payload.length < 8) {
+            throw new IllegalArgumentException("p2p file event too short");
+        }
+        long shortId = u32le(payload, 0);
+        int rssi = i8(payload[4]);
+        int flags = u8(payload[5]);
+        int declaredFrameLen = u16le(payload, 6);
+        byte[] frame = Arrays.copyOfRange(payload, 8, payload.length);
+        return new FileEvent(shortId, rssi, flags, declaredFrameLen, frame);
+    }
+
     static ProfileSummary parseProfileSummary(byte[] payload) {
         if (payload.length < 12 + PROFILE_TAG_MAX_COUNT) {
             throw new IllegalArgumentException("profile payload too short");
@@ -376,6 +405,22 @@ final class HostProtocol {
                                 target);
                     }
                     return name + ": " + status;
+                case CMD_P2P_FILE_SEND:
+                    if (message.payload.length >= 8) {
+                        String target = message.payload.length >= 12
+                                ? String.format(Locale.US, ", target=0x%08X", u32le(message.payload, 8))
+                                : "";
+                        return String.format(Locale.US,
+                                "%s: queued %d bytes, peers=%d, p2p_max=%d, frag_payload=%d, max_frag=%d%s",
+                                name,
+                                u16le(message.payload, 2),
+                                u8(message.payload[1]),
+                                u16le(message.payload, 4),
+                                u8(message.payload[6]),
+                                u8(message.payload[7]),
+                                target);
+                    }
+                    return name + ": " + status;
                 case CMD_GET_PROFILE_SUMMARY:
                     ProfileSummary profile = parseProfileSummary(message.payload);
                     return String.format(Locale.US, "%s: %s / %s", name, profile.displayName(), profile.signature);
@@ -424,6 +469,12 @@ final class HostProtocol {
                 return String.format(Locale.US,
                         "%s peer=0x%08X host=%s app=%d flags=0x%02X len=%d id=0x%08X",
                         result, shortId, statusName(hostStatus), appStatus, flags, textLen, peerMessageId);
+            }
+            if (cmd == EVENT_P2P_FILE) {
+                FileEvent event = parseFileEvent(payload);
+                String suffix = event.isTruncated() ? " [truncated]" : "";
+                return String.format(Locale.US, "FILE from=0x%08X rssi=%d frame=%d/%d %s",
+                        event.shortId, event.rssi, event.frame.length, event.declaredFrameLen, suffix);
             }
         } catch (Exception e) {
             return String.format(Locale.US, "EVT 0x%02X parse error: %s raw=%s", cmd, e.getMessage(), hex(payload));
@@ -530,6 +581,8 @@ final class HostProtocol {
                 return "SHELL_EXEC";
             case CMD_P2P_CHAT_SEND:
                 return "P2P_CHAT_SEND";
+            case CMD_P2P_FILE_SEND:
+                return "P2P_FILE_SEND";
             case CMD_GET_PROFILE_SUMMARY:
                 return "GET_PROFILE_SUMMARY";
             case CMD_SET_PROFILE_SUMMARY:
@@ -766,6 +819,26 @@ final class HostProtocol {
 
         boolean isTimeout() {
             return appStatus == 5;
+        }
+    }
+
+    static final class FileEvent {
+        final long shortId;
+        final int rssi;
+        final int flags;
+        final int declaredFrameLen;
+        final byte[] frame;
+
+        FileEvent(long shortId, int rssi, int flags, int declaredFrameLen, byte[] frame) {
+            this.shortId = shortId;
+            this.rssi = rssi;
+            this.flags = flags;
+            this.declaredFrameLen = declaredFrameLen;
+            this.frame = frame;
+        }
+
+        boolean isTruncated() {
+            return (flags & P2P_FILE_FLAG_TRUNCATED) != 0 || frame.length < declaredFrameLen;
         }
     }
 

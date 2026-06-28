@@ -104,6 +104,14 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             handleDebugChatIntent(intent);
         }
     };
+    private final BroadcastReceiver debugFileReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (fileTransfer != null) {
+                fileTransfer.onDebugFileIntent(intent);
+            }
+        }
+    };
     private final Runnable chatSendTimeoutRunnable = new Runnable() {
         @Override
         public void run() {
@@ -112,6 +120,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     };
 
     private GlimmerBleClient bleClient;
+    private GlimmerFileTransfer fileTransfer;
     private SharedPreferences prefs;
     private LinearLayout root;
     private LinearLayout content;
@@ -215,8 +224,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         loadLocalState();
         bleClient = new GlimmerBleClient(this, this);
+        fileTransfer = new GlimmerFileTransfer(bleClient, handler);
         buildUi();
         registerDebugChatReceiver();
+        registerDebugFileReceiver();
         showTab(0);
         maybeStartBoundReconnect();
     }
@@ -245,6 +256,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             bleClient.disconnect();
         }
         unregisterDebugChatReceiver();
+        unregisterDebugFileReceiver();
         super.onDestroy();
     }
 
@@ -662,6 +674,29 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         try {
             unregisterReceiver(debugChatReceiver);
+        } catch (IllegalArgumentException ignored) {
+            // Receiver may not be registered if activity setup was interrupted.
+        }
+    }
+
+    private void registerDebugFileReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(GlimmerFileTransfer.ACTION_DEBUG_FILE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(debugFileReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(debugFileReceiver, filter);
+        }
+    }
+
+    private void unregisterDebugFileReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        try {
+            unregisterReceiver(debugFileReceiver);
         } catch (IllegalArgumentException ignored) {
             // Receiver may not be registered if activity setup was interrupted.
         }
@@ -1872,6 +1907,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     @Override
     public void onDebugReady(boolean ready) {
         debugReady = ready;
+        if (fileTransfer != null) {
+            fileTransfer.onDebugReadyChanged(ready);
+        }
         if (!ready) {
             markSendingMessagesFailed();
             deviceInfo = null;
@@ -1895,6 +1933,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     @Override
     public void onHostMessage(HostProtocol.HostMessage message, String formatted) {
         boolean refreshCurrentChat = false;
+        if (fileTransfer != null) {
+            fileTransfer.onHostMessage(message);
+        }
         try {
             if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_DEVICE_INFO && message.status == 0) {
                 deviceInfo = HostProtocol.parseDeviceInfo(message.payload);
@@ -1969,6 +2010,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                         + " peerMsg=" + result.peerMessageId);
                 refreshCurrentChat = completeActiveChatSend(result);
                 pushEvent(chatTxEventText(result));
+            } else if (message.cmd == HostProtocol.CMD_P2P_FILE_SEND
+                    || message.cmd == HostProtocol.EVENT_P2P_FILE) {
+                // File transfer has its own debug/test state machine.
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.status != 0) {
                 if (message.cmd == HostProtocol.CMD_P2P_CHAT_SEND) {
                     Log.i(TAG_CHAT, "send_reject seq=" + message.seq + " status=" + message.status);
