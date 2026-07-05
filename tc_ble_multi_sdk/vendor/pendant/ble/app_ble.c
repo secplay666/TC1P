@@ -29,6 +29,8 @@
 #define APP_BLE_SCAN_PERIOD         SCAN_WINDOW_CONTINUOUS
 #define APP_BLE_SCAN_RESTART_US     0
 #define APP_BLE_SCAN_RESTART_CONNECTED_US 0
+#define APP_BLE_EXT_SCAN_INTERVAL   SCAN_INTERVAL_300MS
+#define APP_BLE_EXT_SCAN_WINDOW     SCAN_WINDOW_10MS
 
 static app_ble_conn_info_t s_conn;
 static u8 s_adv_scan_started;
@@ -48,11 +50,11 @@ static ble_sts_t app_ble_configure_ext_scan(void)
 {
 #if APP_BLE_ENABLE_DISCOVERY_SCAN
     /*
-     * Keep connected scanning below continuous duty, while still giving P2P ACK
-     * frames enough receive opportunities during app-connected chat.
+     * Product boards lose discoverability when ADV1 extended advertising runs
+     * with a 30 ms scan window, so keep passive scan at a low duty cycle.
      */
-    u16 scan_interval = s_conn.connected ? SCAN_INTERVAL_100MS : SCAN_INTERVAL_300MS;
-    u16 scan_window = SCAN_WINDOW_30MS;
+    u16 scan_interval = APP_BLE_EXT_SCAN_INTERVAL;
+    u16 scan_window = APP_BLE_EXT_SCAN_WINDOW;
     return blc_ll_setExtScanParam(OWN_ADDRESS_PUBLIC, s_scan_filter_policy, SCAN_PHY_1M,
                                   SCAN_TYPE_PASSIVE, scan_interval, scan_window,
                                   0, 0, 0);

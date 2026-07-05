@@ -36,7 +36,9 @@ volatile u8 rec_buff[BUFF_DATA_LEN] __attribute__((aligned(4))) = {0};
 void UARTIF_uartinit(void)
 {
 	// uart_gpio_set(UART_TX_PB1, UART_RX_PB0); // Debug board UART pins
-	uart_gpio_set(UART_TX_PC2, UART_RX_PC3); // dangle UART pins
+#if (PENDANT_UART_PINMUX_ENABLE)
+	uart_gpio_set(UART_TX_PC2, UART_RX_PC3); // dangle debug UART pins
+#endif
 
 
 	uart_reset();  //will reset uart digital registers from 0x90 ~ 0x9f, so uart setting must set after this reset
