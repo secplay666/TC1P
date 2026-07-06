@@ -47,6 +47,8 @@
 #define PENDANT_WATCHDOG_ENABLE                       1
 #define PENDANT_WATCHDOG_TIMEOUT_MS                   10000
 #define PENDANT_DEMO_CENTRAL_CONNECT_ENABLE           0
+// Keep BLE startup independent from optional haptic hardware probing.
+#define PENDANT_MOTOR_BOOT_INIT_ENABLE                0
 
 #if (PENDANT_USB_ENABLE)
 #define MODULE_USB_ENABLE                              1

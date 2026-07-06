@@ -6,7 +6,8 @@ param(
     [string]$BdtConfigPath = "C:\TelinkIoTStudio\tools\TBD_release\config",
     [string]$DebuggerPid = "",
     [int]$PortNum = -1,
-    [int]$HubNum = -1
+    [int]$HubNum = -1,
+    [switch]$SkipActivate
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +32,12 @@ if ($Transport -eq "EVK") {
 if ($Transport -eq "USB") {
     & $bdt $DeviceId $Chip rst -u -f
 } else {
+    if (!$SkipActivate) {
+        & $bdt $bdtDeviceId $Chip ac
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "BDT activate failed with exit code $LASTEXITCODE; continue to reset. Use -SkipActivate to suppress this warning."
+        }
+    }
     & $bdt $bdtDeviceId $Chip rst -f
 }
 if ($LASTEXITCODE -ne 0) {

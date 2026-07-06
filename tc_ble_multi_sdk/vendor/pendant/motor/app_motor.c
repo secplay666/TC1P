@@ -1,8 +1,13 @@
 #include "app_motor.h"
 #include "../board/app_board.h"
 #include "../config/app_config_store.h"
+#include "../app_config.h"
 #include "drivers.h"
 #include "timer.h"
+
+#ifndef PENDANT_MOTOR_BOOT_INIT_ENABLE
+#define PENDANT_MOTOR_BOOT_INIT_ENABLE 0
+#endif
 
 #define DRV2625_I2C_ID                 0xB4
 #define DRV2625_I2C_CLOCK_HZ           200000
@@ -42,6 +47,7 @@ typedef struct {
 } motor_hw_pattern_t;
 
 static u8 s_hw_ready;
+static u8 s_init_attempted;
 static u8 s_busy;
 static u32 s_busy_start_tick;
 static u32 s_busy_us;
@@ -108,6 +114,9 @@ static motor_hw_pattern_t motor_get_hw_pattern(app_motor_pattern_t pattern)
 static app_status_t drv2625_init(void)
 {
     u8 div = (u8)(CLOCK_SYS_CLOCK_HZ / (4 * DRV2625_I2C_CLOCK_HZ));
+    s_init_attempted = 1;
+    s_hw_ready = 0;
+
     if (!div) {
         div = 1;
     }
@@ -147,7 +156,12 @@ void app_motor_init(void)
     s_busy = 0;
     s_busy_start_tick = 0;
     s_busy_us = 0;
+#if (PENDANT_MOTOR_BOOT_INIT_ENABLE)
     drv2625_init();
+#else
+    s_hw_ready = 0;
+    s_init_attempted = 0;
+#endif
 }
 
 app_status_t app_motor_self_check(void)
@@ -155,7 +169,7 @@ app_status_t app_motor_self_check(void)
     if (!s_trig_pin) {
         return APP_ERR_STATE;
     }
-    return s_hw_ready ? APP_OK : APP_ERR_STATE;
+    return APP_OK;
 }
 
 app_status_t app_motor_play(app_motor_pattern_t pattern)
@@ -170,7 +184,14 @@ app_status_t app_motor_play(app_motor_pattern_t pattern)
         return APP_OK;
     }
     if (!s_hw_ready) {
-        return APP_ERR_STATE;
+        if (!s_init_attempted) {
+            app_status_t st = drv2625_init();
+            if (st != APP_OK) {
+                return st;
+            }
+        } else {
+            return APP_ERR_STATE;
+        }
     }
     if (s_busy) {
         return APP_ERR_BUSY;

@@ -135,13 +135,16 @@ app_status_t app_profile_load(void)
     app_profile_record_t record;
 
     if (app_storage_read(APP_STORAGE_PART_PROFILE, 0, &record, sizeof(record)) != APP_OK) {
-        return APP_ERR_FLASH;
+        profile_make_default();
+        s_loaded = 1;
+        return APP_OK;
     }
     if (record.magic != APP_PROFILE_RECORD_MAGIC ||
         record.version != APP_PROFILE_RECORD_VERSION ||
         record.crc16 != profile_record_crc(&record)) {
         profile_make_default();
-        return app_profile_save();
+        s_loaded = 1;
+        return APP_OK;
     }
 
     memcpy(s_key, record.key, sizeof(s_key));
@@ -152,7 +155,8 @@ app_status_t app_profile_load(void)
         s_profile.signature_len > APP_PROFILE_SIGNATURE_MAX_LEN ||
         s_profile.tag_count > APP_PROFILE_TAG_MAX_COUNT) {
         profile_make_default();
-        return app_profile_save();
+        s_loaded = 1;
+        return APP_OK;
     }
     s_loaded = 1;
     return APP_OK;
