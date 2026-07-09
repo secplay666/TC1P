@@ -37,7 +37,11 @@ void UARTIF_uartinit(void)
 {
 	// uart_gpio_set(UART_TX_PB1, UART_RX_PB0); // Debug board UART pins
 #if (PENDANT_UART_PINMUX_ENABLE)
-	uart_gpio_set(UART_TX_PC2, UART_RX_PC3); // dangle debug UART pins
+#if (PENDANT_UART_RX_PINMUX_ENABLE)
+	uart_gpio_set(UART_TX_PC2, UART_RX_PC3); // debug UART TX/RX pins
+#else
+	uart_gpio_set(UART_TX_PC2, UART_RX_NONE_PIN); // debug UART TX only
+#endif
 #endif
 
 

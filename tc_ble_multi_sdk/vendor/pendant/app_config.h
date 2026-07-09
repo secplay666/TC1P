@@ -40,8 +40,11 @@
 #define PENDANT_USB_AUTO_OFF_MS                       15000
 #define PENDANT_EXT_ADV_ENABLE                        1
 #define APP_BLE_ENABLE_DISCOVERY_SCAN                 1
-// Enable only on boards where PC2/PC3 are dedicated debug UART pins.
+// Product boards may fail to advertise if PC2/PC3 are switched to UART.
+// Enable only on boards where those pins are dedicated debug UART pins.
 #define PENDANT_UART_PINMUX_ENABLE                    0
+// Keep RX opt-in: a noisy or floating PC3 can flood the debug shell and starve BLE.
+#define PENDANT_UART_RX_PINMUX_ENABLE                 0
 #define APP_HOST_ENABLE_ADV_TRANSPORT                 0
 #define PENDANT_BLE_AUTO_START                        1
 #define PENDANT_WATCHDOG_ENABLE                       1
