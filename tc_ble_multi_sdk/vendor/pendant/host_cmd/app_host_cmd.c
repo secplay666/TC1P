@@ -464,13 +464,33 @@ static void handle_motor_test(u8 seq, const u8 *payload, u16 len)
     app_motor_pattern_t pattern;
     app_status_t st;
     app_motor_debug_t debug;
+    u8 drive_time;
 
     if (!payload || !len) {
         send_rsp(seq, HOST_CMD_MOTOR_TEST, HOST_STATUS_ERR_PARAM, 0, 0);
         return;
     }
+    if (len == 2) {
+        send_rsp(seq, HOST_CMD_MOTOR_TEST, HOST_STATUS_ERR_PARAM, 0, 0);
+        return;
+    }
     pattern = (app_motor_pattern_t)payload[0];
-    st = app_motor_play(pattern);
+    if (pattern == MOTOR_PATTERN_NONE && len == 1) {
+        st = app_motor_stop();
+    } else if (pattern == MOTOR_PATTERN_CONTINUOUS && len == 1) {
+        st = app_motor_play_continuous(MOTOR_PATTERN_ONE);
+    } else if (len >= 3) {
+        drive_time = len >= 4 ? payload[3] : 0x10;
+        st = app_motor_set_drive_params(payload[1], payload[2], drive_time);
+        if (st == APP_OK) {
+            st = app_motor_play(pattern);
+        }
+    } else {
+        st = app_motor_set_default_drive_params();
+        if (st == APP_OK) {
+            st = app_motor_play(pattern);
+        }
+    }
     app_motor_get_debug(&debug);
     s_rsp_buf[0] = 2;
     s_rsp_buf[1] = debug.hw_ready;

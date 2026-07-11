@@ -377,6 +377,9 @@ class PendantDebugApp:
         ttk.Button(motor, text="发送", command=self._send_motor).pack(side=tk.LEFT, padx=8)
 
         rssi = ttk.LabelFrame(self.control_tab, text="RSSI 参数", padding=8)
+        ttk.Button(motor, text="Continuous ON", command=self._send_motor_continuous).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(motor, text="Stop", command=self._send_motor_stop).pack(side=tk.LEFT)
+
         rssi.pack(fill=tk.X, pady=(0, 8))
         self.rssi_t1 = self._entry(rssi, "T1", "-80", 0)
         self.rssi_t2 = self._entry(rssi, "T2", "-65", 2)
@@ -576,6 +579,14 @@ class PendantDebugApp:
         pattern = int(self.motor_var.get().split()[0])
         self.worker.send_command(proto.CMD_MOTOR_TEST, bytes([pattern]))
         self._log(f"TX MOTOR_TEST {pattern}")
+
+    def _send_motor_continuous(self) -> None:
+        self.worker.send_command(proto.CMD_MOTOR_TEST, bytes([proto.MOTOR_PATTERN_CONTINUOUS]))
+        self._log("TX MOTOR_TEST continuous")
+
+    def _send_motor_stop(self) -> None:
+        self.worker.send_command(proto.CMD_MOTOR_TEST, bytes([proto.MOTOR_PATTERN_STOP]))
+        self._log("TX MOTOR_TEST stop")
 
     def _send_rssi(self) -> None:
         try:

@@ -38,7 +38,9 @@ typedef struct {
 
 static const u16 s_uuid_primary_service = GATT_UUID_PRIMARY_SERVICE;
 static const u16 s_uuid_character = GATT_UUID_CHARACTER;
-static const u16 s_uuid_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
+static const u16 s_uuid_rsp_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
+static const u16 s_uuid_log_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
+static const u16 s_uuid_evt_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
 static const u16 s_uuid_gap_service = SERVICE_UUID_GENERIC_ACCESS;
 static const u16 s_uuid_device_name = GATT_UUID_DEVICE_NAME;
 static const u16 s_uuid_appearance = GATT_UUID_APPEARANCE;
@@ -69,9 +71,9 @@ static u8 s_cmd_value[APP_HOST_FRAME_MAX_PACKET_LEN];
 static u8 s_rsp_value[APP_HOST_FRAME_MAX_PACKET_LEN];
 static u8 s_log_value[APP_HOST_FRAME_MAX_PACKET_LEN];
 static u8 s_evt_value[APP_HOST_FRAME_MAX_PACKET_LEN];
-static u16 s_rsp_ccc;
-static u16 s_log_ccc;
-static u16 s_evt_ccc;
+static u8 s_rsp_ccc[2];
+static u8 s_log_ccc[2];
+static u8 s_evt_ccc[2];
 
 static host_notify_item_t s_notify_queue[HOST_GATT_NOTIFY_QUEUE_SIZE];
 static u8 s_q_head;
@@ -97,25 +99,25 @@ static attribute_t s_att_table[] = {
     {0, ATT_PERMISSIONS_WRITE, 16, sizeof(s_cmd_value), (u8 *)s_uuid_debug_cmd, s_cmd_value, app_host_gatt_cmd_write_cb, 0},
     {0, ATT_PERMISSIONS_READ, 2, sizeof(s_rsp_char_decl), (u8 *)&s_uuid_character, s_rsp_char_decl, 0, 0},
     {0, ATT_PERMISSIONS_READ, 16, sizeof(s_rsp_value), (u8 *)s_uuid_debug_rsp, s_rsp_value, 0, 0},
-    {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_rsp_ccc), (u8 *)&s_uuid_client_char_cfg, (u8 *)&s_rsp_ccc, app_host_gatt_ccc_write_cb, 0},
+    {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_rsp_ccc), (u8 *)&s_uuid_rsp_client_char_cfg, s_rsp_ccc, app_host_gatt_ccc_write_cb, 0},
     {0, ATT_PERMISSIONS_READ, 2, sizeof(s_log_char_decl), (u8 *)&s_uuid_character, s_log_char_decl, 0, 0},
     {0, ATT_PERMISSIONS_READ, 16, sizeof(s_log_value), (u8 *)s_uuid_debug_log, s_log_value, 0, 0},
-    {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_log_ccc), (u8 *)&s_uuid_client_char_cfg, (u8 *)&s_log_ccc, app_host_gatt_ccc_write_cb, 0},
+    {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_log_ccc), (u8 *)&s_uuid_log_client_char_cfg, s_log_ccc, app_host_gatt_ccc_write_cb, 0},
     {0, ATT_PERMISSIONS_READ, 2, sizeof(s_evt_char_decl), (u8 *)&s_uuid_character, s_evt_char_decl, 0, 0},
     {0, ATT_PERMISSIONS_READ, 16, sizeof(s_evt_value), (u8 *)s_uuid_debug_evt, s_evt_value, 0, 0},
-    {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_evt_ccc), (u8 *)&s_uuid_client_char_cfg, (u8 *)&s_evt_ccc, app_host_gatt_ccc_write_cb, 0},
+    {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_evt_ccc), (u8 *)&s_uuid_evt_client_char_cfg, s_evt_ccc, app_host_gatt_ccc_write_cb, 0},
 };
 
 static u8 app_host_gatt_notify_enabled(u16 handle)
 {
     if (handle == ATT_HANDLE_DEBUG_RSP_VALUE) {
-        return (s_rsp_ccc & 0x0001) ? 1 : 0;
+        return (s_rsp_ccc[0] & 0x01) ? 1 : 0;
     }
     if (handle == ATT_HANDLE_DEBUG_LOG_VALUE) {
-        return (s_log_ccc & 0x0001) ? 1 : 0;
+        return (s_log_ccc[0] & 0x01) ? 1 : 0;
     }
     if (handle == ATT_HANDLE_DEBUG_EVT_VALUE) {
-        return (s_evt_ccc & 0x0001) ? 1 : 0;
+        return (s_evt_ccc[0] & 0x01) ? 1 : 0;
     }
     return 0;
 }
@@ -181,20 +183,26 @@ static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p)
 
     value = (u16)pkt->dat[0] | ((u16)pkt->dat[1] << 8);
     if (pkt->handle == ATT_HANDLE_DEBUG_RSP_CCC) {
-        s_rsp_ccc = value;
+        s_rsp_ccc[0] = U16_LO(value);
+        s_rsp_ccc[1] = U16_HI(value);
     } else if (pkt->handle == ATT_HANDLE_DEBUG_LOG_CCC) {
-        s_log_ccc = value;
+        s_log_ccc[0] = U16_LO(value);
+        s_log_ccc[1] = U16_HI(value);
     } else if (pkt->handle == ATT_HANDLE_DEBUG_EVT_CCC) {
-        s_evt_ccc = value;
+        s_evt_ccc[0] = U16_LO(value);
+        s_evt_ccc[1] = U16_HI(value);
     }
     return 0;
 }
 
 void app_host_gatt_init(void)
 {
-    s_rsp_ccc = 0;
-    s_log_ccc = 0;
-    s_evt_ccc = 0;
+    s_rsp_ccc[0] = 0;
+    s_rsp_ccc[1] = 0;
+    s_log_ccc[0] = 0;
+    s_log_ccc[1] = 0;
+    s_evt_ccc[0] = 0;
+    s_evt_ccc[1] = 0;
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;
@@ -237,9 +245,12 @@ void app_host_gatt_on_connected(u16 conn_handle)
 void app_host_gatt_on_disconnected(void)
 {
     s_connected = 0;
-    s_rsp_ccc = 0;
-    s_log_ccc = 0;
-    s_evt_ccc = 0;
+    s_rsp_ccc[0] = 0;
+    s_rsp_ccc[1] = 0;
+    s_log_ccc[0] = 0;
+    s_log_ccc[1] = 0;
+    s_evt_ccc[0] = 0;
+    s_evt_ccc[1] = 0;
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;

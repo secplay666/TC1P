@@ -66,6 +66,9 @@ CMD_NAMES = {
     CMD_P2P_CHAT_SEND: "P2P_CHAT_SEND",
 }
 
+MOTOR_PATTERN_STOP = 0x00
+MOTOR_PATTERN_CONTINUOUS = 0x80
+
 STATUS_NAMES = {
     0x00: "OK",
     0x01: "ERR_PARAM",
@@ -272,8 +275,21 @@ def make_log_enable(seq: int, enabled: bool) -> list[bytes]:
     return encode_message(TYPE_CMD, seq, CMD_LOG_ENABLE, 0, bytes([1 if enabled else 0]))
 
 
-def make_motor_test(seq: int, pattern: int) -> list[bytes]:
-    return encode_message(TYPE_CMD, seq, CMD_MOTOR_TEST, 0, bytes([pattern & 0xFF]))
+def make_motor_test(
+    seq: int,
+    pattern: int,
+    rated: int | None = None,
+    clamp: int | None = None,
+    drive_time: int | None = None,
+) -> list[bytes]:
+    payload = bytearray([pattern & 0xFF])
+    if rated is not None or clamp is not None or drive_time is not None:
+        if rated is None or clamp is None:
+            raise ValueError("rated and clamp must be provided together")
+        payload.extend([rated & 0xFF, clamp & 0xFF])
+        if drive_time is not None:
+            payload.append(drive_time & 0xFF)
+    return encode_message(TYPE_CMD, seq, CMD_MOTOR_TEST, 0, bytes(payload))
 
 
 def make_rssi_config(seq: int, t1: int, t2: int, t3: int, tin_ms: int, tout_ms: int) -> list[bytes]:

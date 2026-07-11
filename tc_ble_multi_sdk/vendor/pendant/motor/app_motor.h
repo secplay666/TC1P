@@ -10,11 +10,15 @@ typedef enum {
     MOTOR_PATTERN_THREE,
     MOTOR_PATTERN_ERROR,
     MOTOR_PATTERN_CUSTOM,
+    MOTOR_PATTERN_CONTINUOUS = 0x80,
 } app_motor_pattern_t;
 
 void app_motor_init(void);
 app_status_t app_motor_self_check(void);
+app_status_t app_motor_set_drive_params(u8 rated_voltage, u8 od_clamp, u8 drive_time);
+app_status_t app_motor_set_default_drive_params(void);
 app_status_t app_motor_play(app_motor_pattern_t pattern);
+app_status_t app_motor_play_continuous(app_motor_pattern_t pattern);
 app_status_t app_motor_stop(void);
 void app_motor_poll(u32 now_tick);
 u8 app_motor_is_busy(void);
@@ -24,6 +28,7 @@ typedef struct {
     u8 init_attempted;
     u8 busy;
     u8 init_timeout;
+    u8 continuous;
     u8 last_chip_id;
     u8 last_status;
     u8 last_mode;

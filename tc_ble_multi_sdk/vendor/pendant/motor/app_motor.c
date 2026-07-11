@@ -45,6 +45,10 @@
 #define DRV2625_WAVE_ERROR             0x2F
 #define DRV2625_WAVE_DELAY_100MS       0x82
 
+#define MOTOR_DEFAULT_RATED_VOLTAGE    0x46
+#define MOTOR_DEFAULT_OD_CLAMP         0x5C
+#define MOTOR_DEFAULT_DRIVE_TIME       0x10
+
 #define MOTOR_BUSY_ONE_US              140000
 #define MOTOR_BUSY_TWO_US              380000
 #define MOTOR_BUSY_THREE_US            620000
@@ -74,6 +78,11 @@ static u8 s_last_go;
 static u8 s_last_diag_z_result;
 static u8 s_last_acal_comp;
 static u8 s_last_acal_bemf;
+static u8 s_rated_voltage;
+static u8 s_od_clamp;
+static u8 s_drive_time;
+static u8 s_continuous;
+static app_motor_pattern_t s_continuous_pattern;
 
 static void drv2625_bus_init(void)
 {
@@ -183,9 +192,9 @@ static app_status_t drv2625_init(void)
     drv2625_write(DRV2625_REG_MODE, DRV2625_MODE_STANDBY_OUT);
     drv2625_write(DRV2625_REG_MODE, DRV2625_MODE_AUTO_CALIB);
     drv2625_write(DRV2625_REG_CONTROL1, DRV2625_CONTROL_LRA);
-    drv2625_write(DRV2625_REG_RATED_VOLTAGE, 0x46);
-    drv2625_write(DRV2625_REG_OD_CLAMP, 0x5C);
-    drv2625_write(DRV2625_REG_DRIVE_TIME, 0x10);
+    drv2625_write(DRV2625_REG_RATED_VOLTAGE, s_rated_voltage);
+    drv2625_write(DRV2625_REG_OD_CLAMP, s_od_clamp);
+    drv2625_write(DRV2625_REG_DRIVE_TIME, s_drive_time);
     drv2625_write(DRV2625_REG_GO, 0x01);
 
     drv2625_wait_go_clear(MOTOR_AUTO_CAL_TIMEOUT_US);
@@ -223,6 +232,11 @@ void app_motor_init(void)
     s_last_diag_z_result = 0;
     s_last_acal_comp = 0;
     s_last_acal_bemf = 0;
+    s_rated_voltage = MOTOR_DEFAULT_RATED_VOLTAGE;
+    s_od_clamp = MOTOR_DEFAULT_OD_CLAMP;
+    s_drive_time = MOTOR_DEFAULT_DRIVE_TIME;
+    s_continuous = 0;
+    s_continuous_pattern = MOTOR_PATTERN_NONE;
 #if (PENDANT_MOTOR_BOOT_INIT_ENABLE)
     drv2625_init();
 #else
@@ -237,6 +251,34 @@ app_status_t app_motor_self_check(void)
         return APP_ERR_STATE;
     }
     return APP_OK;
+}
+
+app_status_t app_motor_set_drive_params(u8 rated_voltage, u8 od_clamp, u8 drive_time)
+{
+    if (!rated_voltage || !od_clamp || !drive_time) {
+        return APP_ERR_PARAM;
+    }
+    if (rated_voltage > MOTOR_DEFAULT_RATED_VOLTAGE ||
+        od_clamp > MOTOR_DEFAULT_OD_CLAMP ||
+        drive_time > MOTOR_DEFAULT_DRIVE_TIME) {
+        return APP_ERR_PARAM;
+    }
+
+    app_motor_stop();
+    s_rated_voltage = rated_voltage;
+    s_od_clamp = od_clamp;
+    s_drive_time = drive_time;
+    s_hw_ready = 0;
+    s_init_attempted = 0;
+    s_init_timeout = 0;
+    return APP_OK;
+}
+
+app_status_t app_motor_set_default_drive_params(void)
+{
+    return app_motor_set_drive_params(MOTOR_DEFAULT_RATED_VOLTAGE,
+                                      MOTOR_DEFAULT_OD_CLAMP,
+                                      MOTOR_DEFAULT_DRIVE_TIME);
 }
 
 app_status_t app_motor_play(app_motor_pattern_t pattern)
@@ -284,8 +326,33 @@ app_status_t app_motor_play(app_motor_pattern_t pattern)
     return APP_OK;
 }
 
+app_status_t app_motor_play_continuous(app_motor_pattern_t pattern)
+{
+    app_status_t st;
+
+    if (pattern == MOTOR_PATTERN_NONE ||
+        pattern == MOTOR_PATTERN_CUSTOM ||
+        pattern == MOTOR_PATTERN_CONTINUOUS) {
+        return APP_ERR_PARAM;
+    }
+
+    st = app_motor_set_default_drive_params();
+    if (st != APP_OK) {
+        return st;
+    }
+
+    st = app_motor_play(pattern);
+    if (st == APP_OK && s_busy) {
+        s_continuous = 1;
+        s_continuous_pattern = pattern;
+    }
+    return st;
+}
+
 app_status_t app_motor_stop(void)
 {
+    s_continuous = 0;
+    s_continuous_pattern = MOTOR_PATTERN_NONE;
     if (s_hw_ready) {
         drv2625_write(DRV2625_REG_GO, 0x00);
     }
@@ -303,6 +370,13 @@ void app_motor_poll(u32 now_tick)
             drv2625_write(DRV2625_REG_GO, 0x00);
         }
         s_busy = 0;
+        if (s_continuous) {
+            app_status_t st = app_motor_play(s_continuous_pattern);
+            if (st != APP_OK) {
+                s_continuous = 0;
+                s_continuous_pattern = MOTOR_PATTERN_NONE;
+            }
+        }
     }
 }
 
@@ -321,6 +395,7 @@ void app_motor_get_debug(app_motor_debug_t *debug)
     debug->init_attempted = s_init_attempted;
     debug->busy = s_busy;
     debug->init_timeout = s_init_timeout;
+    debug->continuous = s_continuous;
     debug->last_chip_id = s_last_chip_id;
     debug->last_status = s_last_status;
     debug->last_mode = s_last_mode;
