@@ -8,7 +8,7 @@ import struct
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import UUID
 
 from bleak import BleakClient, BleakScanner
@@ -157,10 +157,26 @@ async def scan_targets(timeout_s: float, limit: int) -> list[OtaTarget]:
     return targets[:limit] if limit > 0 else targets
 
 
-async def run_one(target: OtaTarget, firmware: bytes, pdu_len: int, pace_s: float, write_response: bool) -> bool:
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+async def run_one(
+    target: OtaTarget,
+    firmware: bytes,
+    pdu_len: int,
+    pace_s: float,
+    write_response: bool,
+    progress: Optional[ProgressCallback] = None,
+) -> bool:
     result_code: Optional[int] = None
     schedule_count = 0
     schedule_size = 0
+
+    def emit(event: str, **payload: Any) -> None:
+        if progress is not None:
+            payload["event"] = event
+            payload.setdefault("address", target.address)
+            progress(payload)
 
     def on_notify(_sender: Any, data: bytearray) -> None:
         nonlocal result_code, schedule_count, schedule_size
@@ -171,12 +187,16 @@ async def run_one(target: OtaTarget, firmware: bytes, pdu_len: int, pace_s: floa
         if cmd == CMD_OTA_RESULT and len(payload) >= 3:
             result_code = payload[2]
             log(f"{target.address}: result={OTA_RESULT_NAMES.get(result_code, result_code)}")
+            emit("result", code=result_code, name=OTA_RESULT_NAMES.get(result_code, "UNKNOWN"))
         elif cmd == CMD_OTA_SCHEDULE_PDU_NUM and len(payload) >= 4:
             schedule_count = struct.unpack_from("<H", payload, 2)[0]
+            emit("schedule_pdu", schedule_count=schedule_count)
         elif cmd == CMD_OTA_SCHEDULE_FW_SIZE and len(payload) >= 6:
             schedule_size = struct.unpack_from("<I", payload, 2)[0]
+            emit("schedule_size", schedule_size=schedule_size)
 
     log(f"{target.address}: connecting name={target.name or '-'} rssi={target.rssi}")
+    emit("connect", name=target.name, rssi=target.rssi)
     async with BleakClient(target.address) as client:
         services = client.services
         if services is None and hasattr(client, "get_services"):
@@ -185,6 +205,7 @@ async def run_one(target: OtaTarget, firmware: bytes, pdu_len: int, pace_s: floa
         mtu_size = getattr(client, "mtu_size", None)
         max_wwr = getattr(ota_char, "max_write_without_response_size", None)
         log(f"{target.address}: ota_char={ota_char.uuid} props={','.join(getattr(ota_char, 'properties', []))} mtu={mtu_size} max_wwr={max_wwr}")
+        emit("char", uuid=str(ota_char.uuid), mtu=mtu_size, max_wwr=max_wwr)
         write_len = pdu_len + 4
         if write_response and mtu_size and write_len > mtu_size - 3:
             raise RuntimeError(f"PDU {pdu_len} needs ATT MTU >= {write_len + 3}, current MTU is {mtu_size}")
@@ -198,6 +219,7 @@ async def run_one(target: OtaTarget, firmware: bytes, pdu_len: int, pace_s: floa
         chunks = math.ceil(len(firmware) / pdu_len)
         max_index = chunks - 1
         log(f"{target.address}: start OTA size={len(firmware)} pdu={pdu_len} chunks={chunks}")
+        emit("start", total_bytes=len(firmware), total_chunks=chunks, pdu_len=pdu_len)
         await client.write_gatt_char(ota_char, ota_start_ext_packet(pdu_len), response=write_response)
         await asyncio.sleep(0.15)
 
@@ -216,19 +238,32 @@ async def run_one(target: OtaTarget, firmware: bytes, pdu_len: int, pace_s: floa
                     extra += f" schedule_size={schedule_size}"
                 log(f"{target.address}: {index + 1}/{chunks} {percent:.1f}%{extra}")
                 last_print = now
+            emit(
+                "progress",
+                sent_chunks=index + 1,
+                total_chunks=chunks,
+                sent_bytes=min((index + 1) * pdu_len, len(firmware)),
+                total_bytes=len(firmware),
+                percent=(index + 1) * 100.0 / chunks,
+                schedule_count=schedule_count,
+                schedule_size=schedule_size,
+            )
 
         await asyncio.sleep(0.15)
         await client.write_gatt_char(ota_char, ota_end_packet(max_index), response=write_response)
         log(f"{target.address}: OTA_END sent max_index={max_index}")
+        emit("end_sent", max_index=max_index)
 
         deadline = time.monotonic() + 20.0
         while time.monotonic() < deadline:
             if result_code is not None:
                 if result_code == 0:
+                    emit("done")
                     return True
                 raise OtaResult(result_code)
             if not client.is_connected:
                 log(f"{target.address}: disconnected before result; device may be rebooting")
+                emit("rebooting")
                 return True
             await asyncio.sleep(0.2)
         raise TimeoutError("OTA result timeout")

@@ -105,3 +105,4 @@ This opens two BLE debug connections, enables log notify on both sides, sends
 - 早期字节序错误版本：`56000001-4445-5931-454B-xx00444E5450`
 - 当前 Telink/Windows 实测显示版本：`01000056-4544-3159-4B45-000x50544E44`
 - OTA: `ota_update.py` supports Telink BLE OTA for one or more Glimmer devices. Windows BLE currently uses 16-byte PDU + write-response by default; repeat `--address` to upgrade multiple devices sequentially.
+- GUI OTA: open `app.py`, switch to the `OTA` tab, select the firmware `.bin`, add one or more target addresses, then click `Start OTA`. The GUI uses the same OTA implementation as `ota_update.py`.

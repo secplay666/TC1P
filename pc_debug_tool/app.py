@@ -8,9 +8,11 @@ import struct
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from pathlib import Path
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Dict, Iterable, Optional
 
+import ota_update
 import pendant_protocol as proto
 from provision_db import ProvisionDatabase, normalize_date_code, today_date_code
 
@@ -51,6 +53,9 @@ DEBUG_UUIDS = {
         "01000056-4544-3159-4b45-000550544e44",
     ],
 }
+
+APP_DIR = Path(__file__).resolve().parent
+DEFAULT_OTA_BIN = APP_DIR.parent / "tc_ble_multi_sdk" / "build" / "B85" / "pendant" / "pendant.bin"
 
 
 def now_text() -> str:
@@ -128,6 +133,33 @@ class BleWorker:
     def send_packets(self, packets: list[bytes]) -> None:
         self.submit(self._send_packets(packets))
 
+    def scan_ota(self, timeout_s: float = 8.0, limit: int = 0) -> None:
+        self.submit(self._scan_ota(timeout_s, limit))
+
+    def start_ota(
+        self,
+        addresses: list[str],
+        bin_path: str,
+        pdu_len: int,
+        pace_ms: float,
+        write_response: bool,
+        force: bool,
+        stop_on_error: bool,
+        max_size_k: int = 192,
+    ) -> None:
+        self.submit(
+            self._run_ota(
+                addresses,
+                bin_path,
+                pdu_len,
+                pace_ms,
+                write_response,
+                force,
+                stop_on_error,
+                max_size_k,
+            )
+        )
+
     def _next_seq(self) -> int:
         value = self.seq
         self.seq = 1 if self.seq >= 255 else self.seq + 1
@@ -166,6 +198,14 @@ class BleWorker:
         devices.sort(key=lambda d: (0 if _is_glimmer_name(d["name"]) else 1, d["name"], d["address"]))
         self.post("scan_result", devices=devices)
         self.post("status", text=f"扫描完成，发现 {len(devices)} 个设备")
+
+    async def _scan_ota(self, timeout_s: float, limit: int) -> None:
+        if BLEAK_IMPORT_ERROR:
+            raise RuntimeError(f"bleak not installed: {BLEAK_IMPORT_ERROR}")
+        self.post("ota_log", message=f"Scanning OTA targets for {timeout_s:.1f}s ...")
+        targets = await ota_update.scan_targets(timeout_s, limit)
+        self.post("ota_scan_result", targets=[target.__dict__ for target in targets])
+        self.post("ota_log", message=f"Scan complete: {len(targets)} OTA target(s)")
 
     async def _connect(self, address: str) -> None:
         if BLEAK_IMPORT_ERROR:
@@ -229,6 +269,65 @@ class BleWorker:
             await asyncio.sleep(0.02)
         self.post("tx", packets=packets)
 
+    async def _run_ota(
+        self,
+        addresses: list[str],
+        bin_path: str,
+        pdu_len: int,
+        pace_ms: float,
+        write_response: bool,
+        force: bool,
+        stop_on_error: bool,
+        max_size_k: int,
+    ) -> None:
+        self.post("ota_busy", busy=True)
+        ok_count = 0
+        targets = [ota_update.OtaTarget(address=address) for address in addresses]
+        try:
+            await self._disconnect()
+            firmware_path = Path(bin_path)
+            firmware = firmware_path.read_bytes()
+            ota_update.validate_firmware(firmware, max_size_k * 1024, force)
+            self.post(
+                "ota_log",
+                message=(
+                    f"Firmware {firmware_path} size={len(firmware)} bytes, "
+                    f"pdu={pdu_len}, write_response={int(write_response)}"
+                ),
+            )
+
+            for index, target in enumerate(targets, start=1):
+                self.post("ota_target_start", index=index, total=len(targets), address=target.address)
+                self.post("ota_log", message=f"=== OTA {index}/{len(targets)} {target.address} ===")
+
+                def on_progress(event: dict[str, Any]) -> None:
+                    event = dict(event)
+                    event["target_index"] = index
+                    event["target_total"] = len(targets)
+                    self.post("ota_progress", progress=event)
+
+                try:
+                    if await ota_update.run_one(
+                        target,
+                        firmware,
+                        pdu_len,
+                        pace_ms / 1000.0,
+                        write_response,
+                        progress=on_progress,
+                    ):
+                        ok_count += 1
+                        self.post("ota_log", message=f"{target.address}: OK")
+                except Exception as exc:
+                    self.post("ota_log", message=f"{target.address}: FAIL {exc}")
+                    if stop_on_error:
+                        break
+                await asyncio.sleep(3.0)
+        except Exception as exc:
+            self.post("ota_log", message=f"OTA setup failed: {exc}")
+        finally:
+            self.post("ota_finished", ok=ok_count, total=len(targets))
+            self.post("ota_busy", busy=False)
+
     def _on_disconnected(self, _: Any) -> None:
         self.client = None
         self.chars = {}
@@ -291,6 +390,15 @@ class PendantDebugApp:
         self.provision_lock_var = tk.BooleanVar(value=False)
         self.provision_force_var = tk.BooleanVar(value=False)
         self.provision_status_var = tk.StringVar(value="")
+        self.ota_busy = False
+        self.ota_bin_var = tk.StringVar(value=str(DEFAULT_OTA_BIN))
+        self.ota_pdu_var = tk.StringVar(value="16")
+        self.ota_pace_var = tk.StringVar(value="0")
+        self.ota_write_response_var = tk.BooleanVar(value=True)
+        self.ota_force_var = tk.BooleanVar(value=False)
+        self.ota_stop_on_error_var = tk.BooleanVar(value=True)
+        self.ota_progress_var = tk.DoubleVar(value=0.0)
+        self.ota_status_var = tk.StringVar(value="Ready")
         self._build_ui()
         self.root.after(80, self._poll_events)
 
@@ -330,12 +438,14 @@ class PendantDebugApp:
         self.message_tab = ttk.Frame(notebook, padding=8)
         self.shell_tab = ttk.Frame(notebook, padding=8)
         self.peer_tab = ttk.Frame(notebook, padding=8)
+        self.ota_tab = ttk.Frame(notebook, padding=8)
         self.service_tab = ttk.Frame(notebook, padding=8)
         notebook.add(self.control_tab, text="控制")
         notebook.add(self.identity_tab, text="身份")
         notebook.add(self.message_tab, text="消息")
         notebook.add(self.shell_tab, text="Shell")
         notebook.add(self.peer_tab, text="发现设备")
+        notebook.add(self.ota_tab, text="OTA")
         notebook.add(self.service_tab, text="GATT")
 
         self._build_control_tab()
@@ -343,6 +453,7 @@ class PendantDebugApp:
         self._build_message_tab()
         self._build_shell_tab()
         self._build_peer_tab()
+        self._build_ota_tab()
         self._build_service_tab()
 
     def _build_control_tab(self) -> None:
@@ -510,6 +621,54 @@ class PendantDebugApp:
             self.peer_tree.column(col, width=width, anchor=tk.CENTER)
         self.peer_tree.pack(fill=tk.BOTH, expand=True)
 
+    def _build_ota_tab(self) -> None:
+        firmware = ttk.LabelFrame(self.ota_tab, text="Firmware", padding=8)
+        firmware.pack(fill=tk.X)
+        ttk.Entry(firmware, textvariable=self.ota_bin_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(firmware, text="Browse...", command=self._ota_browse_file).pack(side=tk.LEFT, padx=(8, 0))
+
+        targets = ttk.LabelFrame(self.ota_tab, text="Targets", padding=8)
+        targets.pack(fill=tk.X, pady=(8, 0))
+        target_buttons = ttk.Frame(targets)
+        target_buttons.pack(fill=tk.X)
+        ttk.Button(target_buttons, text="Add selected device", command=self._ota_add_selected_device).pack(side=tk.LEFT)
+        ttk.Button(target_buttons, text="Scan OTA devices", command=self._ota_scan).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(target_buttons, text="Clear", command=self._ota_clear_targets).pack(side=tk.LEFT, padx=(8, 0))
+        self.ota_address_text = scrolledtext.ScrolledText(targets, height=4, wrap=tk.WORD)
+        self.ota_address_text.pack(fill=tk.X, pady=(8, 0))
+
+        options = ttk.LabelFrame(self.ota_tab, text="Options", padding=8)
+        options.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(options, text="PDU").grid(row=0, column=0, sticky=tk.W)
+        ttk.Combobox(
+            options,
+            textvariable=self.ota_pdu_var,
+            values=["16", "32", "64", "128", "240"],
+            state="readonly",
+            width=6,
+        ).grid(row=0, column=1, padx=(4, 12), sticky=tk.W)
+        ttk.Label(options, text="Pace ms").grid(row=0, column=2, sticky=tk.W)
+        ttk.Entry(options, textvariable=self.ota_pace_var, width=8).grid(row=0, column=3, padx=(4, 12), sticky=tk.W)
+        ttk.Checkbutton(options, text="Write response", variable=self.ota_write_response_var).grid(row=0, column=4, padx=(0, 12), sticky=tk.W)
+        ttk.Checkbutton(options, text="Force", variable=self.ota_force_var).grid(row=0, column=5, padx=(0, 12), sticky=tk.W)
+        ttk.Checkbutton(options, text="Stop on error", variable=self.ota_stop_on_error_var).grid(row=0, column=6, sticky=tk.W)
+
+        actions = ttk.Frame(self.ota_tab)
+        actions.pack(fill=tk.X, pady=(8, 0))
+        self.ota_start_button = ttk.Button(actions, text="Start OTA", command=self._ota_start)
+        self.ota_start_button.pack(side=tk.LEFT)
+        ttk.Label(actions, textvariable=self.ota_status_var).pack(side=tk.LEFT, padx=(12, 0))
+
+        progress = ttk.LabelFrame(self.ota_tab, text="Progress", padding=8)
+        progress.pack(fill=tk.X, pady=(8, 0))
+        self.ota_progress = ttk.Progressbar(progress, variable=self.ota_progress_var, maximum=100.0)
+        self.ota_progress.pack(fill=tk.X)
+
+        log_frame = ttk.LabelFrame(self.ota_tab, text="OTA Log", padding=8)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.ota_log_text = scrolledtext.ScrolledText(log_frame, height=12, wrap=tk.WORD)
+        self.ota_log_text.pack(fill=tk.BOTH, expand=True)
+
     def _build_service_tab(self) -> None:
         self.service_text = scrolledtext.ScrolledText(self.service_tab, wrap=tk.NONE)
         self.service_text.pack(fill=tk.BOTH, expand=True)
@@ -524,6 +683,92 @@ class PendantDebugApp:
 
     def _scan(self) -> None:
         self.worker.scan()
+
+    def _ota_browse_file(self) -> None:
+        initial = Path(self.ota_bin_var.get()).expanduser()
+        path = filedialog.askopenfilename(
+            title="Select OTA firmware",
+            initialdir=str(initial.parent if initial.parent.exists() else Path.cwd()),
+            filetypes=[("Firmware bin", "*.bin"), ("All files", "*.*")],
+        )
+        if path:
+            self.ota_bin_var.set(path)
+
+    def _ota_get_addresses(self) -> list[str]:
+        raw = self.ota_address_text.get("1.0", tk.END)
+        values: list[str] = []
+        for token in raw.replace(",", " ").replace(";", " ").split():
+            address = token.strip()
+            if address and address not in values:
+                values.append(address)
+        return values
+
+    def _ota_set_addresses(self, addresses: list[str]) -> None:
+        self.ota_address_text.delete("1.0", tk.END)
+        self.ota_address_text.insert(tk.END, "\n".join(addresses))
+        if addresses:
+            self.ota_address_text.insert(tk.END, "\n")
+
+    def _ota_add_selected_device(self) -> None:
+        selection = self.device_list.curselection()
+        if not selection:
+            messagebox.showinfo("OTA", "请先在左侧设备列表选择一个设备")
+            return
+        address = self.devices[selection[0]]["address"]
+        addresses = self._ota_get_addresses()
+        if address not in addresses:
+            addresses.append(address)
+        self._ota_set_addresses(addresses)
+
+    def _ota_scan(self) -> None:
+        if self.ota_busy:
+            messagebox.showinfo("OTA", "OTA 正在进行中")
+            return
+        self.worker.scan_ota()
+
+    def _ota_clear_targets(self) -> None:
+        self._ota_set_addresses([])
+
+    def _ota_start(self) -> None:
+        if self.ota_busy:
+            return
+        addresses = self._ota_get_addresses()
+        if not addresses:
+            messagebox.showinfo("OTA", "请先添加至少一个目标设备地址")
+            return
+        bin_path = self.ota_bin_var.get().strip()
+        if not bin_path or not Path(bin_path).exists():
+            messagebox.showerror("OTA", "固件文件不存在")
+            return
+        try:
+            pdu_len = int(self.ota_pdu_var.get(), 0)
+            pace_ms = float(self.ota_pace_var.get())
+        except ValueError as exc:
+            messagebox.showerror("OTA", f"OTA 参数错误: {exc}")
+            return
+        if pdu_len < 16 or pdu_len > 240 or pdu_len % 16:
+            messagebox.showerror("OTA", "PDU 必须是 16, 32, ... 240")
+            return
+        ok = messagebox.askyesno(
+            "Start OTA",
+            "OTA 会断开当前调试连接，并按目标列表顺序升级设备。\n"
+            "升级过程中不要让设备断电或离开蓝牙范围。\n\n"
+            "确认开始吗？",
+        )
+        if not ok:
+            return
+        self.ota_progress_var.set(0.0)
+        self.ota_status_var.set("Starting OTA ...")
+        self._append_ota_log(f"Start OTA targets={len(addresses)} bin={bin_path}")
+        self.worker.start_ota(
+            addresses,
+            bin_path,
+            pdu_len,
+            pace_ms,
+            self.ota_write_response_var.get(),
+            self.ota_force_var.get(),
+            self.ota_stop_on_error_var.get(),
+        )
 
     def _connect_selected(self) -> None:
         selection = self.device_list.curselection()
@@ -873,6 +1118,20 @@ class PendantDebugApp:
             self.status_var.set(event["text"])
         elif kind == "scan_result":
             self._set_devices(event["devices"])
+        elif kind == "ota_scan_result":
+            self._handle_ota_scan_result(event["targets"])
+        elif kind == "ota_busy":
+            self.ota_busy = bool(event["busy"])
+            if hasattr(self, "ota_start_button"):
+                self.ota_start_button.configure(state=tk.DISABLED if self.ota_busy else tk.NORMAL)
+        elif kind == "ota_target_start":
+            self.ota_status_var.set(f"Device {event['index']}/{event['total']}: {event['address']}")
+        elif kind == "ota_progress":
+            self._handle_ota_progress(event["progress"])
+        elif kind == "ota_finished":
+            self._handle_ota_finished(event["ok"], event["total"])
+        elif kind == "ota_log":
+            self._append_ota_log(event["message"])
         elif kind == "connected":
             self.connected = True
             self.connected_address = event.get("address")
@@ -904,6 +1163,62 @@ class PendantDebugApp:
         elif kind == "tx":
             for packet in event["packets"]:
                 self._log("TX PACKET " + proto.hex_bytes(packet))
+
+    def _handle_ota_scan_result(self, targets: list[dict]) -> None:
+        addresses = self._ota_get_addresses()
+        for target in targets:
+            address = target.get("address", "")
+            if address and address not in addresses:
+                addresses.append(address)
+            name = target.get("name") or "-"
+            rssi = target.get("rssi")
+            self._append_ota_log(f"FOUND {address} rssi={rssi} name={name}")
+        self._ota_set_addresses(addresses)
+
+    def _handle_ota_progress(self, progress: dict) -> None:
+        kind = progress.get("event")
+        address = progress.get("address", "")
+        if kind == "connect":
+            self._append_ota_log(f"{address}: connecting")
+            return
+        if kind == "char":
+            self._append_ota_log(
+                f"{address}: ota_char={progress.get('uuid')} mtu={progress.get('mtu')} "
+                f"max_wwr={progress.get('max_wwr')}"
+            )
+            return
+        if kind == "start":
+            self.ota_progress_var.set(0.0)
+            self.ota_status_var.set(
+                f"{address}: 0/{progress.get('total_chunks')} chunks, "
+                f"{progress.get('total_bytes')} bytes"
+            )
+            return
+        if kind == "progress":
+            percent = float(progress.get("percent", 0.0))
+            self.ota_progress_var.set(percent)
+            self.ota_status_var.set(
+                f"{address}: {progress.get('sent_chunks')}/{progress.get('total_chunks')} "
+                f"{percent:.1f}% | {progress.get('sent_bytes')}/{progress.get('total_bytes')} bytes"
+            )
+            return
+        if kind == "result":
+            self._append_ota_log(f"{address}: result={progress.get('name')} ({progress.get('code')})")
+            return
+        if kind == "end_sent":
+            self._append_ota_log(f"{address}: OTA_END sent")
+            return
+        if kind == "rebooting":
+            self._append_ota_log(f"{address}: disconnected after OTA; device may be rebooting")
+            return
+        if kind == "done":
+            self._append_ota_log(f"{address}: done")
+
+    def _handle_ota_finished(self, ok_count: int, total: int) -> None:
+        self.ota_status_var.set(f"Done: {ok_count}/{total} succeeded")
+        if total > 0 and ok_count == total:
+            self.ota_progress_var.set(100.0)
+        self._append_ota_log(f"Done: {ok_count}/{total} succeeded")
 
     def _set_devices(self, devices: list[dict]) -> None:
         self.devices = devices
@@ -1074,6 +1389,10 @@ class PendantDebugApp:
     def _append_chat(self, who: str, text: str) -> None:
         self.chat_text.insert(tk.END, f"[{now_text()}] {who}: {text}\n")
         self.chat_text.see(tk.END)
+
+    def _append_ota_log(self, text: str) -> None:
+        self.ota_log_text.insert(tk.END, f"[{now_text()}] {text}\n")
+        self.ota_log_text.see(tk.END)
 
     def _log(self, text: str) -> None:
         self.log_text.insert(tk.END, f"[{now_text()}] {text}\n")
