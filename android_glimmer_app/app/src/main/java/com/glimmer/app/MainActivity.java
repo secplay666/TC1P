@@ -37,6 +37,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -186,6 +187,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private boolean pendingRerenderAfterChatInput;
     private boolean stealthMode;
     private boolean otaRunning;
+    private int otaSentChunks;
+    private int otaTotalChunks;
+    private int otaScheduleBytes;
     private Uri avatarEditUri;
     private CropImageView avatarCropView;
 
@@ -388,6 +392,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     @Override
     public void onBackPressed() {
+        if (otaRunning) {
+            setLocalStatus("OTA 进行中，请等待升级完成");
+            showOtaProgressPage();
+            return;
+        }
         if (selectedTab == 1 && selectedConversationId != null) {
             preserveCurrentChatDraft();
             selectedConversationId = null;
@@ -1546,6 +1555,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private void showTab(int index) {
         preserveCurrentChatDraft();
         preserveCurrentChatScroll();
+        if (otaRunning) {
+            showOtaProgressPage();
+            return;
+        }
         if (index < 0 || index > 2) {
             index = 2;
         }
@@ -1608,6 +1621,107 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             renderMinePage();
         }
         root.requestApplyInsets();
+    }
+
+    private void showOtaProgressPage() {
+        selectedTab = 2;
+        mineDetailMode = 2;
+        endRefreshing();
+        exitChatEditingMode();
+        chatInput = null;
+        chatMessagesScroll = null;
+        chatMessagesList = null;
+        chatMessagesScrollConversationId = null;
+        if (refreshLayout != null) {
+            refreshLayout.setEnabled(false);
+        }
+        if (navBar != null) {
+            navBar.setVisibility(View.GONE);
+        }
+        titleView.setText("正在升级 Glimmer");
+        statusView.setText("请保持手机靠近终端");
+        if (bodyContainer != null) {
+            bodyContainer.removeAllViews();
+            ScrollView scrollView = new ScrollView(this);
+            scrollView.setFillViewport(true);
+            scrollView.addView(otaProgressPageView(), new ScrollView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            bodyContainer.addView(scrollView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        root.requestApplyInsets();
+    }
+
+    private LinearLayout otaProgressPageView() {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER_HORIZONTAL);
+        page.setPadding(0, dp(28), 0, dp(28));
+
+        LinearLayout panel = card();
+        panel.setPadding(dp(22), dp(22), dp(22), dp(22));
+
+        int percent = otaProgressPercent();
+        TextView percentLabel = label(percent + "%", 36, color(0x1F2420), true);
+        percentLabel.setGravity(Gravity.CENTER);
+        panel.addView(percentLabel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(1000);
+        progress.setIndeterminate(otaTotalChunks <= 0);
+        progress.setProgress(otaProgressPermille());
+        panel.addView(progress, marginParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(18),
+                0, dp(18), 0, dp(16)));
+
+        TextView status = label(otaStatus, 16, color(0x1F6F60), true);
+        status.setGravity(Gravity.CENTER);
+        panel.addView(status, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        panel.addView(label(otaProgressDetailText(), 13, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        0, dp(16), 0, 0));
+        panel.addView(label("升级期间会暂时锁定页面。请不要关闭 App、远离终端或断开蓝牙。",
+                        13, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        0, dp(8), 0, 0));
+
+        page.addView(panel, cardParams());
+        return page;
+    }
+
+    private int otaProgressPercent() {
+        if (otaTotalChunks <= 0) {
+            return 0;
+        }
+        return Math.min(100, (int) ((long) otaSentChunks * 100L / otaTotalChunks));
+    }
+
+    private int otaProgressPermille() {
+        if (otaTotalChunks <= 0) {
+            return 0;
+        }
+        return Math.min(1000, (int) ((long) otaSentChunks * 1000L / otaTotalChunks));
+    }
+
+    private String otaProgressDetailText() {
+        if (otaTotalChunks <= 0) {
+            return "正在准备固件写入。";
+        }
+        String text = "固件包 " + otaSentChunks + " / " + otaTotalChunks;
+        if (otaScheduleBytes > 0) {
+            text += "\n终端已写入 " + formatBytes(otaScheduleBytes);
+        }
+        return text;
     }
 
     private void preserveCurrentChatDraft() {
@@ -2257,18 +2371,29 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private void startOtaWithFirmware(byte[] firmware) {
         if (bleClient == null || !bleClient.isOtaReady()) {
             otaRunning = false;
+            otaSentChunks = 0;
+            otaTotalChunks = 0;
+            otaScheduleBytes = 0;
             otaStatus = "Glimmer 未准备好";
             setLocalStatus("Glimmer 未准备好");
             rerenderCurrentTab();
             return;
         }
         otaRunning = true;
+        otaSentChunks = 0;
+        otaTotalChunks = 0;
+        otaScheduleBytes = 0;
         otaStatus = "OTA 0%";
+        selectedTab = 2;
+        mineDetailMode = 2;
         rerenderCurrentTab();
         bleClient.startOta(firmware, new GlimmerBleClient.OtaListener() {
             @Override
             public void onOtaProgress(int sentChunks, int totalChunks, int scheduleBytes) {
                 int percent = totalChunks <= 0 ? 0 : Math.min(99, sentChunks * 100 / totalChunks);
+                otaSentChunks = sentChunks;
+                otaTotalChunks = totalChunks;
+                otaScheduleBytes = scheduleBytes;
                 otaStatus = "OTA " + percent + "% · " + sentChunks + "/" + totalChunks;
                 if (scheduleBytes > 0) {
                     otaStatus += " · 已写入 " + formatBytes(scheduleBytes);
@@ -2278,6 +2403,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
             @Override
             public void onOtaWaitingForResult() {
+                otaSentChunks = otaTotalChunks;
                 otaStatus = "OTA 写入完成，等待终端校验";
                 setLocalStatus("OTA 写入完成，等待终端重启");
                 rerenderCurrentTabForBackgroundUpdate();
@@ -2286,6 +2412,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             @Override
             public void onOtaCompleted() {
                 otaRunning = false;
+                otaSentChunks = otaTotalChunks;
                 otaStatus = "OTA 完成，等待 Glimmer 重启";
                 setLocalStatus("OTA 完成，等待 Glimmer 重启");
                 rerenderCurrentTabForBackgroundUpdate();
@@ -3483,6 +3610,9 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 handler.postDelayed(autoReconnectRunnable, AUTO_RECONNECT_INTERVAL_MS);
             }
         } else {
+            if (otaStatus.startsWith("OTA 完成")) {
+                otaStatus = "OTA 完成，Glimmer 已重连";
+            }
             handler.removeCallbacks(autoReconnectRunnable);
             handler.removeCallbacks(autoSyncRunnable);
             handler.postDelayed(() -> requestPeerProfilesPage(0), 900);
@@ -3676,6 +3806,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
     private void rerenderCurrentTab() {
         if (content != null) {
+            if (otaRunning) {
+                showOtaProgressPage();
+                return;
+            }
             if (isAvatarEditorVisible()) {
                 refreshCurrentHeaderOnly();
                 return;
@@ -3693,6 +3827,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         if (content == null) {
             return;
         }
+        if (otaRunning) {
+            showOtaProgressPage();
+            return;
+        }
         boolean restoreKeyboard = isChatInputActive();
         pendingRerenderAfterChatInput = false;
         showTab(selectedTab);
@@ -3702,6 +3840,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     private void rerenderCurrentTabForBackgroundUpdate() {
+        if (otaRunning) {
+            showOtaProgressPage();
+            return;
+        }
         if (isChatDetailVisible() || isAvatarEditorVisible() || isProfileInputActive()) {
             refreshCurrentHeaderOnly();
             return;

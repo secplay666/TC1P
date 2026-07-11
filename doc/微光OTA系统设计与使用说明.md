@@ -10,7 +10,7 @@
 - Android 端支持已绑定终端升级，用户选择本地 `.bin` 文件后写入。
 - 固件升级区使用 `0x40000` 多启动地址。
 - PC 端默认使用 16 字节 OTA PDU，兼容 Windows 当前 23-byte ATT MTU。
-- Android 端会主动请求 83-byte ATT MTU，默认使用 64 字节 OTA PDU。
+- Android 端会主动请求 83-byte ATT MTU；若实测 MTU 仍为 23，则默认使用 16 字节 OTA PDU。
 
 ## Flash 与大小约束
 
@@ -76,6 +76,8 @@ cd pc_debug_tool
 4. 选择固件 `.bin`。
 5. 等待进度到 100%，再等待终端校验和重启。
 
+OTA 写入期间 App 会切换到专用进度页，隐藏底部导航并拦截返回键，避免用户切走后误以为 App 卡死。升级完成、失败或终端重连后恢复正常页面。
+
 当前没有做后台下载固件，也没有做版本服务器。第一版只支持选择本地 bin。
 
 ## 安全边界
@@ -100,4 +102,4 @@ cd pc_debug_tool
 - PC 端 Windows/Bleak 实测 ATT MTU 为 23，默认 16 字节 PDU + write-response；151KB 固件完整 OTA 耗时约 4 分 50 秒。
 - PC 端支持 `--address` 重复传入多个地址，按顺序升级多个设备；当前不是并行 OTA。
 - PC 端 `--pdu-len 64` 需要 BLE 后端完成更大 MTU 协商；当前 Windows 内置 BLE 不支持主动 MTU 请求，会被工具提前拒绝。
-- Android 端真机 OTA 尚需接入手机后验证。
+- Android 端 Pixel 9 实测 ATT MTU 为 23，默认 16 字节 PDU + write-response；151KB 固件已完整 OTA 成功，终端重启后可自动重连。

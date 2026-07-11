@@ -79,7 +79,7 @@ final class GlimmerBleClient {
     private static final int OTA_CMD_RESULT = 0xFF06;
     private static final int OTA_CMD_SCHEDULE_PDU_NUM = 0xFF08;
     private static final int OTA_CMD_SCHEDULE_FW_SIZE = 0xFF09;
-    private static final int OTA_PDU_LEN = 64;
+    private static final int OTA_PDU_LEN = 16;
     private static final int OTA_REQUEST_MTU = 83;
     private static final int OTA_MAX_FIRMWARE_BYTES = 192 * 1024;
     private static final long OTA_WRITE_PACE_MS = 2;
@@ -344,13 +344,12 @@ final class GlimmerBleClient {
 
         otaActive = true;
         txQueue.clear();
-        writeInProgress = false;
         otaSession = new OtaSession(firmware, otaListener);
         listener.onBleStatus("OTA start");
         if (otaListener != null) {
             otaListener.onOtaProgress(0, otaSession.totalChunks, 0);
         }
-        writeOtaStart();
+        writeOtaStartWhenIdle();
     }
 
     void requestFullSync() {
@@ -761,6 +760,18 @@ final class GlimmerBleClient {
         }
     }
 
+    private void writeOtaStartWhenIdle() {
+        if (!otaActive || otaSession == null || gatt == null || otaChar == null) {
+            failOta("OTA connection lost");
+            return;
+        }
+        if (writeInProgress) {
+            handler.postDelayed(this::writeOtaStartWhenIdle, 50);
+            return;
+        }
+        writeOtaStart();
+    }
+
     private void writeNextOtaData() {
         if (!otaActive || otaSession == null || gatt == null || otaChar == null) {
             failOta("OTA connection lost");
@@ -809,6 +820,7 @@ final class GlimmerBleClient {
         int cmd = rd16(data, 0);
         if (cmd == OTA_CMD_RESULT && data.length >= 3) {
             int result = data[2] & 0xff;
+            Log.i(TAG, "OTA result=" + result);
             OtaListener otaListener = otaSession.listener;
             otaActive = false;
             otaSession = null;
