@@ -73,6 +73,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final int REQUEST_APP_PERMISSIONS = 1201;
     private static final int REQUEST_PICK_IMAGE = 1202;
     private static final int REQUEST_PICK_AVATAR = 1203;
+    private static final int REQUEST_PICK_FIRMWARE = 1204;
     private static final int AVATAR_OUTPUT_SIZE_PX = 96;
     private static final String PREFS_NAME = "glimmer_app";
     private static final String KEY_BOUND_ADDRESS = "bound_address";
@@ -184,11 +185,13 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private int imeBottomInset;
     private boolean pendingRerenderAfterChatInput;
     private boolean stealthMode;
+    private boolean otaRunning;
     private Uri avatarEditUri;
     private CropImageView avatarCropView;
 
     private String connectionStatus = "我的 Glimmer 未连接";
     private HostProtocol.DeviceInfo deviceInfo;
+    private String otaStatus = "尚未选择固件";
     private HostProtocol.ProfileSummary myProfile;
     private String localAvatarText = "我";
     private int localAvatarColor = 0x1F6F60;
@@ -347,6 +350,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             handlePickedImage(resultCode, data);
         } else if (requestCode == REQUEST_PICK_AVATAR) {
             handlePickedAvatar(resultCode, data);
+        } else if (requestCode == REQUEST_PICK_FIRMWARE) {
+            handlePickedFirmware(resultCode, data);
         }
     }
 
@@ -2197,11 +2202,103 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         return intent;
     }
 
+    private Intent firmwarePickerIntent() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        return intent;
+    }
+
     private void handlePickedAvatar(int resultCode, Intent data) {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
         openAvatarEditor(data.getData());
+    }
+
+    private void pickFirmwareForOta() {
+        if (bleClient == null || !bleClient.isOtaReady()) {
+            setLocalStatus("当前 Glimmer 还不能 OTA");
+            return;
+        }
+        try {
+            startActivityForResult(firmwarePickerIntent(), REQUEST_PICK_FIRMWARE);
+        } catch (RuntimeException e) {
+            setLocalStatus("无法打开固件选择器");
+        }
+    }
+
+    private void handlePickedFirmware(int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        Uri uri = data.getData();
+        otaStatus = "正在读取固件";
+        rerenderCurrentTab();
+        new Thread(() -> {
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) {
+                    throw new IOException("open firmware failed");
+                }
+                byte[] firmware = readAllBytes(input);
+                handler.post(() -> startOtaWithFirmware(firmware));
+            } catch (IOException | RuntimeException e) {
+                handler.post(() -> {
+                    otaRunning = false;
+                    otaStatus = "固件读取失败";
+                    setLocalStatus("固件读取失败");
+                    rerenderCurrentTab();
+                });
+            }
+        }).start();
+    }
+
+    private void startOtaWithFirmware(byte[] firmware) {
+        if (bleClient == null || !bleClient.isOtaReady()) {
+            otaRunning = false;
+            otaStatus = "Glimmer 未准备好";
+            setLocalStatus("Glimmer 未准备好");
+            rerenderCurrentTab();
+            return;
+        }
+        otaRunning = true;
+        otaStatus = "OTA 0%";
+        rerenderCurrentTab();
+        bleClient.startOta(firmware, new GlimmerBleClient.OtaListener() {
+            @Override
+            public void onOtaProgress(int sentChunks, int totalChunks, int scheduleBytes) {
+                int percent = totalChunks <= 0 ? 0 : Math.min(99, sentChunks * 100 / totalChunks);
+                otaStatus = "OTA " + percent + "% · " + sentChunks + "/" + totalChunks;
+                if (scheduleBytes > 0) {
+                    otaStatus += " · 已写入 " + formatBytes(scheduleBytes);
+                }
+                rerenderCurrentTabForBackgroundUpdate();
+            }
+
+            @Override
+            public void onOtaWaitingForResult() {
+                otaStatus = "OTA 写入完成，等待终端校验";
+                setLocalStatus("OTA 写入完成，等待终端重启");
+                rerenderCurrentTabForBackgroundUpdate();
+            }
+
+            @Override
+            public void onOtaCompleted() {
+                otaRunning = false;
+                otaStatus = "OTA 完成，等待 Glimmer 重启";
+                setLocalStatus("OTA 完成，等待 Glimmer 重启");
+                rerenderCurrentTabForBackgroundUpdate();
+            }
+
+            @Override
+            public void onOtaFailed(String reason) {
+                otaRunning = false;
+                otaStatus = "OTA 失败：" + reason;
+                setLocalStatus(otaStatus);
+                rerenderCurrentTabForBackgroundUpdate();
+            }
+        });
     }
 
     private void openAvatarEditor(Uri uri) {
@@ -2750,6 +2847,11 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 startScanFlow();
             }
         }), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        Button ota = secondaryButton(otaRunning ? "OTA 进行中" : "OTA 固件升级", v -> pickFirmwareForOta());
+        ota.setEnabled(bleClient != null && bleClient.isOtaReady() && !otaRunning);
+        device.addView(ota, marginParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), 0, dp(10), 0, 0));
+        device.addView(label(otaStatus, 13, color(0x667068), false),
+                marginParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0, dp(8), 0, dp(2)));
         if (hasBoundDevice()) {
             device.addView(secondaryButton("解除绑定", v -> unbindDevice()),
                     marginParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), 0, dp(10), 0, 0));

@@ -27,11 +27,13 @@
 
 #include "app_config.h"
 #include "app.h"
+#include "app_ota.h"
 #include "app_buffer.h"
 #include "default_att.h"
 #include "app_ui.h"
 #include "app_pendant.h"
 #include "host_gatt/app_host_gatt.h"
+#include "system/app_system.h"
 #include "common/app_debug_print.h"
 #include "application/uartinterface/uart_interface.h"
 #include "application/usbstd/usbkeycode.h"
@@ -1232,6 +1234,7 @@ _attribute_no_inline_ void user_init_normal(void)
 	/* GATT attribute table is registered by app_host_gatt_init(). */
 	blc_gatt_register_data_handler(app_gatt_data_handler);
 	app_host_gatt_init();
+	app_ota_init();
 
 	/* SMP Initialization */
 	#if (ACL_PERIPHR_SMP_ENABLE || ACL_CENTRAL_SMP_ENABLE)

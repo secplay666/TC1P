@@ -2,6 +2,7 @@
 #include "../host_cmd/app_host_cmd.h"
 #include "stack/ble/ble.h"
 #include "stack/ble/ble_format.h"
+#include "stack/ble/service/ota/ota_server.h"
 #include "common/string.h"
 
 #define HOST_GATT_NOTIFY_QUEUE_SIZE 8
@@ -27,6 +28,12 @@ enum {
     ATT_HANDLE_DEBUG_EVT_VALUE,
     ATT_HANDLE_DEBUG_EVT_CCC,
 
+    ATT_HANDLE_OTA_SERVICE,
+    ATT_HANDLE_OTA_DECL,
+    ATT_HANDLE_OTA_VALUE,
+    ATT_HANDLE_OTA_CCC,
+    ATT_HANDLE_OTA_DESC,
+
     ATT_HANDLE_END,
 };
 
@@ -41,39 +48,49 @@ static const u16 s_uuid_character = GATT_UUID_CHARACTER;
 static const u16 s_uuid_rsp_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
 static const u16 s_uuid_log_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
 static const u16 s_uuid_evt_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
+static const u16 s_uuid_ota_client_char_cfg = GATT_UUID_CLIENT_CHAR_CFG;
+static const u16 s_uuid_user_desc = GATT_UUID_CHAR_USER_DESC;
 static const u16 s_uuid_gap_service = SERVICE_UUID_GENERIC_ACCESS;
 static const u16 s_uuid_device_name = GATT_UUID_DEVICE_NAME;
 static const u16 s_uuid_appearance = GATT_UUID_APPEARANCE;
 
-static u8 s_device_name[] = "Glimmer";
-static u16 s_appearance = 0;
-static u8 s_device_name_decl[5] = {CHAR_PROP_READ, U16_LO(ATT_HANDLE_GAP_DEVICE_NAME_VALUE), U16_HI(ATT_HANDLE_GAP_DEVICE_NAME_VALUE),
-                                   U16_LO(GATT_UUID_DEVICE_NAME), U16_HI(GATT_UUID_DEVICE_NAME)};
-static u8 s_appearance_decl[5] = {CHAR_PROP_READ, U16_LO(ATT_HANDLE_GAP_APPEARANCE_VALUE), U16_HI(ATT_HANDLE_GAP_APPEARANCE_VALUE),
-                                  U16_LO(GATT_UUID_APPEARANCE), U16_HI(GATT_UUID_APPEARANCE)};
+static const u8 s_device_name[] = "Glimmer";
+static const u16 s_appearance = 0;
+static const u8 s_device_name_decl[5] = {CHAR_PROP_READ, U16_LO(ATT_HANDLE_GAP_DEVICE_NAME_VALUE), U16_HI(ATT_HANDLE_GAP_DEVICE_NAME_VALUE),
+                                         U16_LO(GATT_UUID_DEVICE_NAME), U16_HI(GATT_UUID_DEVICE_NAME)};
+static const u8 s_appearance_decl[5] = {CHAR_PROP_READ, U16_LO(ATT_HANDLE_GAP_APPEARANCE_VALUE), U16_HI(ATT_HANDLE_GAP_APPEARANCE_VALUE),
+                                        U16_LO(GATT_UUID_APPEARANCE), U16_HI(GATT_UUID_APPEARANCE)};
 
 static const u8 s_uuid_debug_service[16] = {0x44, 0x4E, 0x54, 0x50, 0x01, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
 static const u8 s_uuid_debug_cmd[16]     = {0x44, 0x4E, 0x54, 0x50, 0x02, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
 static const u8 s_uuid_debug_rsp[16]     = {0x44, 0x4E, 0x54, 0x50, 0x03, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
 static const u8 s_uuid_debug_log[16]     = {0x44, 0x4E, 0x54, 0x50, 0x04, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
 static const u8 s_uuid_debug_evt[16]     = {0x44, 0x4E, 0x54, 0x50, 0x05, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
+static const u8 s_uuid_ota_service[16]   = {TELINK_OTA_UUID_SERVICE};
+static const u8 s_uuid_ota_data[16]      = {TELINK_SPP_DATA_OTA};
 
-static u8 s_cmd_char_decl[19] = {CHAR_PROP_WRITE_WITHOUT_RSP | CHAR_PROP_WRITE, U16_LO(ATT_HANDLE_DEBUG_CMD_VALUE), U16_HI(ATT_HANDLE_DEBUG_CMD_VALUE),
-                                 0x44, 0x4E, 0x54, 0x50, 0x02, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
-static u8 s_rsp_char_decl[19] = {CHAR_PROP_NOTIFY, U16_LO(ATT_HANDLE_DEBUG_RSP_VALUE), U16_HI(ATT_HANDLE_DEBUG_RSP_VALUE),
-                                 0x44, 0x4E, 0x54, 0x50, 0x03, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
-static u8 s_log_char_decl[19] = {CHAR_PROP_NOTIFY, U16_LO(ATT_HANDLE_DEBUG_LOG_VALUE), U16_HI(ATT_HANDLE_DEBUG_LOG_VALUE),
-                                 0x44, 0x4E, 0x54, 0x50, 0x04, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
-static u8 s_evt_char_decl[19] = {CHAR_PROP_NOTIFY, U16_LO(ATT_HANDLE_DEBUG_EVT_VALUE), U16_HI(ATT_HANDLE_DEBUG_EVT_VALUE),
-                                 0x44, 0x4E, 0x54, 0x50, 0x05, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
+static const u8 s_cmd_char_decl[19] = {CHAR_PROP_WRITE_WITHOUT_RSP | CHAR_PROP_WRITE, U16_LO(ATT_HANDLE_DEBUG_CMD_VALUE), U16_HI(ATT_HANDLE_DEBUG_CMD_VALUE),
+                                       0x44, 0x4E, 0x54, 0x50, 0x02, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
+static const u8 s_rsp_char_decl[19] = {CHAR_PROP_NOTIFY, U16_LO(ATT_HANDLE_DEBUG_RSP_VALUE), U16_HI(ATT_HANDLE_DEBUG_RSP_VALUE),
+                                       0x44, 0x4E, 0x54, 0x50, 0x03, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
+static const u8 s_log_char_decl[19] = {CHAR_PROP_NOTIFY, U16_LO(ATT_HANDLE_DEBUG_LOG_VALUE), U16_HI(ATT_HANDLE_DEBUG_LOG_VALUE),
+                                       0x44, 0x4E, 0x54, 0x50, 0x04, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
+static const u8 s_evt_char_decl[19] = {CHAR_PROP_NOTIFY, U16_LO(ATT_HANDLE_DEBUG_EVT_VALUE), U16_HI(ATT_HANDLE_DEBUG_EVT_VALUE),
+                                       0x44, 0x4E, 0x54, 0x50, 0x05, 0x00, 0x45, 0x4B, 0x59, 0x31, 0x44, 0x45, 0x56, 0x00, 0x00, 0x01};
+static const u8 s_ota_char_decl[19] = {CHAR_PROP_READ | CHAR_PROP_WRITE_WITHOUT_RSP | CHAR_PROP_WRITE | CHAR_PROP_NOTIFY,
+                                       U16_LO(ATT_HANDLE_OTA_VALUE), U16_HI(ATT_HANDLE_OTA_VALUE),
+                                       TELINK_SPP_DATA_OTA};
 
 static u8 s_cmd_value[APP_HOST_FRAME_MAX_PACKET_LEN];
 static u8 s_rsp_value[APP_HOST_FRAME_MAX_PACKET_LEN];
 static u8 s_log_value[APP_HOST_FRAME_MAX_PACKET_LEN];
 static u8 s_evt_value[APP_HOST_FRAME_MAX_PACKET_LEN];
+static u8 s_ota_value = 0;
+static const u8 s_ota_desc[] = {'O', 'T', 'A'};
 static u8 s_rsp_ccc[2];
 static u8 s_log_ccc[2];
 static u8 s_evt_ccc[2];
+static u8 s_ota_ccc[2];
 
 static host_notify_item_t s_notify_queue[HOST_GATT_NOTIFY_QUEUE_SIZE];
 static u8 s_q_head;
@@ -85,27 +102,33 @@ static u16 s_conn_handle;
 static int app_host_gatt_cmd_write_cb(u16 conn_handle, void *p);
 static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p);
 
-static attribute_t s_att_table[] = {
+static const attribute_t s_att_table[] = {
     {ATT_HANDLE_END - 1, 0, 0, 0, 0, 0, 0, 0},
 
     {5, ATT_PERMISSIONS_READ, 2, sizeof(s_uuid_gap_service), (u8 *)&s_uuid_primary_service, (u8 *)&s_uuid_gap_service, 0, 0},
-    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_device_name_decl), (u8 *)&s_uuid_character, s_device_name_decl, 0, 0},
-    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_device_name) - 1, (u8 *)&s_uuid_device_name, s_device_name, 0, 0},
-    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_appearance_decl), (u8 *)&s_uuid_character, s_appearance_decl, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_device_name_decl), (u8 *)&s_uuid_character, (u8 *)s_device_name_decl, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_device_name) - 1, (u8 *)&s_uuid_device_name, (u8 *)s_device_name, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_appearance_decl), (u8 *)&s_uuid_character, (u8 *)s_appearance_decl, 0, 0},
     {0, ATT_PERMISSIONS_READ, 2, sizeof(s_appearance), (u8 *)&s_uuid_appearance, (u8 *)&s_appearance, 0, 0},
 
     {12, ATT_PERMISSIONS_READ, 2, sizeof(s_uuid_debug_service), (u8 *)&s_uuid_primary_service, (u8 *)s_uuid_debug_service, 0, 0},
-    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_cmd_char_decl), (u8 *)&s_uuid_character, s_cmd_char_decl, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_cmd_char_decl), (u8 *)&s_uuid_character, (u8 *)s_cmd_char_decl, 0, 0},
     {0, ATT_PERMISSIONS_WRITE, 16, sizeof(s_cmd_value), (u8 *)s_uuid_debug_cmd, s_cmd_value, app_host_gatt_cmd_write_cb, 0},
-    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_rsp_char_decl), (u8 *)&s_uuid_character, s_rsp_char_decl, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_rsp_char_decl), (u8 *)&s_uuid_character, (u8 *)s_rsp_char_decl, 0, 0},
     {0, ATT_PERMISSIONS_READ, 16, sizeof(s_rsp_value), (u8 *)s_uuid_debug_rsp, s_rsp_value, 0, 0},
     {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_rsp_ccc), (u8 *)&s_uuid_rsp_client_char_cfg, s_rsp_ccc, app_host_gatt_ccc_write_cb, 0},
-    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_log_char_decl), (u8 *)&s_uuid_character, s_log_char_decl, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_log_char_decl), (u8 *)&s_uuid_character, (u8 *)s_log_char_decl, 0, 0},
     {0, ATT_PERMISSIONS_READ, 16, sizeof(s_log_value), (u8 *)s_uuid_debug_log, s_log_value, 0, 0},
     {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_log_ccc), (u8 *)&s_uuid_log_client_char_cfg, s_log_ccc, app_host_gatt_ccc_write_cb, 0},
-    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_evt_char_decl), (u8 *)&s_uuid_character, s_evt_char_decl, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_evt_char_decl), (u8 *)&s_uuid_character, (u8 *)s_evt_char_decl, 0, 0},
     {0, ATT_PERMISSIONS_READ, 16, sizeof(s_evt_value), (u8 *)s_uuid_debug_evt, s_evt_value, 0, 0},
     {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_evt_ccc), (u8 *)&s_uuid_evt_client_char_cfg, s_evt_ccc, app_host_gatt_ccc_write_cb, 0},
+
+    {5, ATT_PERMISSIONS_READ, 2, sizeof(s_uuid_ota_service), (u8 *)&s_uuid_primary_service, (u8 *)s_uuid_ota_service, 0, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_ota_char_decl), (u8 *)&s_uuid_character, (u8 *)s_ota_char_decl, 0, 0},
+    {0, ATT_PERMISSIONS_RDWR, 16, sizeof(s_ota_value), (u8 *)s_uuid_ota_data, &s_ota_value, otaWrite, 0},
+    {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_ota_ccc), (u8 *)&s_uuid_ota_client_char_cfg, s_ota_ccc, app_host_gatt_ccc_write_cb, 0},
+    {0, ATT_PERMISSIONS_READ, 2, sizeof(s_ota_desc), (u8 *)&s_uuid_user_desc, (u8 *)s_ota_desc, 0, 0},
 };
 
 static u8 app_host_gatt_notify_enabled(u16 handle)
@@ -191,6 +214,9 @@ static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p)
     } else if (pkt->handle == ATT_HANDLE_DEBUG_EVT_CCC) {
         s_evt_ccc[0] = U16_LO(value);
         s_evt_ccc[1] = U16_HI(value);
+    } else if (pkt->handle == ATT_HANDLE_OTA_CCC) {
+        s_ota_ccc[0] = U16_LO(value);
+        s_ota_ccc[1] = U16_HI(value);
     }
     return 0;
 }
@@ -203,6 +229,8 @@ void app_host_gatt_init(void)
     s_log_ccc[1] = 0;
     s_evt_ccc[0] = 0;
     s_evt_ccc[1] = 0;
+    s_ota_ccc[0] = 0;
+    s_ota_ccc[1] = 0;
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;
@@ -251,6 +279,8 @@ void app_host_gatt_on_disconnected(void)
     s_log_ccc[1] = 0;
     s_evt_ccc[0] = 0;
     s_evt_ccc[1] = 0;
+    s_ota_ccc[0] = 0;
+    s_ota_ccc[1] = 0;
     s_q_head = 0;
     s_q_tail = 0;
     s_q_count = 0;

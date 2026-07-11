@@ -26,6 +26,7 @@
 #include "stack/ble/ble.h"
 #include "app_config.h"
 #include "app.h"
+#include "app_ota.h"
 #include "application/usbstd/usb.h"
 
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
@@ -54,6 +55,7 @@ _attribute_ram_code_ void irq_handler(void)
  */
 _attribute_ram_code_ int main(void)
 {
+	app_ota_configure_boot();
 
 	#if(MCU_CORE_TYPE == MCU_CORE_825x)
 		cpu_wakeup_init();

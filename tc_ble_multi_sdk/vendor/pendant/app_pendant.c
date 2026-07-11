@@ -1,4 +1,5 @@
 #include "app_pendant.h"
+#include "app_ota.h"
 #include "board/app_board.h"
 #include "diag/app_diag.h"
 #include "event/app_event.h"
@@ -113,6 +114,11 @@ void app_pendant_poll(void)
     app_ble_poll();
     app_pendant_trace_set(0x83);
     app_system_poll();
+    app_ota_poll();
+    if (app_ota_is_active()) {
+        app_pendant_trace_set(0xfe);
+        return;
+    }
     app_pendant_trace_set(0x84);
     app_scan_poll();
     app_pendant_trace_set(0x85);
@@ -155,5 +161,6 @@ void app_pendant_on_app_disconnected(u8 reason)
 {
     app_ble_on_disconnected(reason);
     app_host_gatt_on_disconnected();
+    app_ota_on_disconnected();
     (void)reason;
 }

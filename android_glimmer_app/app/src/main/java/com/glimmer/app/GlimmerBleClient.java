@@ -61,9 +61,28 @@ final class GlimmerBleClient {
             "56000001-4445-5931-454b-0500444e5450",
             "01000056-4544-3159-4b45-000550544e44",
     };
+    private static final String[] OTA_SERVICE_UUIDS = {
+            "12190d0c-0b0a-0908-0706-050403020100",
+            "0c0d1912-0a0b-0809-0706-050403020100",
+            "00010203-0405-0607-0809-0a0b0c0d1912",
+    };
+    private static final String[] OTA_DATA_UUIDS = {
+            "122b0d0c-0b0a-0908-0706-050403020100",
+            "0c0d2b12-0a0b-0809-0706-050403020100",
+            "00010203-0405-0607-0809-0a0b0c0d2b12",
+    };
     private static final UUID CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final boolean CMD_WRITE_WITHOUT_RESPONSE = false;
     private static final long CMD_WRITE_PACE_MS = 35;
+    private static final int OTA_CMD_START_EXT = 0xFF03;
+    private static final int OTA_CMD_END = 0xFF02;
+    private static final int OTA_CMD_RESULT = 0xFF06;
+    private static final int OTA_CMD_SCHEDULE_PDU_NUM = 0xFF08;
+    private static final int OTA_CMD_SCHEDULE_FW_SIZE = 0xFF09;
+    private static final int OTA_PDU_LEN = 64;
+    private static final int OTA_REQUEST_MTU = 83;
+    private static final int OTA_MAX_FIRMWARE_BYTES = 192 * 1024;
+    private static final long OTA_WRITE_PACE_MS = 2;
 
     private final Context context;
     private final Listener listener;
@@ -81,14 +100,18 @@ final class GlimmerBleClient {
     private BluetoothGattCharacteristic rspChar;
     private BluetoothGattCharacteristic logChar;
     private BluetoothGattCharacteristic evtChar;
+    private BluetoothGattCharacteristic otaChar;
 
     private boolean scanning;
     private boolean connected;
     private boolean debugReady;
     private boolean writeInProgress;
+    private boolean otaActive;
+    private boolean serviceDiscoveryRequested;
     private String connectedAddress;
     private String pendingAddress;
     private int seq = 1;
+    private OtaSession otaSession;
 
     GlimmerBleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -103,6 +126,10 @@ final class GlimmerBleClient {
 
     boolean isDebugReady() {
         return debugReady;
+    }
+
+    boolean isOtaReady() {
+        return debugReady && gatt != null && otaChar != null && !otaActive;
     }
 
     List<ScanDevice> getScanDevices() {
@@ -229,6 +256,9 @@ final class GlimmerBleClient {
         rspChar = null;
         logChar = null;
         evtChar = null;
+        otaChar = null;
+        otaActive = false;
+        otaSession = null;
         if (gatt != null) {
             try {
                 gatt.disconnect();
@@ -289,6 +319,38 @@ final class GlimmerBleClient {
         int seq = nextSeq();
         sendPackets(HostProtocol.makeP2pFileSend(seq, targetShortId, fileFrame));
         return seq;
+    }
+
+    void startOta(byte[] firmware, OtaListener otaListener) {
+        if (otaActive) {
+            if (otaListener != null) {
+                otaListener.onOtaFailed("OTA already running");
+            }
+            return;
+        }
+        if (gatt == null || otaChar == null) {
+            if (otaListener != null) {
+                otaListener.onOtaFailed("OTA characteristic not found");
+            }
+            return;
+        }
+        String error = validateFirmware(firmware);
+        if (error != null) {
+            if (otaListener != null) {
+                otaListener.onOtaFailed(error);
+            }
+            return;
+        }
+
+        otaActive = true;
+        txQueue.clear();
+        writeInProgress = false;
+        otaSession = new OtaSession(firmware, otaListener);
+        listener.onBleStatus("OTA start");
+        if (otaListener != null) {
+            otaListener.onOtaProgress(0, otaSession.totalChunks, 0);
+        }
+        writeOtaStart();
     }
 
     void requestFullSync() {
@@ -388,17 +450,32 @@ final class GlimmerBleClient {
             handler.post(() -> {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     connected = true;
+                    serviceDiscoveryRequested = false;
                     connectedAddress = pendingAddress == null ? gatt.getDevice().getAddress() : pendingAddress;
                     pendingAddress = null;
                     listener.onBleStatus("已连接，正在发现服务");
-                    gatt.discoverServices();
+                    if (!gatt.requestMtu(OTA_REQUEST_MTU)) {
+                        discoverServices(gatt);
+                    } else {
+                        handler.postDelayed(() -> discoverServices(gatt), 1200);
+                    }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     Log.w(TAG, "Glimmer disconnected status=" + status);
                     listener.onBleStatus("Glimmer 已断开");
                     listener.onBleStatus("Glimmer 已断开 status=" + status);
+                    if (otaActive && otaSession != null && otaSession.listener != null) {
+                        if (otaSession.endSent) {
+                            otaSession.listener.onOtaCompleted();
+                        } else {
+                            otaSession.listener.onOtaFailed("OTA disconnected");
+                        }
+                    }
                     connected = false;
                     debugReady = false;
+                    serviceDiscoveryRequested = false;
                     writeInProgress = false;
+                    otaActive = false;
+                    otaSession = null;
                     txQueue.clear();
                     notifyQueue.clear();
                     assembler.reset();
@@ -425,6 +502,7 @@ final class GlimmerBleClient {
                     return;
                 }
                 findDebugCharacteristics(gatt.getServices());
+                findOtaCharacteristic(gatt.getServices());
                 if (cmdChar == null || rspChar == null || logChar == null || evtChar == null) {
                     listener.onBleStatus("未找到完整 Glimmer 调试通道");
                     return;
@@ -433,6 +511,9 @@ final class GlimmerBleClient {
                 notifyQueue.add(rspChar);
                 notifyQueue.add(logChar);
                 notifyQueue.add(evtChar);
+                if (otaChar != null) {
+                    notifyQueue.add(otaChar);
+                }
                 subscribeNext();
             });
         }
@@ -444,10 +525,34 @@ final class GlimmerBleClient {
         }
 
         @Override
+        public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
+            Log.i(TAG, "onMtuChanged status=" + status + " mtu=" + mtu);
+            handler.post(() -> discoverServices(gatt));
+        }
+
+        @Override
         public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
             handler.post(() -> {
                 Log.d(TAG, "onCharacteristicWrite status=" + status
                         + " uuid=" + characteristic.getUuid());
+                if (otaChar != null && characteristic.getUuid().equals(otaChar.getUuid())) {
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        failOta("OTA write failed: " + status);
+                        return;
+                    }
+                    if (otaSession != null && otaSession.endSent
+                            && otaSession.nextIndex >= otaSession.totalChunks) {
+                        if (otaSession.listener != null) {
+                            otaSession.listener.onOtaWaitingForResult();
+                        }
+                        return;
+                    }
+                    long delay = otaSession != null && otaSession.nextIndex == 0
+                            ? 150
+                            : OTA_WRITE_PACE_MS;
+                    handler.postDelayed(GlimmerBleClient.this::writeNextOtaData, delay);
+                    return;
+                }
                 if (CMD_WRITE_WITHOUT_RESPONSE) {
                     return;
                 }
@@ -464,15 +569,24 @@ final class GlimmerBleClient {
         public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
             byte[] value = characteristic.getValue();
             if (value != null) {
-                handler.post(() -> onNotify(value));
+                handler.post(() -> onNotify(characteristic, value));
             }
         }
 
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, byte[] value) {
-            handler.post(() -> onNotify(value));
+            handler.post(() -> onNotify(characteristic, value));
         }
     };
+
+    @SuppressLint("MissingPermission")
+    private void discoverServices(BluetoothGatt targetGatt) {
+        if (targetGatt == null || serviceDiscoveryRequested || !connected) {
+            return;
+        }
+        serviceDiscoveryRequested = true;
+        targetGatt.discoverServices();
+    }
 
     private void findDebugCharacteristics(List<BluetoothGattService> services) {
         cmdChar = null;
@@ -493,6 +607,25 @@ final class GlimmerBleClient {
                 }
             }
         }
+    }
+
+    private void findOtaCharacteristic(List<BluetoothGattService> services) {
+        otaChar = null;
+        BluetoothGattCharacteristic fallback = null;
+        for (BluetoothGattService service : services) {
+            boolean otaService = uuidMatches(service.getUuid(), OTA_SERVICE_UUIDS);
+            for (BluetoothGattCharacteristic characteristic : service.getCharacteristics()) {
+                UUID uuid = characteristic.getUuid();
+                if (uuidMatches(uuid, OTA_DATA_UUIDS)) {
+                    otaChar = characteristic;
+                    return;
+                }
+                if (otaService && fallback == null) {
+                    fallback = characteristic;
+                }
+            }
+        }
+        otaChar = fallback;
     }
 
     @SuppressLint("MissingPermission")
@@ -535,6 +668,11 @@ final class GlimmerBleClient {
     }
 
     private void sendPackets(List<byte[]> packets) {
+        if (otaActive) {
+            Log.w(TAG, "drop host command during OTA");
+            listener.onBleStatus("OTA in progress");
+            return;
+        }
         if (!debugReady || gatt == null || cmdChar == null) {
             Log.w(TAG, "drop host command: not ready debugReady=" + debugReady
                     + " gatt=" + (gatt != null) + " cmdChar=" + (cmdChar != null)
@@ -594,8 +732,13 @@ final class GlimmerBleClient {
         }
     }
 
-    private void onNotify(byte[] data) {
+    private void onNotify(BluetoothGattCharacteristic characteristic, byte[] data) {
         Log.d(TAG, "notify len=" + (data == null ? 0 : data.length));
+        if (otaChar != null && characteristic != null
+                && characteristic.getUuid().equals(otaChar.getUuid())) {
+            onOtaNotify(data);
+            return;
+        }
         try {
             HostProtocol.HostFrame frame = HostProtocol.decodePacket(data);
             HostProtocol.HostMessage message = assembler.push(frame);
@@ -605,6 +748,173 @@ final class GlimmerBleClient {
         } catch (Exception e) {
             listener.onBleStatus("Glimmer 数据解析失败");
         }
+    }
+
+    private void writeOtaStart() {
+        if (!otaActive || otaSession == null || gatt == null || otaChar == null) {
+            failOta("OTA connection lost");
+            return;
+        }
+        if (!writeOtaPacket(otaStartExtPacket())) {
+            failOta("OTA start failed");
+            return;
+        }
+    }
+
+    private void writeNextOtaData() {
+        if (!otaActive || otaSession == null || gatt == null || otaChar == null) {
+            failOta("OTA connection lost");
+            return;
+        }
+        if (otaSession.nextIndex >= otaSession.totalChunks) {
+            otaSession.endSent = writeOtaPacket(otaEndPacket(otaSession.totalChunks - 1));
+            if (!otaSession.endSent) {
+                failOta("OTA end failed");
+                return;
+            }
+            return;
+        }
+
+        int index = otaSession.nextIndex;
+        int offset = index * OTA_PDU_LEN;
+        if (!writeOtaPacket(otaDataPacket(index, otaSession.firmware, offset))) {
+            failOta("OTA write failed");
+            return;
+        }
+        otaSession.nextIndex++;
+        if (otaSession.listener != null) {
+            otaSession.listener.onOtaProgress(otaSession.nextIndex, otaSession.totalChunks,
+                    otaSession.scheduleBytes);
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private boolean writeOtaPacket(byte[] packet) {
+        if (gatt == null || otaChar == null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return gatt.writeCharacteristic(otaChar, packet,
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS;
+        }
+        otaChar.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+        otaChar.setValue(packet);
+        return gatt.writeCharacteristic(otaChar);
+    }
+
+    private void onOtaNotify(byte[] data) {
+        if (data == null || data.length < 2 || otaSession == null) {
+            return;
+        }
+        int cmd = rd16(data, 0);
+        if (cmd == OTA_CMD_RESULT && data.length >= 3) {
+            int result = data[2] & 0xff;
+            OtaListener otaListener = otaSession.listener;
+            otaActive = false;
+            otaSession = null;
+            if (result == 0) {
+                listener.onBleStatus("OTA complete");
+                if (otaListener != null) {
+                    otaListener.onOtaCompleted();
+                }
+            } else if (otaListener != null) {
+                otaListener.onOtaFailed("OTA result " + result);
+            }
+        } else if (cmd == OTA_CMD_SCHEDULE_PDU_NUM && data.length >= 4) {
+            otaSession.schedulePdu = rd16(data, 2);
+        } else if (cmd == OTA_CMD_SCHEDULE_FW_SIZE && data.length >= 6) {
+            otaSession.scheduleBytes = rd32(data, 2);
+        }
+    }
+
+    private void failOta(String reason) {
+        OtaListener otaListener = otaSession == null ? null : otaSession.listener;
+        otaActive = false;
+        otaSession = null;
+        if (otaListener != null) {
+            otaListener.onOtaFailed(reason);
+        }
+        listener.onBleStatus(reason);
+    }
+
+    private String validateFirmware(byte[] firmware) {
+        if (firmware == null || firmware.length < 0x1C) {
+            return "Firmware too small";
+        }
+        if (firmware.length > OTA_MAX_FIRMWARE_BYTES) {
+            return "Firmware exceeds " + OTA_MAX_FIRMWARE_BYTES + " bytes";
+        }
+        if ((firmware[0x08] & 0xff) != 0x4B) {
+            return "Invalid Telink boot mark";
+        }
+        int declared = rd32(firmware, 0x18);
+        if (declared != firmware.length) {
+            return "Firmware size mismatch";
+        }
+        return null;
+    }
+
+    private byte[] otaStartExtPacket() {
+        byte[] packet = new byte[20];
+        wr16(packet, 0, OTA_CMD_START_EXT);
+        packet[2] = (byte) OTA_PDU_LEN;
+        packet[3] = 0;
+        return packet;
+    }
+
+    private byte[] otaDataPacket(int index, byte[] firmware, int offset) {
+        byte[] packet = new byte[OTA_PDU_LEN + 4];
+        wr16(packet, 0, index);
+        int copy = Math.min(OTA_PDU_LEN, firmware.length - offset);
+        if (copy > 0) {
+            System.arraycopy(firmware, offset, packet, 2, copy);
+        }
+        for (int i = 2 + copy; i < 2 + OTA_PDU_LEN; i++) {
+            packet[i] = (byte) 0xFF;
+        }
+        int crc = crc16(packet, 0, OTA_PDU_LEN + 2);
+        wr16(packet, OTA_PDU_LEN + 2, crc);
+        return packet;
+    }
+
+    private byte[] otaEndPacket(int maxIndex) {
+        byte[] packet = new byte[6];
+        wr16(packet, 0, OTA_CMD_END);
+        wr16(packet, 2, maxIndex);
+        wr16(packet, 4, ~maxIndex);
+        return packet;
+    }
+
+    private static int crc16(byte[] data, int offset, int len) {
+        int crc = 0xFFFF;
+        for (int i = 0; i < len; i++) {
+            crc ^= data[offset + i] & 0xff;
+            for (int j = 0; j < 8; j++) {
+                if ((crc & 1) != 0) {
+                    crc = (crc >>> 1) ^ 0xA001;
+                } else {
+                    crc >>>= 1;
+                }
+                crc &= 0xFFFF;
+            }
+        }
+        return crc & 0xFFFF;
+    }
+
+    private static int rd16(byte[] data, int offset) {
+        return (data[offset] & 0xff) | ((data[offset + 1] & 0xff) << 8);
+    }
+
+    private static int rd32(byte[] data, int offset) {
+        return (data[offset] & 0xff)
+                | ((data[offset + 1] & 0xff) << 8)
+                | ((data[offset + 2] & 0xff) << 16)
+                | ((data[offset + 3] & 0xff) << 24);
+    }
+
+    private static void wr16(byte[] data, int offset, int value) {
+        data[offset] = (byte) (value & 0xff);
+        data[offset + 1] = (byte) ((value >>> 8) & 0xff);
     }
 
     private int nextSeq() {
@@ -635,6 +945,32 @@ final class GlimmerBleClient {
         void onDebugReady(boolean ready);
 
         void onHostMessage(HostProtocol.HostMessage message, String formatted);
+    }
+
+    interface OtaListener {
+        void onOtaProgress(int sentChunks, int totalChunks, int scheduleBytes);
+
+        void onOtaWaitingForResult();
+
+        void onOtaCompleted();
+
+        void onOtaFailed(String reason);
+    }
+
+    private static final class OtaSession {
+        final byte[] firmware;
+        final OtaListener listener;
+        final int totalChunks;
+        int nextIndex;
+        int schedulePdu;
+        int scheduleBytes;
+        boolean endSent;
+
+        OtaSession(byte[] firmware, OtaListener listener) {
+            this.firmware = firmware;
+            this.listener = listener;
+            this.totalChunks = (firmware.length + OTA_PDU_LEN - 1) / OTA_PDU_LEN;
+        }
     }
 
     static final class ScanDevice {

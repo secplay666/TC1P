@@ -6,6 +6,7 @@
 #include "../config/app_config_store.h"
 #include "../identity/app_identity.h"
 #include "../profile/app_profile.h"
+#include "../app_ota.h"
 #include "../ble/app_ble.h"
 #include "../pm/app_pm.h"
 #include "../app_config.h"
@@ -140,6 +141,9 @@ void app_system_handle_event(const app_event_t *event)
     case APP_EVT_IDLE_TIMEOUT:
     case APP_EVT_APP_IDLE_TIMEOUT:
     case APP_EVT_BATTERY_CRITICAL:
+        if (app_ota_is_active()) {
+            break;
+        }
         app_system_request_sleep((u8)event->id);
         break;
 
