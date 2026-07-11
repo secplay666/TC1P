@@ -335,7 +335,7 @@ def make_write_identity_payload(unique_id: bytes, lock_after_write: bool = False
 def parse_device_info(payload: bytes) -> dict:
     if len(payload) < 36:
         raise ValueError("device info payload too short")
-    return {
+    info = {
         "info_version": payload[0],
         "hw_rev": payload[1],
         "fw_version": f"{payload[3]}.{payload[2]}.{payload[4]}",
@@ -349,6 +349,25 @@ def parse_device_info(payload: bytes) -> dict:
         "host_frame_version": payload[34],
         "adv_protocol_version": payload[35],
     }
+    if len(payload) >= 56:
+        info.update(
+            {
+                "fw_version_code": u32le(payload, 36),
+                "ota_guard_valid": payload[40],
+                "ota_guard_state": payload[41],
+                "ota_active_slot": payload[42],
+                "ota_pending_slot": payload[43],
+                "ota_boot_attempts": payload[44],
+                "ota_backup_valid": payload[45],
+                "ota_last_error": payload[46],
+                "ota_last_result": payload[47],
+                "ota_confirmed_version": u32le(payload, 48),
+                "ota_pending_version": u32le(payload, 52),
+            }
+        )
+    else:
+        info["fw_version_code"] = 0
+    return info
 
 
 def parse_system_state(payload: bytes) -> dict:

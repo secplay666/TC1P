@@ -14,6 +14,8 @@ from uuid import UUID
 from bleak import BleakClient, BleakScanner
 
 from headless_chat_test import is_glimmer_name, normalize_uuid
+from ota_package import OtaImage, load_ota_image
+import pendant_protocol as proto
 
 
 OTA_SERVICE_UUIDS = {
@@ -25,6 +27,16 @@ OTA_DATA_UUIDS = {
     str(UUID(bytes=bytes([0x12, 0x2B, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00]))),
     str(UUID(bytes_le=bytes([0x12, 0x2B, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00]))),
     str(UUID(bytes=bytes([0x12, 0x2B, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00])[::-1])),
+}
+DEBUG_CMD_UUIDS = {
+    "50544e44-0002-4b45-5931-444556000001",
+    "56000001-4445-5931-454b-0200444e5450",
+    "01000056-4544-3159-4b45-000250544e44",
+}
+DEBUG_RSP_UUIDS = {
+    "50544e44-0003-4b45-5931-444556000001",
+    "56000001-4445-5931-454b-0300444e5450",
+    "01000056-4544-3159-4b45-000350544e44",
 }
 
 CMD_OTA_START_EXT = 0xFF03
@@ -112,6 +124,19 @@ def find_ota_char(services: Any) -> Any:
     raise RuntimeError("OTA characteristic not found:\n" + "\n".join(lines))
 
 
+def find_debug_chars(services: Any) -> tuple[Any, Any] | tuple[None, None]:
+    cmd_char = None
+    rsp_char = None
+    for service in iter_services(services):
+        for char in getattr(service, "characteristics", []):
+            char_uuid = normalize_uuid(char.uuid)
+            if char_uuid in DEBUG_CMD_UUIDS:
+                cmd_char = char
+            elif char_uuid in DEBUG_RSP_UUIDS:
+                rsp_char = char
+    return cmd_char, rsp_char
+
+
 def validate_firmware(data: bytes, max_size: int, force: bool) -> None:
     if len(data) < 0x1C:
         raise ValueError("firmware too small")
@@ -123,6 +148,25 @@ def validate_firmware(data: bytes, max_size: int, force: bool) -> None:
         raise ValueError(f"firmware size field {fw_size} != file size {len(data)}; use --force to override")
     if len(data) > max_size and not force:
         raise ValueError(f"firmware {len(data)} bytes exceeds max {max_size} bytes; use --force to override")
+
+
+def load_firmware_for_ota(
+    path: str | Path,
+    max_size: int,
+    force: bool = False,
+    allow_unsigned_bin: bool = False,
+    current_version_code: int = 0,
+    allow_downgrade: bool = False,
+) -> OtaImage:
+    image = load_ota_image(
+        path,
+        max_size,
+        current_version_code=current_version_code,
+        allow_unsigned_bin=allow_unsigned_bin,
+        allow_downgrade=allow_downgrade or force,
+    )
+    validate_firmware(image.firmware, max_size, force)
+    return image
 
 
 def ota_start_ext_packet(pdu_len: int) -> bytes:
@@ -160,12 +204,49 @@ async def scan_targets(timeout_s: float, limit: int) -> list[OtaTarget]:
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
+async def query_device_version_code(client: BleakClient, services: Any) -> int:
+    cmd_char, rsp_char = find_debug_chars(services)
+    if cmd_char is None or rsp_char is None:
+        return 0
+
+    assembler = proto.MessageAssembler()
+    done = asyncio.Event()
+    version_code = 0
+
+    def on_debug_notify(_sender: Any, data: bytearray) -> None:
+        nonlocal version_code
+        try:
+            frame = proto.decode_packet(bytes(data))
+            message = assembler.push(frame)
+        except Exception:
+            return
+        if (message is not None and message.frame_type == proto.TYPE_RSP
+                and message.cmd == proto.CMD_GET_DEVICE_INFO and message.status == 0):
+            try:
+                version_code = int(proto.parse_device_info(message.payload).get("fw_version_code", 0))
+            except Exception:
+                version_code = 0
+            done.set()
+
+    try:
+        await client.start_notify(rsp_char, on_debug_notify)
+        for packet in proto.make_empty_command(1, proto.CMD_GET_DEVICE_INFO):
+            await client.write_gatt_char(cmd_char, packet, response=True)
+            await asyncio.sleep(0.02)
+        await asyncio.wait_for(done.wait(), timeout=3.0)
+    except Exception:
+        return 0
+    return version_code
+
+
 async def run_one(
     target: OtaTarget,
     firmware: bytes,
     pdu_len: int,
     pace_s: float,
     write_response: bool,
+    package_version_code: int = 0,
+    allow_downgrade: bool = False,
     progress: Optional[ProgressCallback] = None,
 ) -> bool:
     result_code: Optional[int] = None
@@ -202,6 +283,18 @@ async def run_one(
         if services is None and hasattr(client, "get_services"):
             services = await client.get_services()
         ota_char = find_ota_char(services)
+        if package_version_code > 0 and not allow_downgrade:
+            device_version = await query_device_version_code(client, services)
+            if device_version > 0 and package_version_code <= device_version:
+                raise RuntimeError(
+                    f"downgrade blocked before write: package={package_version_code}, device={device_version}"
+                )
+            if device_version > 0:
+                log(f"{target.address}: version check package={package_version_code} device={device_version}")
+                emit("version_check", package_version=package_version_code, device_version=device_version)
+            else:
+                log(f"{target.address}: device version unavailable; package={package_version_code}")
+                emit("version_unknown", package_version=package_version_code)
         mtu_size = getattr(client, "mtu_size", None)
         max_wwr = getattr(ota_char, "max_write_without_response_size", None)
         log(f"{target.address}: ota_char={ota_char.uuid} props={','.join(getattr(ota_char, 'properties', []))} mtu={mtu_size} max_wwr={max_wwr}")
@@ -270,9 +363,22 @@ async def run_one(
 
 
 async def run(args: argparse.Namespace) -> int:
-    firmware = Path(args.bin).read_bytes()
-    validate_firmware(firmware, args.max_size_k * 1024, args.force)
-    log(f"firmware={args.bin} size={len(firmware)} max={args.max_size_k * 1024}")
+    image = load_firmware_for_ota(
+        args.bin,
+        args.max_size_k * 1024,
+        force=args.force,
+        allow_unsigned_bin=args.allow_unsigned_bin,
+        current_version_code=args.current_version_code,
+        allow_downgrade=args.allow_downgrade,
+    )
+    firmware = image.firmware
+    if image.signed:
+        log(
+            f"firmware={args.bin} signed=1 version_code={image.version_code} "
+            f"size={len(firmware)} max={args.max_size_k * 1024}"
+        )
+    else:
+        log(f"firmware={args.bin} signed=0 dev_unsigned=1 size={len(firmware)} max={args.max_size_k * 1024}")
 
     targets = [OtaTarget(address=x) for x in args.address]
     if args.scan or not targets:
@@ -295,7 +401,15 @@ async def run(args: argparse.Namespace) -> int:
     for index, target in enumerate(targets, start=1):
         log(f"=== OTA {index}/{len(targets)} {target.address} ===")
         try:
-            if await run_one(target, firmware, args.pdu_len, args.pace_ms / 1000.0, args.write_response):
+            if await run_one(
+                target,
+                firmware,
+                args.pdu_len,
+                args.pace_ms / 1000.0,
+                args.write_response,
+                package_version_code=image.version_code if image.signed else 0,
+                allow_downgrade=args.allow_downgrade or args.force,
+            ):
                 ok_count += 1
         except Exception as exc:
             log(f"{target.address}: FAIL {exc}")
@@ -309,7 +423,7 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Glimmer Telink BLE OTA updater.")
-    parser.add_argument("--bin", default="../tc_ble_multi_sdk/build/B85/pendant/pendant.bin", help="firmware bin path")
+    parser.add_argument("--bin", default="../tc_ble_multi_sdk/build/B85/pendant/pendant.glimmerota", help="signed OTA package path")
     parser.add_argument("--address", action="append", default=[], help="BLE address; can be repeated")
     parser.add_argument("--scan", action="store_true", help="scan and update all discovered Glimmer devices")
     parser.add_argument("--limit", type=int, default=0, help="max scanned devices, 0 means all")
@@ -319,8 +433,11 @@ def main() -> int:
     parser.add_argument("--write-response", dest="write_response", action="store_true", default=True, help="use GATT write-with-response")
     parser.add_argument("--no-write-response", dest="write_response", action="store_false", help="use GATT write-without-response")
     parser.add_argument("--gap", type=float, default=3.0, help="delay between multiple devices")
-    parser.add_argument("--max-size-k", type=int, default=192)
+    parser.add_argument("--max-size-k", type=int, default=188)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--allow-unsigned-bin", action="store_true", help="development only: allow raw Telink .bin OTA")
+    parser.add_argument("--allow-downgrade", action="store_true", help="development only: allow signed package version <= device version")
+    parser.add_argument("--current-version-code", type=int, default=0, help="device firmware version code for anti-rollback checks")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--stop-on-error", action="store_true")
     args = parser.parse_args()

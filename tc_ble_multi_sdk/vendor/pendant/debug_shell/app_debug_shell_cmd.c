@@ -14,6 +14,7 @@
 #include "../board/app_board.h"
 #include "../build_info/app_build_info.h"
 #include "../app_pendant.h"
+#include "../app_ota.h"
 #include "../pm/app_pm.h"
 #include "../app.h"
 #include "../app_config.h"
@@ -21,7 +22,7 @@
 #include "drivers.h"
 #include "uart.h"
 
-#define APP_DEBUG_SHELL_CMD_MAX_COUNT 24
+#define APP_DEBUG_SHELL_CMD_MAX_COUNT 28
 #define APP_DEBUG_SHELL_ARG_MAX 5
 #define APP_DEBUG_SHELL_ENABLE_ADV_TEST_CMDS 0
 #define APP_DEBUG_SHELL_SENDMAX_PAYLOAD_MAX 64
@@ -389,6 +390,32 @@ static void cmd_build(u8 argc, char **argv)
     (void)argc;
     (void)argv;
     app_debug_shell_cmd_print_boot_info();
+}
+
+static void cmd_ota(u8 argc, char **argv)
+{
+    app_ota_guard_info_t info;
+    (void)argc;
+    (void)argv;
+
+    app_ota_guard_get_info(&info);
+    app_debug_shell_cmd_puts("[DBG] ota\r\n");
+    app_debug_shell_cmd_print_u8(" active=", app_ota_is_active());
+    app_debug_shell_cmd_print_u8(" last_result=", app_ota_last_result());
+    app_debug_shell_cmd_print_u8(" guard_valid=", info.valid);
+    app_debug_shell_cmd_print_u8(" state=", info.state);
+    app_debug_shell_cmd_print_u8(" slot=", info.active_slot);
+    app_debug_shell_cmd_print_u8(" prev=", info.previous_slot);
+    app_debug_shell_cmd_print_u8(" pending=", info.pending_slot);
+    app_debug_shell_cmd_print_u8(" attempts=", info.boot_attempts);
+    app_debug_shell_cmd_print_u8(" backup=", info.backup_valid);
+    app_debug_shell_cmd_print_u8(" last_error=", info.last_error);
+    app_debug_shell_cmd_print_u32(" confirmed_ver=", info.confirmed_version);
+    app_debug_shell_cmd_print_u32(" pending_ver=", info.pending_version);
+    app_debug_shell_cmd_print_u32(" boots=", info.boot_count);
+    app_debug_shell_cmd_print_u32(" rollback=", info.last_rollback_reason);
+    app_debug_shell_cmd_print_u32(" meta=0x", info.meta_addr);
+    app_debug_shell_cmd_print_u32(" backup_addr=0x", info.backup_addr);
 }
 
 static void cmd_profile(u8 argc, char **argv)
@@ -1212,6 +1239,7 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("?", "?", "show commands", cmd_help);
     app_debug_shell_cmd_register("ping", "ping", "check shell", cmd_ping);
     app_debug_shell_cmd_register("build", "build", "show build info", cmd_build);
+    app_debug_shell_cmd_register("ota", "ota", "show OTA guard state", cmd_ota);
     app_debug_shell_cmd_register("info", "info", "show device info", cmd_info);
     app_debug_shell_cmd_register("profile", "profile [set <nick> <signature>]", "show or update profile card", cmd_profile);
     app_debug_shell_cmd_register("peers", "peers", "show peer table", cmd_peers);

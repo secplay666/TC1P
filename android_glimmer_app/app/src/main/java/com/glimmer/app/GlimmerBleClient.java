@@ -81,7 +81,7 @@ final class GlimmerBleClient {
     private static final int OTA_CMD_SCHEDULE_FW_SIZE = 0xFF09;
     private static final int OTA_PDU_LEN = 16;
     private static final int OTA_REQUEST_MTU = 83;
-    private static final int OTA_MAX_FIRMWARE_BYTES = 192 * 1024;
+    private static final int OTA_MAX_FIRMWARE_BYTES = 188 * 1024;
     private static final long OTA_WRITE_PACE_MS = 2;
 
     private final Context context;
@@ -321,7 +321,7 @@ final class GlimmerBleClient {
         return seq;
     }
 
-    void startOta(byte[] firmware, OtaListener otaListener) {
+    void startOta(byte[] otaFile, long currentVersionCode, OtaListener otaListener) {
         if (otaActive) {
             if (otaListener != null) {
                 otaListener.onOtaFailed("OTA already running");
@@ -334,6 +334,16 @@ final class GlimmerBleClient {
             }
             return;
         }
+        OtaPackage.Image image;
+        try {
+            image = OtaPackage.parse(otaFile, OTA_MAX_FIRMWARE_BYTES, currentVersionCode);
+        } catch (IllegalArgumentException e) {
+            if (otaListener != null) {
+                otaListener.onOtaFailed(e.getMessage());
+            }
+            return;
+        }
+        byte[] firmware = image.firmware;
         String error = validateFirmware(firmware);
         if (error != null) {
             if (otaListener != null) {
@@ -345,7 +355,7 @@ final class GlimmerBleClient {
         otaActive = true;
         txQueue.clear();
         otaSession = new OtaSession(firmware, otaListener);
-        listener.onBleStatus("OTA start");
+        listener.onBleStatus("OTA start v" + image.versionCode);
         if (otaListener != null) {
             otaListener.onOtaProgress(0, otaSession.totalChunks, 0);
         }

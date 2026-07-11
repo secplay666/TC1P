@@ -17,6 +17,8 @@
 #include "../motor/app_motor.h"
 #include "../pm/app_pm.h"
 #include "../ble/app_ble.h"
+#include "../app_ota.h"
+#include "../build_info/app_build_info.h"
 #include "../debug_shell/app_debug_shell_cmd.h"
 #include "common/string.h"
 #include "drivers.h"
@@ -270,6 +272,7 @@ static void handle_get_device_info(u8 seq)
 {
     const app_board_info_t *board = app_board_get_info();
     const app_identity_info_t *id = app_identity_get_info();
+    app_ota_guard_info_t ota;
 
     s_rsp_buf[0] = 1;
     s_rsp_buf[1] = (u8)board->hw_rev;
@@ -286,7 +289,19 @@ static void handle_get_device_info(u8 seq)
     wr16(&s_rsp_buf[32], s_crc_error_count);
     s_rsp_buf[34] = APP_HOST_FRAME_VERSION;
     s_rsp_buf[35] = APP_ADV_PROTOCOL_VERSION;
-    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 36);
+    wr32(&s_rsp_buf[36], APP_BUILD_VERSION_CODE);
+    app_ota_guard_get_info(&ota);
+    s_rsp_buf[40] = ota.valid;
+    s_rsp_buf[41] = ota.state;
+    s_rsp_buf[42] = ota.active_slot;
+    s_rsp_buf[43] = ota.pending_slot;
+    s_rsp_buf[44] = ota.boot_attempts;
+    s_rsp_buf[45] = ota.backup_valid;
+    s_rsp_buf[46] = ota.last_error;
+    s_rsp_buf[47] = app_ota_last_result();
+    wr32(&s_rsp_buf[48], ota.confirmed_version);
+    wr32(&s_rsp_buf[52], ota.pending_version);
+    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 56);
 }
 
 static void handle_get_system_state(u8 seq)

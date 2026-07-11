@@ -2,104 +2,157 @@
 
 ## 当前版本范围
 
-第一版 OTA 复用 Telink BLE OTA server，不自研 bootloader。下位机通过现有 BLE GATT 连接暴露 Telink OTA 特征，PC 工具和 Android App 都按 Telink OTA 包格式发送固件。
+微光 OTA 复用 Telink BLE OTA server，不自研 bootloader。终端通过现有 BLE GATT 连接暴露 Telink OTA 特征，PC 工具和 Android App 按 Telink OTA 数据流写入固件。
 
-当前目标是开发和小批量调试可用：
+产品化前的安全补强已经加入两层：
 
-- PC 端支持扫描升级，也支持指定多个 BLE 地址顺序升级。
-- Android 端支持已绑定终端升级，用户选择本地 `.bin` 文件后写入。
-- 固件升级区使用 `0x40000` 多启动地址。
-- PC 端默认使用 16 字节 OTA PDU，兼容 Windows 当前 23-byte ATT MTU。
-- Android 端会主动请求 83-byte ATT MTU；若实测 MTU 仍为 23，则默认使用 16 字节 OTA PDU。
+- 写入前校验：OTA 默认使用外层签名包 `.glimmerota`，PC/Android 在写入前校验签名、固件 sha256、固件大小、`version_code` 和防回滚条件。
+- 首次启动确认：新 slot 启动后进入 pending 状态，稳定运行一段时间后自动 confirmed；如果 pending 启动次数超过阈值或版本回退，则恢复旧 slot 的 boot mark 并重启回滚。
 
-## Flash 与大小约束
+注意：`.glimmerota` 只是 OTA 传输包，里面包含原始 Telink `.bin`。Telink 有线烧录仍然使用原始 `.bin`，不要把 `.glimmerota` 直接用 Telink 烧录器写入。
 
-当前固件尺寸已经超过默认 `0x20000` OTA 地址可承载的 124KB，因此启用：
+## Flash 与 Slot 策略
 
-- OTA boot address: `MULTI_BOOT_ADDR_0x40000`
-- OTA firmware max: `192KB`
+当前启用：
 
-这为 512KB flash 顶部的 SDK 系统区、绑定信息和微光应用存储保留空间。后续如果固件继续变大，需要重新核算：
+- 有线/基础固件 slot：`0x00000`
+- OTA 目标 slot：`0x40000`
+- OTA firmware max：`188KB`
+- OTA guard metadata：应用存储区前 1 个 sector
+- 旧 slot 首 sector 备份：应用存储区前 2 个 sector
 
-- 当前 bin 大小
-- Telink boot/new firmware 双区位置
-- SDK reserved/system data 起始位置
-- 微光 profile、配置、身份、事件等应用分区
+`PENDANT_OTA_FIRMWARE_MAX_K` 从 192KB 收紧到 188KB，是为了在不移动现有身份、配置、profile 等应用分区的前提下，给 OTA guard metadata 和旧 slot 首 sector 备份留出空间。
 
-## 下位机行为
+## 签名包格式
 
-OTA 开始后，下位机会：
+OTA 产品路径默认要求 `.glimmerota`：
 
-- 暂停扫描和扩展广播调度；
-- 喂 watchdog，避免写 flash 时被系统空闲逻辑干扰；
-- 屏蔽进入休眠的请求；
-- 请求更快的连接参数，降低 write-response 模式下的升级时间；
-- 保持当前 GATT 连接处理 OTA 写入；
-- OTA 完成后由 Telink OTA 逻辑校验并切换启动区。
+```text
+magic:        "GLIMMER-OTA-PKG1\n"
+manifest_len: u32 little-endian
+manifest:     JSON，按 key 排序的 canonical bytes
+sig_len:      u16 little-endian
+signature:    RSA-2048 PKCS#1 v1.5 SHA-256，签 manifest bytes
+firmware:     原始 Telink .bin
+```
 
-## PC 端使用
+manifest 当前字段：
 
-构建固件：
+- `format`: 固定为 `1`
+- `product`: 固定为 `glimmer-b85`
+- `version_code`: 单调递增的整型版本号
+- `firmware_size`: 内部 `.bin` 字节数
+- `firmware_sha256`: 内部 `.bin` 的 SHA-256
+- `signature`: 固定为 `RSA-2048-SHA256`
+- `created_at`: 打包时间戳
+
+私钥不进入仓库。PC 和 Android 只内置公钥。当前工作区为了开发调试，在已忽略的 `artifacts/glimmer_ota_private_dev.pem` 生成了一把本机开发私钥；量产前需要替换为正式 OTA 公钥，并把对应私钥放在受控的构建/发布环境中。
+
+## 构建 OTA 包
+
+先构建原始固件：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_pendant_multi.ps1
 ```
 
-扫描并升级发现到的所有 Glimmer 设备：
+然后用外部 RSA 私钥打包：
+
+```powershell
+$env:GLIMMER_OTA_PRIVATE_KEY=".\artifacts\glimmer_ota_private_dev.pem"
+python .\tools\make_glimmer_ota_package.py `
+  --bin .\tc_ble_multi_sdk\build\B85\pendant\pendant.bin `
+  --out .\tc_ble_multi_sdk\build\B85\pendant\pendant.glimmerota
+```
+
+打包脚本默认从 `tc_ble_multi_sdk/vendor/pendant/build_info/app_build_info.h` 读取 `APP_BUILD_VERSION_CODE`。如果需要手动指定：
+
+```powershell
+python .\tools\make_glimmer_ota_package.py --version-code 101 --private-key C:\secure\glimmer_ota_private.pem
+```
+
+打包脚本需要 Python 的可选依赖 `cryptography`。这是签名工具依赖，运行 OTA 的 PC 工具不需要它。
+
+## PC 端使用
+
+图形工具：
 
 ```powershell
 cd pc_debug_tool
-.venv\Scripts\python.exe ota_update.py --scan --bin ..\tc_ble_multi_sdk\build\B85\pendant\pendant.bin
+.venv\Scripts\python.exe app.py
+```
+
+进入 `OTA` 页，选择 `.glimmerota`，添加一个或多个目标地址，点击 `Start OTA`。PC 会按顺序升级多个设备。每个目标开始写入前会尽量通过调试通道读取 `GET_DEVICE_INFO`，如果读到当前 `fw_version_code`，则先做版本防回滚判断。
+
+命令行扫描并升级：
+
+```powershell
+cd pc_debug_tool
+.venv\Scripts\python.exe ota_update.py --scan --bin ..\tc_ble_multi_sdk\build\B85\pendant\pendant.glimmerota
 ```
 
 指定多个设备顺序升级：
 
 ```powershell
 cd pc_debug_tool
-.venv\Scripts\python.exe ota_update.py --address AA:BB:CC:DD:EE:01 --address AA:BB:CC:DD:EE:02 --bin ..\tc_ble_multi_sdk\build\B85\pendant\pendant.bin
+.venv\Scripts\python.exe ota_update.py `
+  --address AA:BB:CC:DD:EE:01 `
+  --address AA:BB:CC:DD:EE:02 `
+  --bin ..\tc_ble_multi_sdk\build\B85\pendant\pendant.glimmerota
 ```
 
-先扫描不升级：
+开发期如果必须 OTA 原始 `.bin`，需要显式打开未签名模式：
 
 ```powershell
-cd pc_debug_tool
-.venv\Scripts\python.exe ota_update.py --scan --dry-run
+.venv\Scripts\python.exe ota_update.py --scan --allow-unsigned-bin --bin ..\tc_ble_multi_sdk\build\B85\pendant\pendant.bin
 ```
 
 ## Android 端使用
 
-进入 App：
-
 1. 绑定并连接自己的 Glimmer 终端。
 2. 打开 `我的` -> `我的 Glimmer`。
 3. 点击 `OTA 固件升级`。
-4. 选择固件 `.bin`。
-5. 等待进度到 100%，再等待终端校验和重启。
+4. 选择 `.glimmerota` 文件。
+5. 等待专用 OTA 进度页完成写入、校验、重启和自动重连。
 
-OTA 写入期间 App 会切换到专用进度页，隐藏底部导航并拦截返回键，避免用户切走后误以为 App 卡死。升级完成、失败或终端重连后恢复正常页面。
+Android App 不再接受裸 `.bin` 作为产品 OTA 输入。它会在写入前校验签名包，并使用当前已同步的 `deviceInfo.firmwareVersionCode` 做防回滚判断。
 
-当前没有做后台下载固件，也没有做版本服务器。第一版只支持选择本地 bin。
+OTA 写入期间 App 会切换到专用进度页，隐藏底部导航并拦截返回键，避免用户切走后误认为 App 卡死。升级完成、失败或终端重连后恢复正常页面。
 
-## 安全边界
+## 下位机 Guard 状态机
 
-当前 OTA 是开发版能力：
+OTA 开始时：
 
-- 没有固件签名校验；
-- 没有强制绑定鉴权；
-- 没有版本防回滚；
-- BLE 连接仍使用当前无配对安全等级。
+- 暂停附近扫描和扩展广播调度；
+- 喂 watchdog，避免写 flash 时被系统空闲逻辑干扰；
+- 备份当前 active slot 的首 sector；
+- 记录 `UPDATE_PREPARED`，保存 previous slot 和 pending slot。
 
-正式产品化前至少需要补：
+OTA 写入成功后：
 
-- 固件签名或哈希白名单；
-- 只允许已绑定 App 发起 OTA；
-- 版本号比较和防回滚策略；
-- OTA 过程中明确禁止普通聊天/文件传输；
-- 失败后重试、回滚和用户提示策略。
+- 记录 `PENDING`；
+- 保留 OTA 开始前记录的 previous/pending slot；
+- 等 Telink OTA 逻辑完成校验、切换 boot mark 并重启。
+
+新 slot 启动后：
+
+- 如果版本小于已确认版本，触发回滚；
+- 如果 pending 启动次数超过 `PENDANT_OTA_MAX_PENDING_BOOT_ATTEMPTS`，触发回滚；
+- 如果进入 `ADV_SCAN` 或 `APP_CONNECTED` 并稳定运行 `PENDANT_OTA_CONFIRM_DELAY_MS`，自动标记 `CONFIRMED`。
+
+回滚方式：
+
+- 恢复旧 slot 首 sector 备份；
+- 清掉当前 slot boot mark；
+- 保存 `ROLLED_BACK` 状态和原因；
+- 重启。
+
+如果两个 slot 都坏了，当前方案无法自救，需要用 Telink 有线方式重新 active/烧录。这个是复用 Telink OTA server、没有自研 ROM bootloader 的边界。
 
 ## 已知限制
 
-- PC 端 Windows/Bleak 实测 ATT MTU 为 23，默认 16 字节 PDU + write-response；151KB 固件完整 OTA 耗时约 4 分 50 秒。
-- PC 端支持 `--address` 重复传入多个地址，按顺序升级多个设备；当前不是并行 OTA。
-- PC 端 `--pdu-len 64` 需要 BLE 后端完成更大 MTU 协商；当前 Windows 内置 BLE 不支持主动 MTU 请求，会被工具提前拒绝。
-- Android 端 Pixel 9 实测 ATT MTU 为 23，默认 16 字节 PDU + write-response；151KB 固件已完整 OTA 成功，终端重启后可自动重连。
+- PC Windows/Bleak 实测 ATT MTU 通常为 23，默认 16 字节 PDU + write-response。
+- PC 支持多地址顺序 OTA，当前不是并行 OTA。
+- Android 会请求更大的 MTU，但实测仍可能回落到 23，因此默认仍使用 16 字节 OTA PDU。
+- 签名公钥目前是仓库内的开发公钥，量产前必须替换。
+- BLE 链路本身仍基于当前连接安全级别；签名包解决的是固件来源与完整性，不等同于 BLE 链路加密。

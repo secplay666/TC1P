@@ -55,7 +55,7 @@ DEBUG_UUIDS = {
 }
 
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_OTA_BIN = APP_DIR.parent / "tc_ble_multi_sdk" / "build" / "B85" / "pendant" / "pendant.bin"
+DEFAULT_OTA_BIN = APP_DIR.parent / "tc_ble_multi_sdk" / "build" / "B85" / "pendant" / "pendant.glimmerota"
 
 
 def now_text() -> str:
@@ -144,8 +144,9 @@ class BleWorker:
         pace_ms: float,
         write_response: bool,
         force: bool,
+        allow_unsigned_bin: bool,
         stop_on_error: bool,
-        max_size_k: int = 192,
+        max_size_k: int = 188,
     ) -> None:
         self.submit(
             self._run_ota(
@@ -155,6 +156,7 @@ class BleWorker:
                 pace_ms,
                 write_response,
                 force,
+                allow_unsigned_bin,
                 stop_on_error,
                 max_size_k,
             )
@@ -277,6 +279,7 @@ class BleWorker:
         pace_ms: float,
         write_response: bool,
         force: bool,
+        allow_unsigned_bin: bool,
         stop_on_error: bool,
         max_size_k: int,
     ) -> None:
@@ -286,12 +289,19 @@ class BleWorker:
         try:
             await self._disconnect()
             firmware_path = Path(bin_path)
-            firmware = firmware_path.read_bytes()
-            ota_update.validate_firmware(firmware, max_size_k * 1024, force)
+            image = ota_update.load_firmware_for_ota(
+                firmware_path,
+                max_size_k * 1024,
+                force=force,
+                allow_unsigned_bin=allow_unsigned_bin,
+                allow_downgrade=force,
+            )
+            firmware = image.firmware
             self.post(
                 "ota_log",
                 message=(
-                    f"Firmware {firmware_path} size={len(firmware)} bytes, "
+                    f"Firmware {firmware_path} signed={int(image.signed)} "
+                    f"version={image.version_code} size={len(firmware)} bytes, "
                     f"pdu={pdu_len}, write_response={int(write_response)}"
                 ),
             )
@@ -313,6 +323,8 @@ class BleWorker:
                         pdu_len,
                         pace_ms / 1000.0,
                         write_response,
+                        package_version_code=image.version_code if image.signed else 0,
+                        allow_downgrade=force,
                         progress=on_progress,
                     ):
                         ok_count += 1
@@ -396,6 +408,7 @@ class PendantDebugApp:
         self.ota_pace_var = tk.StringVar(value="0")
         self.ota_write_response_var = tk.BooleanVar(value=True)
         self.ota_force_var = tk.BooleanVar(value=False)
+        self.ota_allow_unsigned_var = tk.BooleanVar(value=False)
         self.ota_stop_on_error_var = tk.BooleanVar(value=True)
         self.ota_progress_var = tk.DoubleVar(value=0.0)
         self.ota_status_var = tk.StringVar(value="Ready")
@@ -651,7 +664,8 @@ class PendantDebugApp:
         ttk.Entry(options, textvariable=self.ota_pace_var, width=8).grid(row=0, column=3, padx=(4, 12), sticky=tk.W)
         ttk.Checkbutton(options, text="Write response", variable=self.ota_write_response_var).grid(row=0, column=4, padx=(0, 12), sticky=tk.W)
         ttk.Checkbutton(options, text="Force", variable=self.ota_force_var).grid(row=0, column=5, padx=(0, 12), sticky=tk.W)
-        ttk.Checkbutton(options, text="Stop on error", variable=self.ota_stop_on_error_var).grid(row=0, column=6, sticky=tk.W)
+        ttk.Checkbutton(options, text="Unsigned .bin (dev)", variable=self.ota_allow_unsigned_var).grid(row=0, column=6, padx=(0, 12), sticky=tk.W)
+        ttk.Checkbutton(options, text="Stop on error", variable=self.ota_stop_on_error_var).grid(row=0, column=7, sticky=tk.W)
 
         actions = ttk.Frame(self.ota_tab)
         actions.pack(fill=tk.X, pady=(8, 0))
@@ -689,7 +703,7 @@ class PendantDebugApp:
         path = filedialog.askopenfilename(
             title="Select OTA firmware",
             initialdir=str(initial.parent if initial.parent.exists() else Path.cwd()),
-            filetypes=[("Firmware bin", "*.bin"), ("All files", "*.*")],
+            filetypes=[("Signed Glimmer OTA", "*.glimmerota *.ota"), ("Firmware bin", "*.bin"), ("All files", "*.*")],
         )
         if path:
             self.ota_bin_var.set(path)
@@ -767,6 +781,7 @@ class PendantDebugApp:
             pace_ms,
             self.ota_write_response_var.get(),
             self.ota_force_var.get(),
+            self.ota_allow_unsigned_var.get(),
             self.ota_stop_on_error_var.get(),
         )
 
@@ -1185,6 +1200,17 @@ class PendantDebugApp:
             self._append_ota_log(
                 f"{address}: ota_char={progress.get('uuid')} mtu={progress.get('mtu')} "
                 f"max_wwr={progress.get('max_wwr')}"
+            )
+            return
+        if kind == "version_check":
+            self._append_ota_log(
+                f"{address}: version package={progress.get('package_version')} "
+                f"device={progress.get('device_version')}"
+            )
+            return
+        if kind == "version_unknown":
+            self._append_ota_log(
+                f"{address}: device version unavailable; package={progress.get('package_version')}"
             )
             return
         if kind == "start":

@@ -2383,11 +2383,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         otaSentChunks = 0;
         otaTotalChunks = 0;
         otaScheduleBytes = 0;
+        long currentVersionCode = deviceInfo == null ? 0 : deviceInfo.firmwareVersionCode;
         otaStatus = "OTA 0%";
         selectedTab = 2;
         mineDetailMode = 2;
         rerenderCurrentTab();
-        bleClient.startOta(firmware, new GlimmerBleClient.OtaListener() {
+        bleClient.startOta(firmware, currentVersionCode, new GlimmerBleClient.OtaListener() {
             @Override
             public void onOtaProgress(int sentChunks, int totalChunks, int scheduleBytes) {
                 int percent = totalChunks <= 0 ? 0 : Math.min(99, sentChunks * 100 / totalChunks);

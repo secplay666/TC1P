@@ -1116,6 +1116,7 @@ _attribute_no_inline_ void user_init_normal(void)
 	#endif
 
 	blc_readFlashSize_autoConfigCustomFlashSector();
+	app_ota_guard_boot_check();
 
 	/* attention that this function must be called after "blc_readFlashSize_autoConfigCustomFlashSector" !!!*/
 	blc_app_loadCustomizedParameters_normal();

@@ -53,7 +53,10 @@
 // Keep BLE startup independent from optional haptic hardware probing.
 #define PENDANT_MOTOR_BOOT_INIT_ENABLE                0
 #define PENDANT_OTA_ENABLE                            1
-#define PENDANT_OTA_FIRMWARE_MAX_K                    192
+#define PENDANT_OTA_FIRMWARE_MAX_K                    188
+#define PENDANT_OTA_GUARD_ENABLE                      1
+#define PENDANT_OTA_CONFIRM_DELAY_MS                  15000
+#define PENDANT_OTA_MAX_PENDING_BOOT_ATTEMPTS         2
 
 #if (PENDANT_USB_ENABLE)
 #define MODULE_USB_ENABLE                              1
