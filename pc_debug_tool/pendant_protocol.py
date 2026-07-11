@@ -360,6 +360,54 @@ def parse_system_state(payload: bytes) -> dict:
     }
 
 
+def parse_motor_test(payload: bytes) -> dict:
+    if len(payload) >= 26 and payload[0] == 2:
+        return {
+            "version": payload[0],
+            "ready": payload[1],
+            "init": payload[2],
+            "busy": payload[3],
+            "timeout": payload[4],
+            "last_status": payload[5],
+            "last_go": payload[6],
+            "last_mode": payload[7],
+            "last_ctrl": payload[8],
+            "live_status": payload[9],
+            "live_go": payload[10],
+            "live_mode": payload[11],
+            "live_ctrl": payload[12],
+            "diag_z": payload[13],
+            "lra_period": ((payload[14] & 0x03) << 8) | payload[15],
+            "rated": payload[16],
+            "clamp": payload[17],
+            "acal_bemf": payload[18],
+            "fb_ctrl": payload[19],
+            "rated_clamp": payload[20],
+            "drive_time": payload[21],
+            "auto_cal_time": payload[22],
+            "ctrl3": payload[23],
+            "ol_lra_period": ((payload[24] & 0x03) << 8) | payload[25],
+        }
+    if len(payload) >= 14 and payload[0] == 1:
+        return {
+            "version": payload[0],
+            "ready": payload[1],
+            "init": payload[2],
+            "busy": payload[3],
+            "timeout": payload[4],
+            "last_status": payload[5],
+            "last_go": payload[6],
+            "last_mode": payload[7],
+            "last_ctrl": payload[8],
+            "live_status": payload[9],
+            "live_go": payload[10],
+            "diag_z": payload[11],
+            "fb_ctrl": payload[12],
+            "acal_bemf": payload[13],
+        }
+    return {"raw": hex_bytes(payload)}
+
+
 def parse_peer_table(payload: bytes) -> list[dict]:
     if not payload:
         return []
@@ -535,6 +583,23 @@ def parse_event(cmd: int, payload: bytes) -> dict:
 def format_response(message: HostMessage) -> str:
     name = CMD_NAMES.get(message.cmd, f"0x{message.cmd:02X}")
     status = STATUS_NAMES.get(message.status, f"0x{message.status:02X}")
+
+    if message.cmd == CMD_MOTOR_TEST and message.payload:
+        try:
+            info = parse_motor_test(message.payload)
+            if "raw" in info:
+                return f"{name}: {status}, payload={info['raw']}"
+            return (
+                f"{name}: {status}, ready={info['ready']}, init={info['init']}, busy={info['busy']}, "
+                f"timeout={info['timeout']}, last_st=0x{info['last_status']:02X}, "
+                f"live_st=0x{info['live_status']:02X}, live_go={info['live_go']}, "
+                f"mode=0x{info.get('live_mode', 0):02X}, ctrl=0x{info.get('live_ctrl', 0):02X}, "
+                f"diag_z=0x{info.get('diag_z', 0):02X}, rated=0x{info.get('rated', 0):02X}, "
+                f"clamp=0x{info.get('clamp', 0):02X}, fb=0x{info.get('fb_ctrl', 0):02X}, "
+                f"lra_period={info.get('lra_period', 0)}, ol_period={info.get('ol_lra_period', 0)}"
+            )
+        except Exception:
+            return f"{name}: {status}, payload={hex_bytes(message.payload)}"
 
     if message.status != 0:
         if message.cmd == CMD_P2P_CHAT_SEND and message.status == 0x02 and message.payload:

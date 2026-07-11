@@ -463,6 +463,7 @@ static void handle_motor_test(u8 seq, const u8 *payload, u16 len)
 {
     app_motor_pattern_t pattern;
     app_status_t st;
+    app_motor_debug_t debug;
 
     if (!payload || !len) {
         send_rsp(seq, HOST_CMD_MOTOR_TEST, HOST_STATUS_ERR_PARAM, 0, 0);
@@ -470,7 +471,34 @@ static void handle_motor_test(u8 seq, const u8 *payload, u16 len)
     }
     pattern = (app_motor_pattern_t)payload[0];
     st = app_motor_play(pattern);
-    send_rsp(seq, HOST_CMD_MOTOR_TEST, host_status_from_app(st), 0, 0);
+    app_motor_get_debug(&debug);
+    s_rsp_buf[0] = 2;
+    s_rsp_buf[1] = debug.hw_ready;
+    s_rsp_buf[2] = debug.init_attempted;
+    s_rsp_buf[3] = debug.busy;
+    s_rsp_buf[4] = debug.init_timeout;
+    s_rsp_buf[5] = debug.last_status;
+    s_rsp_buf[6] = debug.last_go;
+    s_rsp_buf[7] = debug.last_mode;
+    s_rsp_buf[8] = debug.last_control1;
+    s_rsp_buf[9] = debug.live_status;
+    s_rsp_buf[10] = debug.live_go;
+    s_rsp_buf[11] = debug.live_mode;
+    s_rsp_buf[12] = debug.live_control1;
+    s_rsp_buf[13] = debug.live_diag_z_result;
+    s_rsp_buf[14] = debug.live_lra_period_hi;
+    s_rsp_buf[15] = debug.live_lra_period_lo;
+    s_rsp_buf[16] = debug.live_rated_voltage;
+    s_rsp_buf[17] = debug.live_od_clamp;
+    s_rsp_buf[18] = debug.live_acal_bemf;
+    s_rsp_buf[19] = debug.live_fb_ctrl;
+    s_rsp_buf[20] = debug.live_rated_clamp;
+    s_rsp_buf[21] = debug.live_drive_time;
+    s_rsp_buf[22] = debug.live_auto_cal_time;
+    s_rsp_buf[23] = debug.live_ctrl3;
+    s_rsp_buf[24] = debug.live_ol_lra_period_hi;
+    s_rsp_buf[25] = debug.live_ol_lra_period_lo;
+    send_rsp(seq, HOST_CMD_MOTOR_TEST, host_status_from_app(st), s_rsp_buf, 26);
 }
 
 static void handle_log_enable(u8 seq, const u8 *payload, u16 len)

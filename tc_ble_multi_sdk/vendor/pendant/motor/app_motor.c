@@ -13,6 +13,9 @@
 #define DRV2625_I2C_CLOCK_HZ           200000
 
 #define DRV2625_REG_STATUS             0x01
+#define DRV2625_REG_DIAG_Z_RESULT      0x03
+#define DRV2625_REG_LRA_PERIOD_H       0x05
+#define DRV2625_REG_LRA_PERIOD_L       0x06
 #define DRV2625_REG_MODE               0x07
 #define DRV2625_REG_CONTROL1           0x08
 #define DRV2625_REG_GO                 0x0C
@@ -23,8 +26,16 @@
 #define DRV2625_REG_REPEAT             0x19
 #define DRV2625_REG_RATED_VOLTAGE      0x1F
 #define DRV2625_REG_OD_CLAMP           0x20
+#define DRV2625_REG_ACAL_BEMF          0x22
+#define DRV2625_REG_FEEDBACK_CTRL      0x23
+#define DRV2625_REG_RATED_CLAMP        0x24
 #define DRV2625_REG_DRIVE_TIME         0x27
+#define DRV2625_REG_AUTO_CAL_TIME      0x2A
+#define DRV2625_REG_CONTROL3           0x2C
+#define DRV2625_REG_OL_LRA_PERIOD_H    0x2E
+#define DRV2625_REG_OL_LRA_PERIOD_L    0x2F
 
+#define DRV2625_GO_PLAY                0x01
 #define DRV2625_MODE_STANDBY_OUT       0x48
 #define DRV2625_MODE_AUTO_CALIB        0x4B
 #define DRV2625_CONTROL_LRA            0x80
@@ -38,6 +49,8 @@
 #define MOTOR_BUSY_TWO_US              380000
 #define MOTOR_BUSY_THREE_US            620000
 #define MOTOR_BUSY_ERROR_US            620000
+#define MOTOR_AUTO_CAL_TIMEOUT_US      700000
+#define MOTOR_AUTO_CAL_POLL_US         5000
 
 typedef struct {
     u8 wave;
@@ -52,6 +65,27 @@ static u8 s_busy;
 static u32 s_busy_start_tick;
 static u32 s_busy_us;
 static u32 s_trig_pin;
+static u8 s_init_timeout;
+static u8 s_last_chip_id;
+static u8 s_last_status;
+static u8 s_last_mode;
+static u8 s_last_control1;
+static u8 s_last_go;
+static u8 s_last_diag_z_result;
+static u8 s_last_acal_comp;
+static u8 s_last_acal_bemf;
+
+static void drv2625_bus_init(void)
+{
+    u8 div = (u8)(CLOCK_SYS_CLOCK_HZ / (4 * DRV2625_I2C_CLOCK_HZ));
+
+    if (!div) {
+        div = 1;
+    }
+
+    i2c_gpio_set(I2C_GPIO_GROUP_B6D7);
+    i2c_master_init(DRV2625_I2C_ID, div);
+}
 
 static u8 drv2625_read(u8 reg)
 {
@@ -61,6 +95,18 @@ static u8 drv2625_read(u8 reg)
 static void drv2625_write(u8 reg, u8 val)
 {
     i2c_write_byte(reg, 1, val);
+}
+
+static void drv2625_capture_last(void)
+{
+    s_last_chip_id = drv2625_read(0x00);
+    s_last_status = drv2625_read(DRV2625_REG_STATUS);
+    s_last_mode = drv2625_read(DRV2625_REG_MODE);
+    s_last_control1 = drv2625_read(DRV2625_REG_CONTROL1);
+    s_last_go = drv2625_read(DRV2625_REG_GO);
+    s_last_diag_z_result = drv2625_read(DRV2625_REG_DIAG_Z_RESULT);
+    s_last_acal_comp = drv2625_read(DRV2625_REG_FEEDBACK_CTRL);
+    s_last_acal_bemf = drv2625_read(DRV2625_REG_ACAL_BEMF);
 }
 
 static void drv2625_set_register_mode(void)
@@ -111,18 +157,28 @@ static motor_hw_pattern_t motor_get_hw_pattern(app_motor_pattern_t pattern)
     return hw;
 }
 
-static app_status_t drv2625_init(void)
+static app_status_t drv2625_wait_go_clear(u32 timeout_us)
 {
-    u8 div = (u8)(CLOCK_SYS_CLOCK_HZ / (4 * DRV2625_I2C_CLOCK_HZ));
-    s_init_attempted = 1;
-    s_hw_ready = 0;
+    u32 start_tick = clock_time();
 
-    if (!div) {
-        div = 1;
+    while (drv2625_read(DRV2625_REG_GO) & DRV2625_GO_PLAY) {
+        if (clock_time_exceed(start_tick, timeout_us)) {
+            s_init_timeout = 1;
+            return APP_ERR_STATE;
+        }
+        sleep_us(MOTOR_AUTO_CAL_POLL_US);
     }
 
-    i2c_gpio_set(I2C_GPIO_GROUP_B6D7);
-    i2c_master_init(DRV2625_I2C_ID, div);
+    return APP_OK;
+}
+
+static app_status_t drv2625_init(void)
+{
+    s_init_attempted = 1;
+    s_hw_ready = 0;
+    s_init_timeout = 0;
+
+    drv2625_bus_init();
 
     drv2625_write(DRV2625_REG_MODE, DRV2625_MODE_STANDBY_OUT);
     drv2625_write(DRV2625_REG_MODE, DRV2625_MODE_AUTO_CALIB);
@@ -132,9 +188,11 @@ static app_status_t drv2625_init(void)
     drv2625_write(DRV2625_REG_DRIVE_TIME, 0x10);
     drv2625_write(DRV2625_REG_GO, 0x01);
 
-    sleep_us(100000);
+    drv2625_wait_go_clear(MOTOR_AUTO_CAL_TIMEOUT_US);
 
-    if (drv2625_read(DRV2625_REG_STATUS) & 0x80) {
+    drv2625_capture_last();
+
+    if (s_init_timeout) {
         s_hw_ready = 0;
         return APP_ERR_STATE;
     }
@@ -156,6 +214,15 @@ void app_motor_init(void)
     s_busy = 0;
     s_busy_start_tick = 0;
     s_busy_us = 0;
+    s_init_timeout = 0;
+    s_last_chip_id = 0;
+    s_last_status = 0;
+    s_last_mode = 0;
+    s_last_control1 = 0;
+    s_last_go = 0;
+    s_last_diag_z_result = 0;
+    s_last_acal_comp = 0;
+    s_last_acal_bemf = 0;
 #if (PENDANT_MOTOR_BOOT_INIT_ENABLE)
     drv2625_init();
 #else
@@ -232,6 +299,9 @@ void app_motor_poll(u32 now_tick)
 {
     (void)now_tick;
     if (s_busy && clock_time_exceed(s_busy_start_tick, s_busy_us)) {
+        if (s_hw_ready) {
+            drv2625_write(DRV2625_REG_GO, 0x00);
+        }
         s_busy = 0;
     }
 }
@@ -239,4 +309,67 @@ void app_motor_poll(u32 now_tick)
 u8 app_motor_is_busy(void)
 {
     return s_busy;
+}
+
+void app_motor_get_debug(app_motor_debug_t *debug)
+{
+    if (!debug) {
+        return;
+    }
+
+    debug->hw_ready = s_hw_ready;
+    debug->init_attempted = s_init_attempted;
+    debug->busy = s_busy;
+    debug->init_timeout = s_init_timeout;
+    debug->last_chip_id = s_last_chip_id;
+    debug->last_status = s_last_status;
+    debug->last_mode = s_last_mode;
+    debug->last_control1 = s_last_control1;
+    debug->last_go = s_last_go;
+    debug->last_diag_z_result = s_last_diag_z_result;
+    debug->last_acal_comp = s_last_acal_comp;
+    debug->last_acal_bemf = s_last_acal_bemf;
+
+    if (s_init_attempted) {
+        drv2625_bus_init();
+        debug->live_chip_id = drv2625_read(0x00);
+        debug->live_status = drv2625_read(DRV2625_REG_STATUS);
+        debug->live_mode = drv2625_read(DRV2625_REG_MODE);
+        debug->live_control1 = drv2625_read(DRV2625_REG_CONTROL1);
+        debug->live_go = drv2625_read(DRV2625_REG_GO);
+        debug->live_diag_z_result = drv2625_read(DRV2625_REG_DIAG_Z_RESULT);
+        debug->live_lra_period_hi = drv2625_read(DRV2625_REG_LRA_PERIOD_H);
+        debug->live_lra_period_lo = drv2625_read(DRV2625_REG_LRA_PERIOD_L);
+        debug->live_rated_voltage = drv2625_read(DRV2625_REG_RATED_VOLTAGE);
+        debug->live_od_clamp = drv2625_read(DRV2625_REG_OD_CLAMP);
+        debug->live_acal_comp = drv2625_read(DRV2625_REG_FEEDBACK_CTRL);
+        debug->live_acal_bemf = drv2625_read(DRV2625_REG_ACAL_BEMF);
+        debug->live_fb_ctrl = drv2625_read(DRV2625_REG_FEEDBACK_CTRL);
+        debug->live_rated_clamp = drv2625_read(DRV2625_REG_RATED_CLAMP);
+        debug->live_drive_time = drv2625_read(DRV2625_REG_DRIVE_TIME);
+        debug->live_auto_cal_time = drv2625_read(DRV2625_REG_AUTO_CAL_TIME);
+        debug->live_ctrl3 = drv2625_read(DRV2625_REG_CONTROL3);
+        debug->live_ol_lra_period_hi = drv2625_read(DRV2625_REG_OL_LRA_PERIOD_H);
+        debug->live_ol_lra_period_lo = drv2625_read(DRV2625_REG_OL_LRA_PERIOD_L);
+    } else {
+        debug->live_chip_id = 0;
+        debug->live_status = 0;
+        debug->live_mode = 0;
+        debug->live_control1 = 0;
+        debug->live_go = 0;
+        debug->live_diag_z_result = 0;
+        debug->live_lra_period_hi = 0;
+        debug->live_lra_period_lo = 0;
+        debug->live_rated_voltage = 0;
+        debug->live_od_clamp = 0;
+        debug->live_acal_comp = 0;
+        debug->live_acal_bemf = 0;
+        debug->live_fb_ctrl = 0;
+        debug->live_rated_clamp = 0;
+        debug->live_drive_time = 0;
+        debug->live_auto_cal_time = 0;
+        debug->live_ctrl3 = 0;
+        debug->live_ol_lra_period_hi = 0;
+        debug->live_ol_lra_period_lo = 0;
+    }
 }
