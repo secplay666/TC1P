@@ -31,7 +31,7 @@
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
 
 
-#define ACL_CENTRAL_MAX_NUM								1
+#define ACL_CENTRAL_MAX_NUM								0
 #define ACL_PERIPHR_MAX_NUM								1
 #define MASTER_ACL_PERIPHR_MAX_NUM						(ACL_CENTRAL_MAX_NUM+ACL_PERIPHR_MAX_NUM)
 
@@ -39,7 +39,7 @@
 #define PENDANT_USB_POLL_INTERVAL_US                  2000
 #define PENDANT_USB_AUTO_OFF_MS                       15000
 #define PENDANT_EXT_ADV_ENABLE                        1
-#define APP_BLE_ENABLE_DISCOVERY_SCAN                 1
+#define APP_BLE_ENABLE_DISCOVERY_SCAN                 0
 // Product boards may fail to advertise if PC2/PC3 are switched to UART.
 // Enable only on boards where those pins are dedicated debug UART pins.
 #define PENDANT_UART_PINMUX_ENABLE                    0
@@ -57,6 +57,11 @@
 #define PENDANT_OTA_GUARD_ENABLE                      1
 #define PENDANT_OTA_CONFIRM_DELAY_MS                  15000
 #define PENDANT_OTA_MAX_PENDING_BOOT_ATTEMPTS         2
+/* 0=off, 1=bypass all OTA writes, 2=pass START to otaWrite and bypass DATA,
+ * 3=pass START/DATA0 to otaWrite and bypass DATA1+,
+ * 4=pass START and first PENDANT_OTA_DIAG_REAL_DATA_LIMIT DATA packets. */
+#define PENDANT_OTA_DIAG_BYPASS_OTAWRITE              0
+#define PENDANT_OTA_DIAG_REAL_DATA_LIMIT              64
 
 #if (PENDANT_USB_ENABLE)
 #define MODULE_USB_ENABLE                              1

@@ -3,10 +3,12 @@
 #include "system/app_system.h"
 #include "storage/app_storage.h"
 #include "crypto/app_crypto.h"
+#include "pm/app_pm.h"
 #include "build_info/app_build_info.h"
 #include "stack/ble/ble.h"
 #include "stack/ble/host/l2cap/l2cap.h"
 #include "drivers/B85/driver_ext/mcu_boot.h"
+#include "stack/ble/service/ota/ota.h"
 #include "stack/ble/service/ota/ota_server.h"
 #include "common/string.h"
 #include "drivers.h"
@@ -25,6 +27,18 @@
 #define APP_OTA_ROLLBACK_REASON_BOOT_ATTEMPTS   1
 #define APP_OTA_ROLLBACK_REASON_ANTI_ROLLBACK   2
 #define APP_OTA_ROLLBACK_REASON_MANUAL          3
+#define APP_OTA_DBG_STAGE_REG                   DEEP_ANA_REG6
+#define APP_OTA_DBG_WRITE_LO_REG                DEEP_ANA_REG7
+#define APP_OTA_DBG_WRITE_HI_REG                DEEP_ANA_REG8
+#define APP_OTA_DBG_INDEX_LO_REG                DEEP_ANA_REG9
+#define APP_OTA_DBG_INDEX_HI_REG                DEEP_ANA_REG10
+#define APP_OTA_DBG_STAGE_START                 0xa1
+#define APP_OTA_DBG_STAGE_START_ACCEPTED        0xa2
+#define APP_OTA_DBG_STAGE_DATA                  0xd1
+#define APP_OTA_DBG_STAGE_DIAG_START            0xe1
+#define APP_OTA_DBG_STAGE_DIAG_FLASH_OK         0xe2
+#define APP_OTA_DBG_STAGE_DIAG_FLASH_FAIL       0xe3
+#define APP_OTA_DIAG_TEST_ADDR                  APP_OTA_SLOT1_BASE
 
 typedef struct {
     u32 magic;
@@ -53,6 +67,38 @@ static u32 s_guard_boot_tick;
 static u32 s_guard_meta_addr;
 static u32 s_guard_backup_addr;
 static u8 s_flash_copy_buf[16];
+static u8 s_ota_boot_config_status = 0xff;
+static u16 s_ota_dbg_write_count;
+static u16 s_ota_dbg_data_count;
+static u16 s_ota_dbg_last_index;
+static u8 s_ota_dbg_start_accepted;
+#if (PENDANT_OTA_DIAG_BYPASS_OTAWRITE)
+static u8 s_ota_diag_data0_written;
+static u16 s_ota_diag_real_data_count;
+#endif
+static u32 s_ota_diag_after_write_status;
+
+static u8 app_ota_guard_load(app_ota_guard_record_t *record);
+static app_status_t app_ota_guard_save(const app_ota_guard_record_t *record);
+static void app_ota_guard_default_confirmed(void);
+
+#if (PENDANT_OTA_DIAG_BYPASS_OTAWRITE)
+static void app_ota_diag_persist_after_write(u32 status)
+{
+    if (!s_guard_valid && !app_ota_guard_load(&s_guard)) {
+        app_ota_guard_default_confirmed();
+    }
+    s_guard.pending_version = (s_ota_dbg_start_accepted ? 0x80000000UL : 0) |
+                              ((u32)s_ota_dbg_write_count << 16) |
+                              s_ota_dbg_data_count;
+    s_guard.last_rollback_reason = status;
+    app_ota_guard_save(&s_guard);
+}
+#endif
+
+extern unsigned int ota_program_bootAddr;
+extern unsigned int ota_firmware_max_size;
+extern unsigned int ota_program_offset;
 
 static u32 app_ota_slot_base(u8 slot)
 {
@@ -64,16 +110,35 @@ static u8 app_ota_other_slot(u8 slot)
     return slot ? 0 : 1;
 }
 
+static u8 app_ota_read_slot_boot_mark(u8 slot)
+{
+    u8 mark = 0xff;
+    flash_read_page(app_ota_slot_base(slot) + BOOT_MARK_ADDR, 1, &mark);
+    return mark;
+}
+
+static void app_ota_clear_slot_boot_mark(u8 slot)
+{
+    u8 zero = 0;
+    flash_write_page(app_ota_slot_base(slot) + BOOT_MARK_ADDR, 1, &zero);
+}
+
 static u8 app_ota_detect_active_slot(void)
 {
-    u8 mark0 = 0xff;
-    u8 mark1 = 0xff;
-    flash_read_page(APP_OTA_SLOT0_BASE + BOOT_MARK_ADDR, 1, &mark0);
-    flash_read_page(APP_OTA_SLOT1_BASE + BOOT_MARK_ADDR, 1, &mark1);
+    u8 mark0 = app_ota_read_slot_boot_mark(0);
+    u8 mark1 = app_ota_read_slot_boot_mark(1);
     if (mark1 == BOOT_MARK_VALUE && mark0 != BOOT_MARK_VALUE) {
         return 1;
     }
     return 0;
+}
+
+static void app_ota_guard_note_wakeup_src(void)
+{
+    u8 raw = app_pm_get_raw_wakeup_src();
+    if (raw) {
+        s_guard.reserved = raw;
+    }
 }
 
 static u16 app_ota_guard_crc(const app_ota_guard_record_t *record)
@@ -159,6 +224,7 @@ static void app_ota_guard_default_confirmed(void)
     s_guard.pending_version = 0;
     s_guard.boot_count = 1;
     s_guard.last_rollback_reason = 0;
+    app_ota_guard_note_wakeup_src();
     s_guard_valid = app_ota_guard_save(&s_guard) == APP_OK;
 }
 
@@ -184,7 +250,6 @@ static app_status_t app_ota_guard_backup_slot(u8 slot)
 static void app_ota_guard_request_rollback(u32 reason)
 {
     u8 active;
-    u8 zero = 0;
     u32 previous_base;
 
     if (!s_guard_valid || !s_guard.backup_valid ||
@@ -198,13 +263,54 @@ static void app_ota_guard_request_rollback(u32 reason)
 
     flash_erase_sector(previous_base);
     app_ota_guard_copy_sector(s_guard_backup_addr, previous_base);
-    flash_write_page(app_ota_slot_base(active) + BOOT_MARK_ADDR, 1, &zero);
+    app_ota_clear_slot_boot_mark(active);
 
     s_guard.state = APP_OTA_GUARD_STATE_ROLLED_BACK;
     s_guard.active_slot = s_guard.previous_slot;
     s_guard.pending_slot = APP_OTA_SLOT_INVALID;
     s_guard.boot_attempts = 0;
     s_guard.last_rollback_reason = reason;
+    app_ota_guard_save(&s_guard);
+    start_reboot();
+}
+
+static void app_ota_guard_abort_update(u8 error)
+{
+    u8 active;
+    u8 failed_slot;
+
+    if (!s_guard_valid && !app_ota_guard_load(&s_guard)) {
+        app_ota_guard_default_confirmed();
+    }
+
+    active = app_ota_detect_active_slot();
+    failed_slot = app_ota_other_slot(active);
+    if (s_guard.pending_slot != APP_OTA_SLOT_INVALID) {
+        failed_slot = s_guard.pending_slot;
+    }
+
+    app_ota_clear_slot_boot_mark(failed_slot);
+
+    if (s_guard.backup_valid &&
+        s_guard.previous_slot != APP_OTA_SLOT_INVALID &&
+        app_ota_guard_calc_addresses()) {
+        flash_erase_sector(app_ota_slot_base(s_guard.previous_slot));
+        app_ota_guard_copy_sector(s_guard_backup_addr, app_ota_slot_base(s_guard.previous_slot));
+        active = s_guard.previous_slot;
+    } else if (s_guard.previous_slot != APP_OTA_SLOT_INVALID) {
+        active = s_guard.previous_slot;
+    }
+    s_guard.state = APP_OTA_GUARD_STATE_CONFIRMED;
+    s_guard.active_slot = active;
+    s_guard.previous_slot = active;
+    s_guard.pending_slot = APP_OTA_SLOT_INVALID;
+    s_guard.boot_attempts = 0;
+    s_guard.backup_valid = 0;
+    s_guard.pending_version = (s_ota_dbg_start_accepted ? 0x80000000UL : 0) |
+                              ((u32)s_ota_dbg_write_count << 16) |
+                              s_ota_dbg_data_count;
+    s_guard.last_error = error;
+    s_guard.last_rollback_reason = s_ota_diag_after_write_status;
     app_ota_guard_save(&s_guard);
     start_reboot();
 }
@@ -309,21 +415,16 @@ static void app_ota_on_start(void)
 
     s_ota_active = 1;
     s_ota_last_result = 0xff;
+    s_ota_dbg_start_accepted = 1;
+    analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_START_ACCEPTED);
 
 #if (PENDANT_OTA_GUARD_ENABLE)
     app_ota_guard_prepare_for_update();
 #endif
 
     app_ble_get_conn_info(&info);
-    if (info.connected) {
-        bls_l2cap_requestConnParamUpdate(info.conn_handle,
-                                         CONN_INTERVAL_7P5MS,
-                                         CONN_INTERVAL_15MS,
-                                         0,
-                                         CONN_TIMEOUT_4S);
-    }
+    (void)info;
 
-    /* Keep the active GATT connection quiet while flash is being written. */
     app_ble_set_scan_enabled(0);
     app_ble_set_adv1_enabled(0);
 }
@@ -340,6 +441,9 @@ static void app_ota_on_result(int result)
     s_ota_last_result = (u8)result;
     s_ota_active = 0;
     if (result != 0) {
+#if (PENDANT_OTA_GUARD_ENABLE)
+        app_ota_guard_abort_update((u8)result);
+#endif
         app_ota_restore_idle_radio();
     } else {
 #if (PENDANT_OTA_GUARD_ENABLE)
@@ -351,7 +455,8 @@ static void app_ota_on_result(int result)
 void app_ota_configure_boot(void)
 {
 #if (PENDANT_OTA_ENABLE)
-    blc_ota_setFirmwareSizeAndBootAddress(PENDANT_OTA_FIRMWARE_MAX_K, MULTI_BOOT_ADDR_0x40000);
+    s_ota_boot_config_status = blc_ota_setFirmwareSizeAndBootAddress(PENDANT_OTA_FIRMWARE_MAX_K,
+                                                                      MULTI_BOOT_ADDR_0x40000);
 #endif
 }
 
@@ -369,6 +474,7 @@ void app_ota_guard_boot_check(void)
     active = app_ota_detect_active_slot();
     s_guard.boot_count++;
     s_guard.active_slot = active;
+    app_ota_guard_note_wakeup_src();
 
     if (s_guard.state == APP_OTA_GUARD_STATE_PENDING &&
         active == s_guard.pending_slot) {
@@ -412,10 +518,152 @@ void app_ota_init(void)
     blc_ota_initOtaServer_module();
     blc_ota_setFirmwareVersionNumber((u16)APP_BUILD_VERSION_CODE);
     blc_ota_setOtaProcessTimeout(1000);
-    blc_ota_setOtaDataPacketTimeout(10);
-    blc_ota_setOtaScheduleIndication_by_pduNum(128);
     blc_ota_registerOtaStartCmdCb(app_ota_on_start);
     blc_ota_registerOtaResultIndicationCb(app_ota_on_result);
+#endif
+}
+
+void app_ota_debug_note_write(u16 l2cap_len, const u8 *value, u16 value_len)
+{
+    u16 cmd;
+
+    (void)l2cap_len;
+    if (!value || value_len < 2) {
+        return;
+    }
+
+    cmd = (u16)value[0] | ((u16)value[1] << 8);
+    if (cmd == CMD_OTA_START || cmd == CMD_OTA_START_EXT) {
+        s_ota_dbg_write_count = 0;
+        s_ota_dbg_data_count = 0;
+        s_ota_dbg_last_index = 0xffff;
+        s_ota_dbg_start_accepted = 0;
+        s_ota_diag_after_write_status = 0;
+        analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_START);
+        analog_write(APP_OTA_DBG_WRITE_LO_REG, 0);
+        analog_write(APP_OTA_DBG_WRITE_HI_REG, 0);
+        analog_write(APP_OTA_DBG_INDEX_LO_REG, 0xff);
+        analog_write(APP_OTA_DBG_INDEX_HI_REG, 0xff);
+    }
+    s_ota_dbg_write_count++;
+    analog_write(APP_OTA_DBG_WRITE_LO_REG, (u8)s_ota_dbg_write_count);
+    analog_write(APP_OTA_DBG_WRITE_HI_REG, (u8)(s_ota_dbg_write_count >> 8));
+    if (cmd < CMD_OTA_VERSION) {
+        s_ota_dbg_data_count++;
+        s_ota_dbg_last_index = cmd;
+        analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DATA);
+        analog_write(APP_OTA_DBG_INDEX_LO_REG, (u8)s_ota_dbg_last_index);
+        analog_write(APP_OTA_DBG_INDEX_HI_REG, (u8)(s_ota_dbg_last_index >> 8));
+    }
+}
+
+u8 app_ota_diag_should_bypass_write(const u8 *value, u16 value_len)
+{
+#if (PENDANT_OTA_DIAG_BYPASS_OTAWRITE)
+    u16 cmd;
+    u8 verify[16];
+
+    if (!value || value_len < 2) {
+        return 1;
+    }
+
+    cmd = (u16)value[0] | ((u16)value[1] << 8);
+    if (cmd == CMD_OTA_START || cmd == CMD_OTA_START_EXT) {
+        s_ota_diag_data0_written = 0;
+        s_ota_diag_real_data_count = 0;
+        analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DIAG_START);
+        return PENDANT_OTA_DIAG_BYPASS_OTAWRITE == 1 ? 1 : 0;
+    }
+
+    if (PENDANT_OTA_DIAG_BYPASS_OTAWRITE == 4) {
+        if (cmd < CMD_OTA_VERSION &&
+            s_ota_diag_real_data_count < PENDANT_OTA_DIAG_REAL_DATA_LIMIT) {
+            s_ota_diag_real_data_count++;
+            return 0;
+        }
+        return 1;
+    }
+
+    if (PENDANT_OTA_DIAG_BYPASS_OTAWRITE == 3) {
+        if (cmd < CMD_OTA_VERSION && !s_ota_diag_data0_written) {
+            s_ota_diag_data0_written = 1;
+            return 0;
+        }
+        return 1;
+    }
+
+    if (cmd < CMD_OTA_VERSION && !s_ota_diag_data0_written && value_len >= 18) {
+        s_ota_diag_data0_written = 1;
+        flash_erase_sector(APP_OTA_DIAG_TEST_ADDR);
+        flash_write_page(APP_OTA_DIAG_TEST_ADDR, 16, (u8 *)(value + 2));
+        flash_read_page(APP_OTA_DIAG_TEST_ADDR, 16, verify);
+        if (!memcmp(verify, value + 2, 16)) {
+            analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DIAG_FLASH_OK);
+        } else {
+            analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DIAG_FLASH_FAIL);
+        }
+    }
+    return 1;
+#else
+    (void)value;
+    (void)value_len;
+    return 0;
+#endif
+}
+
+void app_ota_diag_note_after_write(const u8 *value, u16 value_len, int result)
+{
+#if (PENDANT_OTA_DIAG_BYPASS_OTAWRITE)
+    u16 cmd;
+    u8 flash[16];
+    u8 all_ff = 1;
+    u8 i;
+
+    if (!value || value_len < 2) {
+        return;
+    }
+
+    cmd = (u16)value[0] | ((u16)value[1] << 8);
+    if (cmd >= CMD_OTA_VERSION) {
+        s_ota_diag_after_write_status = 0xd0000000UL |
+                                        (((u32)result & 0xffUL) << 16) |
+                                        ((u32)cmd << 8) |
+                                        ((u32)result & 0xffUL);
+        app_ota_diag_persist_after_write(s_ota_diag_after_write_status);
+        return;
+    }
+
+    flash_read_page(APP_OTA_SLOT1_BASE, sizeof(flash), flash);
+    for (i = 0; i < sizeof(flash); i++) {
+        if (flash[i] != 0xff) {
+            all_ff = 0;
+            break;
+        }
+    }
+
+    if (all_ff) {
+        s_ota_diag_after_write_status = 0xf3000000UL |
+                                        (((u32)result & 0xffUL) << 16) |
+                                        cmd;
+        analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DIAG_FLASH_FAIL);
+    } else if (cmd == 0 && value_len >= 18 && !memcmp(flash, value + 2, sizeof(flash))) {
+        s_ota_diag_after_write_status = 0xf1000000UL |
+                                        (((u32)result & 0xffUL) << 16) |
+                                        cmd;
+        analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DIAG_FLASH_OK);
+    } else {
+        s_ota_diag_after_write_status = 0xf2000000UL |
+                                        (((u32)result & 0xffUL) << 16) |
+                                        cmd;
+        analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DIAG_FLASH_OK);
+    }
+    if (cmd == 0) {
+        app_ota_diag_persist_after_write(s_ota_diag_after_write_status);
+    }
+#else
+    (void)value;
+    (void)value_len;
+    (void)result;
 #endif
 }
 
@@ -433,6 +681,14 @@ void app_ota_on_disconnected(void)
     if (s_ota_active) {
         s_ota_last_result = 0x0e;
         s_ota_active = 0;
+#if (PENDANT_OTA_GUARD_ENABLE)
+        app_ota_guard_abort_update(0x0e);
+#endif
+        app_ota_restore_idle_radio();
+    } else if (s_ota_dbg_write_count) {
+#if (PENDANT_OTA_GUARD_ENABLE)
+        app_ota_guard_abort_update(0x0e);
+#endif
         app_ota_restore_idle_radio();
     }
 }
@@ -471,4 +727,17 @@ void app_ota_guard_get_info(app_ota_guard_info_t *info)
     info->last_rollback_reason = s_guard.last_rollback_reason;
     info->meta_addr = s_guard_meta_addr;
     info->backup_addr = s_guard_backup_addr;
+    info->slot0_mark = app_ota_read_slot_boot_mark(0);
+    info->slot1_mark = app_ota_read_slot_boot_mark(1);
+    info->boot_config_status = s_ota_boot_config_status;
+    info->configured_boot_addr = blc_ota_getCurrentUsedMultipleBootAddress();
+    info->program_boot_addr = ota_program_bootAddr;
+    info->program_offset = ota_program_offset;
+    info->firmware_max_size = ota_firmware_max_size;
+    info->debug_stage = analog_read(APP_OTA_DBG_STAGE_REG);
+    info->debug_write_count = ((u16)analog_read(APP_OTA_DBG_WRITE_HI_REG) << 8) |
+                              analog_read(APP_OTA_DBG_WRITE_LO_REG);
+    info->debug_last_index = ((u16)analog_read(APP_OTA_DBG_INDEX_HI_REG) << 8) |
+                             analog_read(APP_OTA_DBG_INDEX_LO_REG);
+    info->debug_boot_wakeup_src = s_guard.reserved;
 }

@@ -278,7 +278,12 @@ async def run_one(
 
     log(f"{target.address}: connecting name={target.name or '-'} rssi={target.rssi}")
     emit("connect", name=target.name, rssi=target.rssi)
-    async with BleakClient(target.address) as client:
+    connect_target: Any = target.address
+    scanned_device = await BleakScanner.find_device_by_address(target.address, timeout=12.0)
+    if scanned_device is not None:
+        connect_target = scanned_device
+        target.name = target.name or (scanned_device.name or "")
+    async with BleakClient(connect_target) as client:
         services = client.services
         if services is None and hasattr(client, "get_services"):
             services = await client.get_services()
@@ -314,7 +319,6 @@ async def run_one(
         log(f"{target.address}: start OTA size={len(firmware)} pdu={pdu_len} chunks={chunks}")
         emit("start", total_bytes=len(firmware), total_chunks=chunks, pdu_len=pdu_len)
         await client.write_gatt_char(ota_char, ota_start_ext_packet(pdu_len), response=write_response)
-        await asyncio.sleep(0.15)
 
         last_print = time.monotonic()
         for index in range(chunks):

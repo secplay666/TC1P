@@ -37,6 +37,9 @@ static u8 s_adv_scan_started;
 static u8 s_adv_update_error_log_count;
 static u8 s_scan_filter_policy;
 static u8 s_adv1_sid;
+static u8 s_resume_adv0_after_disconnect;
+static u8 s_resume_adv1_after_disconnect;
+static u8 s_resume_scan_after_disconnect;
 static u32 s_scan_restart_tick;
 static app_ble_debug_t s_debug;
 
@@ -87,6 +90,9 @@ void app_ble_init(void)
     s_debug.scan_filter_policy = s_scan_filter_policy;
     s_adv_scan_started = 0;
     s_adv_update_error_log_count = 0;
+    s_resume_adv0_after_disconnect = 0;
+    s_resume_adv1_after_disconnect = 0;
+    s_resume_scan_after_disconnect = 0;
     s_scan_restart_tick = 0;
 }
 
@@ -180,6 +186,11 @@ app_status_t app_ble_set_scan_enabled(u8 enable)
                                  enable ? APP_BLE_SCAN_PERIOD : SCAN_WINDOW_CONTINUOUS);
 #else
     (void)enable;
+    s_debug.scan_status = BLE_SUCCESS;
+    s_debug.scan_enabled = 0;
+    s_scan_restart_tick = 0;
+    app_ble_refresh_started();
+    return APP_OK;
 #endif
     s_debug.scan_status = st;
     s_debug.scan_enabled = enable && st == BLE_SUCCESS;
@@ -345,16 +356,21 @@ void app_ble_on_connected(const u8 *peer_addr, u16 conn_handle)
     if (peer_addr) {
         memcpy(s_conn.peer_addr, peer_addr, sizeof(s_conn.peer_addr));
     }
+    s_resume_adv0_after_disconnect = s_debug.adv0_enabled;
+    s_resume_adv1_after_disconnect = s_debug.adv1_enabled;
+    s_resume_scan_after_disconnect = s_debug.scan_enabled;
+
     if (s_debug.scan_enabled) {
-        app_ble_set_scan_enabled(1);
+        app_ble_set_scan_enabled(0);
+    }
+    if (s_debug.adv1_enabled) {
+        app_ble_set_adv1_enabled(0);
     }
     app_event_post(APP_EVT_APP_CONNECTED, 0, 0);
 }
 
 void app_ble_on_disconnected(u8 reason)
 {
-    ble_sts_t adv_st;
-
     s_debug.last_disconnect_reason = reason;
     s_debug.last_conn_handle = s_conn.conn_handle;
     s_debug.disconnect_count++;
@@ -362,14 +378,18 @@ void app_ble_on_disconnected(u8 reason)
     s_debug.connected = 0;
     s_debug.conn_handle = 0;
     s_conn.conn_handle = 0;
-    if (s_adv_scan_started) {
-#if PENDANT_EXT_ADV_ENABLE
-        adv_st = blc_ll_setExtAdvEnable(BLC_ADV_ENABLE, APP_BLE_APP_ADV_HANDLE, 0, 0);
-#else
-        adv_st = blc_ll_setAdvEnable(BLC_ADV_ENABLE);
-#endif
-        s_debug.adv0_status = adv_st;
+    if (s_resume_adv0_after_disconnect) {
+        app_ble_set_adv0_enabled(1);
     }
+    if (s_resume_adv1_after_disconnect) {
+        app_ble_set_adv1_enabled(1);
+    }
+    if (s_resume_scan_after_disconnect) {
+        app_ble_set_scan_enabled(1);
+    }
+    s_resume_adv0_after_disconnect = 0;
+    s_resume_adv1_after_disconnect = 0;
+    s_resume_scan_after_disconnect = 0;
     app_event_post(APP_EVT_APP_DISCONNECTED, &reason, sizeof(reason));
 }
 

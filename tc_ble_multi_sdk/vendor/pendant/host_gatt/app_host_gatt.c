@@ -1,4 +1,5 @@
 #include "app_host_gatt.h"
+#include "../app_ota.h"
 #include "../host_cmd/app_host_cmd.h"
 #include "stack/ble/ble.h"
 #include "stack/ble/ble_format.h"
@@ -101,6 +102,7 @@ static u16 s_conn_handle;
 
 static int app_host_gatt_cmd_write_cb(u16 conn_handle, void *p);
 static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p);
+static int app_host_gatt_ota_write_cb(u16 conn_handle, void *p);
 
 static const attribute_t s_att_table[] = {
     {ATT_HANDLE_END - 1, 0, 0, 0, 0, 0, 0, 0},
@@ -126,7 +128,7 @@ static const attribute_t s_att_table[] = {
 
     {5, ATT_PERMISSIONS_READ, 2, sizeof(s_uuid_ota_service), (u8 *)&s_uuid_primary_service, (u8 *)s_uuid_ota_service, 0, 0},
     {0, ATT_PERMISSIONS_READ, 2, sizeof(s_ota_char_decl), (u8 *)&s_uuid_character, (u8 *)s_ota_char_decl, 0, 0},
-    {0, ATT_PERMISSIONS_RDWR, 16, sizeof(s_ota_value), (u8 *)s_uuid_ota_data, &s_ota_value, otaWrite, 0},
+    {0, ATT_PERMISSIONS_RDWR, 16, sizeof(s_ota_value), (u8 *)s_uuid_ota_data, &s_ota_value, app_host_gatt_ota_write_cb, 0},
     {0, ATT_PERMISSIONS_RDWR, 2, sizeof(s_ota_ccc), (u8 *)&s_uuid_ota_client_char_cfg, s_ota_ccc, app_host_gatt_ccc_write_cb, 0},
     {0, ATT_PERMISSIONS_READ, 2, sizeof(s_ota_desc), (u8 *)&s_uuid_user_desc, (u8 *)s_ota_desc, 0, 0},
 };
@@ -219,6 +221,35 @@ static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p)
         s_ota_ccc[1] = U16_HI(value);
     }
     return 0;
+}
+
+static int app_host_gatt_ota_write_cb(u16 conn_handle, void *p)
+{
+    rf_packet_att_t *pkt = (rf_packet_att_t *)p;
+    u8 ota_buf[517 + 6];
+    rf_packet_att_data_t *ota_pkt = (rf_packet_att_data_t *)ota_buf;
+    u16 value_len;
+    int ret;
+
+    if (!pkt || pkt->l2capLen < 3) {
+        return 0;
+    }
+
+    value_len = (u16)(pkt->l2capLen - 3);
+    app_ota_debug_note_write(pkt->l2capLen, pkt->dat, value_len);
+    if (app_ota_diag_should_bypass_write(pkt->dat, value_len)) {
+        return 0;
+    }
+
+    ota_pkt->att = pkt->opcode;
+    ota_pkt->handle = pkt->handle;
+    ota_pkt->l2cap = value_len + 3;
+    ota_pkt->rf_len = value_len + 7;
+    memcpy(ota_pkt->dat, pkt->dat, value_len);
+
+    ret = otaWrite(conn_handle, ota_pkt);
+    app_ota_diag_note_after_write(pkt->dat, value_len, ret);
+    return ret;
 }
 
 void app_host_gatt_init(void)

@@ -248,7 +248,8 @@ final class HostProtocol {
                 payload.length >= 56 ? u8(payload[46]) : 0,
                 payload.length >= 56 ? u8(payload[47]) : 0,
                 payload.length >= 56 ? u32le(payload, 48) : 0,
-                payload.length >= 56 ? u32le(payload, 52) : 0);
+                payload.length >= 56 ? u32le(payload, 52) : 0,
+                payload.length >= 74 ? u16le(payload, 72) : 0);
     }
 
     static List<PeerInfo> parsePeerTable(byte[] payload) {
@@ -507,8 +508,15 @@ final class HostProtocol {
         int fwMinor = u8(payload[2]);
         int fwPatch = u8(payload[4]);
         long versionCode = payload.length >= 56 ? u32le(payload, 36) : 0;
+        String otaMarks = payload.length >= 58
+                ? String.format(Locale.US, " ota_mark=%02X/%02X", u8(payload[56]), u8(payload[57]))
+                : "";
+        String otaBoot = payload.length >= 68
+                ? String.format(Locale.US, " ota_boot=0x%05X/0x%05X",
+                u32le(payload, 60), u32le(payload, 64))
+                : "";
         return String.format(Locale.US,
-                "%s: short_id=0x%08X eid=%s fw=%d.%d.%d code=%d hw=%d key=%d cmds=%d logs=%d host_frame=%d adv=%d",
+                "%s: short_id=0x%08X eid=%s fw=%d.%d.%d code=%d hw=%d key=%d cmds=%d logs=%d host_frame=%d adv=%d%s%s",
                 name,
                 u32le(payload, 8),
                 hex(Arrays.copyOfRange(payload, 12, 28)),
@@ -521,7 +529,9 @@ final class HostProtocol {
                 u16le(payload, 28),
                 u16le(payload, 30),
                 u8(payload[34]),
-                u8(payload[35]));
+                u8(payload[35]),
+                otaMarks,
+                otaBoot);
     }
 
     private static String formatPeerTable(String name, byte[] payload) {
@@ -722,6 +732,7 @@ final class HostProtocol {
         final int otaLastResult;
         final long otaConfirmedVersion;
         final long otaPendingVersion;
+        final int otaDebugBootWakeupSrc;
 
         DeviceInfo(int protocolVersion, int hardwareRevision, int firmwareMajor, int firmwareMinor,
                    int firmwarePatch, int keyId, int privacyMode, long shortId, byte[] eid,
@@ -729,7 +740,7 @@ final class HostProtocol {
                    int advProtocolVersion, long firmwareVersionCode,
                    int otaGuardValid, int otaGuardState, int otaActiveSlot, int otaPendingSlot,
                    int otaBootAttempts, int otaBackupValid, int otaLastError, int otaLastResult,
-                   long otaConfirmedVersion, long otaPendingVersion) {
+                   long otaConfirmedVersion, long otaPendingVersion, int otaDebugBootWakeupSrc) {
             this.protocolVersion = protocolVersion;
             this.hardwareRevision = hardwareRevision;
             this.firmwareMajor = firmwareMajor;
@@ -755,6 +766,7 @@ final class HostProtocol {
             this.otaLastResult = otaLastResult;
             this.otaConfirmedVersion = otaConfirmedVersion;
             this.otaPendingVersion = otaPendingVersion;
+            this.otaDebugBootWakeupSrc = otaDebugBootWakeupSrc;
         }
 
         String firmwareVersion() {

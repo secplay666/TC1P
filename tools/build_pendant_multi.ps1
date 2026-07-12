@@ -25,9 +25,16 @@ if (!(Test-Path -LiteralPath (Join-Path $projectDir ".project"))) {
 
 if (Test-Path -LiteralPath $buildInfoScript) {
     & $buildInfoScript -RepoRoot $repoRoot
-    $buildInfoUser = Join-Path $buildDir "vendor\pendant\debug_shell\app_debug_shell_cmd.o"
-    if (Test-Path -LiteralPath $buildInfoUser) {
-        Remove-Item -LiteralPath $buildInfoUser -Force
+    $buildInfoUsers = @(
+        "vendor\pendant\app_ota.o",
+        "vendor\pendant\host_cmd\app_host_cmd.o",
+        "vendor\pendant\debug_shell\app_debug_shell_cmd.o"
+    )
+    foreach ($relativePath in $buildInfoUsers) {
+        $buildInfoUser = Join-Path $buildDir $relativePath
+        if (Test-Path -LiteralPath $buildInfoUser) {
+            Remove-Item -LiteralPath $buildInfoUser -Force
+        }
     }
 }
 

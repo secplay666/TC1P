@@ -5,14 +5,14 @@
 
 #define APP_BUILD_FW_NAME          "glimmer"
 #define APP_BUILD_FW_VERSION       "0.1.0-dev"
-#define APP_BUILD_VERSION_CODE     100
+#define APP_BUILD_VERSION_CODE     120
 #define APP_BUILD_BOARD_NAME       "B85_DANGLE"
 #define APP_BUILD_CHIP_NAME        "TLSR8258"
 
-#define APP_BUILD_GIT_SHA          "484b9f9efa01"
+#define APP_BUILD_GIT_SHA          "e23dcc51b823"
 #define APP_BUILD_GIT_BRANCH       "master"
 #define APP_BUILD_GIT_DIRTY        1
-#define APP_BUILD_GIT_DESC         "484b9f9efa01-dirty"
+#define APP_BUILD_GIT_DESC         "e23dcc51b823-dirty"
 
 #define APP_BUILD_COMPILE_DATE     __DATE__
 #define APP_BUILD_COMPILE_TIME     __TIME__

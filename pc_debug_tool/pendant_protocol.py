@@ -365,6 +365,26 @@ def parse_device_info(payload: bytes) -> dict:
                 "ota_pending_version": u32le(payload, 52),
             }
         )
+        if len(payload) >= 58:
+            info.update(
+                {
+                    "ota_slot0_mark": payload[56],
+                    "ota_slot1_mark": payload[57],
+                }
+            )
+        if len(payload) >= 72:
+            info.update(
+                {
+                    "ota_boot_config_status": payload[58],
+                    "ota_debug_stage": payload[59],
+                    "ota_configured_boot_addr": u32le(payload, 60),
+                    "ota_program_boot_addr": u32le(payload, 64),
+                    "ota_debug_write_count": u16le(payload, 68),
+                    "ota_debug_last_index": u16le(payload, 70),
+                }
+            )
+        if len(payload) >= 74:
+            info["ota_debug_boot_wakeup_src"] = u16le(payload, 72)
     else:
         info["fw_version_code"] = 0
     return info

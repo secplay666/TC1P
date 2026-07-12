@@ -416,6 +416,37 @@ static void cmd_ota(u8 argc, char **argv)
     app_debug_shell_cmd_print_u32(" rollback=", info.last_rollback_reason);
     app_debug_shell_cmd_print_u32(" meta=0x", info.meta_addr);
     app_debug_shell_cmd_print_u32(" backup_addr=0x", info.backup_addr);
+    app_debug_shell_cmd_print_u8(" slot0_mark=0x", info.slot0_mark);
+    app_debug_shell_cmd_print_u8(" slot1_mark=0x", info.slot1_mark);
+    app_debug_shell_cmd_print_u8(" boot_cfg=", info.boot_config_status);
+    app_debug_shell_cmd_print_u32(" cfg_boot=0x", info.configured_boot_addr);
+    app_debug_shell_cmd_print_u32(" prog_boot=0x", info.program_boot_addr);
+    app_debug_shell_cmd_print_u32(" prog_off=0x", info.program_offset);
+    app_debug_shell_cmd_print_u32(" max_size=0x", info.firmware_max_size);
+    app_debug_shell_cmd_print_u8(" dbg_stage=0x", info.debug_stage);
+    app_debug_shell_cmd_print_u32(" dbg_writes=", info.debug_write_count);
+    app_debug_shell_cmd_print_u32(" dbg_idx=", info.debug_last_index);
+    app_debug_shell_cmd_print_u32(" wake_src=0x", info.debug_boot_wakeup_src);
+}
+
+static void cmd_otadbg(u8 argc, char **argv)
+{
+    app_ota_guard_info_t info;
+    (void)argc;
+    (void)argv;
+
+    app_ota_guard_get_info(&info);
+    app_debug_shell_cmd_puts("OD a=");
+    print_hex_u32(app_ota_is_active());
+    app_debug_shell_cmd_puts(" r=");
+    print_hex_u32(app_ota_last_result());
+    app_debug_shell_cmd_puts(" s=");
+    print_hex_u32(info.debug_stage);
+    app_debug_shell_cmd_puts(" w=");
+    print_hex_u32(info.debug_write_count);
+    app_debug_shell_cmd_puts(" i=");
+    print_hex_u32(info.debug_last_index);
+    app_debug_shell_cmd_puts("\r\n");
 }
 
 static void cmd_profile(u8 argc, char **argv)
@@ -1240,6 +1271,7 @@ void app_debug_shell_cmd_init(void)
     app_debug_shell_cmd_register("ping", "ping", "check shell", cmd_ping);
     app_debug_shell_cmd_register("build", "build", "show build info", cmd_build);
     app_debug_shell_cmd_register("ota", "ota", "show OTA guard state", cmd_ota);
+    app_debug_shell_cmd_register("otadbg", "otadbg", "show short OTA debug state", cmd_otadbg);
     app_debug_shell_cmd_register("info", "info", "show device info", cmd_info);
     app_debug_shell_cmd_register("profile", "profile [set <nick> <signature>]", "show or update profile card", cmd_profile);
     app_debug_shell_cmd_register("peers", "peers", "show peer table", cmd_peers);

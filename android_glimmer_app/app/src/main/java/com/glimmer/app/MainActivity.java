@@ -54,6 +54,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -98,6 +100,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final long AVATAR_CLIENT_TAG = -1L;
     private static final String ACTION_DEBUG_CHAT = "com.glimmer.app.DEBUG_CHAT";
     private static final String ACTION_DEBUG_PRIVACY = "com.glimmer.app.DEBUG_PRIVACY";
+    private static final String ACTION_DEBUG_OTA = "com.glimmer.app.DEBUG_OTA";
     private static final String CHAT_STATUS_QUEUED = "排队中";
     private static final String CHAT_STATUS_SENDING = "发送中";
     private static final String CHAT_STATUS_DELIVERED = "已送达";
@@ -161,6 +164,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             handleDebugPrivacyIntent(intent);
         }
     };
+    private final BroadcastReceiver debugOtaReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            handleDebugOtaIntent(intent);
+        }
+    };
     private final Runnable chatSendTimeoutRunnable = new Runnable() {
         @Override
         public void run() {
@@ -190,6 +199,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private int otaSentChunks;
     private int otaTotalChunks;
     private int otaScheduleBytes;
+    private String pendingDebugOtaPath;
     private Uri avatarEditUri;
     private CropImageView avatarCropView;
 
@@ -343,6 +353,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         registerDebugChatReceiver();
         registerDebugFileReceiver();
         registerDebugPrivacyReceiver();
+        registerDebugOtaReceiver();
         showTab(0);
         maybeStartBoundReconnect();
     }
@@ -387,6 +398,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         unregisterDebugChatReceiver();
         unregisterDebugFileReceiver();
         unregisterDebugPrivacyReceiver();
+        unregisterDebugOtaReceiver();
         super.onDestroy();
     }
 
@@ -1327,6 +1339,42 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         } catch (IllegalArgumentException ignored) {
             // Receiver may not be registered if activity setup was interrupted.
         }
+    }
+
+    private void registerDebugOtaReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(ACTION_DEBUG_OTA);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(debugOtaReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(debugOtaReceiver, filter);
+        }
+    }
+
+    private void unregisterDebugOtaReceiver() {
+        if (!isDebugBuild()) {
+            return;
+        }
+        try {
+            unregisterReceiver(debugOtaReceiver);
+        } catch (IllegalArgumentException ignored) {
+            // Receiver may not be registered if activity setup was interrupted.
+        }
+    }
+
+    private void handleDebugOtaIntent(Intent intent) {
+        Log.i("GlimmerOTA", "DEBUG_OTA received");
+        if (intent == null || !ACTION_DEBUG_OTA.equals(intent.getAction()) || !isDebugBuild()) {
+            return;
+        }
+        String path = intent.getStringExtra("path");
+        if (TextUtils.isEmpty(path)) {
+            setLocalStatus("DEBUG_OTA missing path");
+            return;
+        }
+        startOtaFromDebugPath(path);
     }
 
     private void handleDebugPrivacyIntent(Intent intent) {
@@ -2368,7 +2416,37 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }).start();
     }
 
+    private void startOtaFromDebugPath(String path) {
+        Log.i("GlimmerOTA", "DEBUG_OTA start path=" + path
+                + " ready=" + (bleClient != null && bleClient.isOtaReady()));
+        if (bleClient == null || !bleClient.isOtaReady()) {
+            pendingDebugOtaPath = path;
+            setLocalStatus("DEBUG_OTA not ready");
+            maybeStartBoundReconnect();
+            return;
+        }
+        pendingDebugOtaPath = null;
+        otaStatus = "DEBUG_OTA reading firmware";
+        rerenderCurrentTab();
+        new Thread(() -> {
+            try (InputStream input = new FileInputStream(new File(path))) {
+                byte[] firmware = readAllBytes(input);
+                Log.i("GlimmerOTA", "DEBUG_OTA read bytes=" + firmware.length);
+                handler.post(() -> startOtaWithFirmware(firmware));
+            } catch (IOException | RuntimeException e) {
+                Log.w("GlimmerOTA", "DEBUG_OTA read failed", e);
+                handler.post(() -> {
+                    otaRunning = false;
+                    otaStatus = "DEBUG_OTA read failed";
+                    setLocalStatus("DEBUG_OTA read failed");
+                    rerenderCurrentTab();
+                });
+            }
+        }).start();
+    }
+
     private void startOtaWithFirmware(byte[] firmware) {
+        Log.i("GlimmerOTA", "startOtaWithFirmware bytes=" + (firmware == null ? 0 : firmware.length));
         if (bleClient == null || !bleClient.isOtaReady()) {
             otaRunning = false;
             otaSentChunks = 0;
@@ -2421,6 +2499,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
 
             @Override
             public void onOtaFailed(String reason) {
+                Log.w("GlimmerOTA", "OTA failed: " + reason);
                 otaRunning = false;
                 otaStatus = "OTA 失败：" + reason;
                 setLocalStatus(otaStatus);
@@ -3619,6 +3698,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             handler.postDelayed(() -> requestPeerProfilesPage(0), 900);
             handler.postDelayed(autoSyncRunnable, AUTO_SYNC_INTERVAL_MS);
             enqueueAvatarForKnownPeers();
+            if (!TextUtils.isEmpty(pendingDebugOtaPath)) {
+                String path = pendingDebugOtaPath;
+                handler.postDelayed(() -> startOtaFromDebugPath(path), 300);
+            }
         }
         rerenderCurrentTabForBackgroundUpdate();
     }

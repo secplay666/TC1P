@@ -301,7 +301,16 @@ static void handle_get_device_info(u8 seq)
     s_rsp_buf[47] = app_ota_last_result();
     wr32(&s_rsp_buf[48], ota.confirmed_version);
     wr32(&s_rsp_buf[52], ota.pending_version);
-    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 56);
+    s_rsp_buf[56] = ota.slot0_mark;
+    s_rsp_buf[57] = ota.slot1_mark;
+    s_rsp_buf[58] = ota.boot_config_status;
+    s_rsp_buf[59] = ota.debug_stage;
+    wr32(&s_rsp_buf[60], ota.configured_boot_addr);
+    wr32(&s_rsp_buf[64], ota.program_boot_addr);
+    wr16(&s_rsp_buf[68], ota.debug_write_count);
+    wr16(&s_rsp_buf[70], ota.debug_last_index);
+    wr16(&s_rsp_buf[72], ota.debug_boot_wakeup_src);
+    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 74);
 }
 
 static void handle_get_system_state(u8 seq)

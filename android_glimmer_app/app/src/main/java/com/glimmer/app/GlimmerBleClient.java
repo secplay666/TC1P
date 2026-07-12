@@ -81,8 +81,11 @@ final class GlimmerBleClient {
     private static final int OTA_CMD_SCHEDULE_FW_SIZE = 0xFF09;
     private static final int OTA_PDU_LEN = 16;
     private static final int OTA_REQUEST_MTU = 83;
+    private static final boolean REQUEST_MTU_ON_CONNECT = false;
     private static final int OTA_MAX_FIRMWARE_BYTES = 188 * 1024;
-    private static final long OTA_WRITE_PACE_MS = 2;
+    private static final boolean OTA_WRITE_WITHOUT_RESPONSE = false;
+    private static final long OTA_FIRST_DATA_DELAY_MS = 1000;
+    private static final long OTA_WRITE_PACE_MS = 50;
 
     private final Context context;
     private final Listener listener;
@@ -463,7 +466,9 @@ final class GlimmerBleClient {
                     connectedAddress = pendingAddress == null ? gatt.getDevice().getAddress() : pendingAddress;
                     pendingAddress = null;
                     listener.onBleStatus("已连接，正在发现服务");
-                    if (!gatt.requestMtu(OTA_REQUEST_MTU)) {
+                    if (!REQUEST_MTU_ON_CONNECT) {
+                        handler.postDelayed(() -> discoverServices(gatt), 150);
+                    } else if (!gatt.requestMtu(OTA_REQUEST_MTU)) {
                         discoverServices(gatt);
                     } else {
                         handler.postDelayed(() -> discoverServices(gatt), 1200);
@@ -520,9 +525,6 @@ final class GlimmerBleClient {
                 notifyQueue.add(rspChar);
                 notifyQueue.add(logChar);
                 notifyQueue.add(evtChar);
-                if (otaChar != null) {
-                    notifyQueue.add(otaChar);
-                }
                 subscribeNext();
             });
         }
@@ -547,6 +549,9 @@ final class GlimmerBleClient {
                 if (otaChar != null && characteristic.getUuid().equals(otaChar.getUuid())) {
                     if (status != BluetoothGatt.GATT_SUCCESS) {
                         failOta("OTA write failed: " + status);
+                        return;
+                    }
+                    if (OTA_WRITE_WITHOUT_RESPONSE) {
                         return;
                     }
                     if (otaSession != null && otaSession.endSent
@@ -764,9 +769,15 @@ final class GlimmerBleClient {
             failOta("OTA connection lost");
             return;
         }
+        Log.i(TAG, "OTA write start withoutResponse=" + OTA_WRITE_WITHOUT_RESPONSE
+                + " firstDelayMs=" + OTA_FIRST_DATA_DELAY_MS
+                + " paceMs=" + OTA_WRITE_PACE_MS);
         if (!writeOtaPacket(otaStartExtPacket())) {
             failOta("OTA start failed");
             return;
+        }
+        if (OTA_WRITE_WITHOUT_RESPONSE) {
+            handler.postDelayed(this::writeNextOtaData, OTA_FIRST_DATA_DELAY_MS);
         }
     }
 
@@ -793,11 +804,17 @@ final class GlimmerBleClient {
                 failOta("OTA end failed");
                 return;
             }
+            if (OTA_WRITE_WITHOUT_RESPONSE && otaSession.listener != null) {
+                otaSession.listener.onOtaWaitingForResult();
+            }
             return;
         }
 
         int index = otaSession.nextIndex;
         int offset = index * OTA_PDU_LEN;
+        if (index == 0 || (index & 0x01ff) == 0) {
+            Log.i(TAG, "OTA write data index=" + index + "/" + otaSession.totalChunks);
+        }
         if (!writeOtaPacket(otaDataPacket(index, otaSession.firmware, offset))) {
             failOta("OTA write failed");
             return;
@@ -807,6 +824,9 @@ final class GlimmerBleClient {
             otaSession.listener.onOtaProgress(otaSession.nextIndex, otaSession.totalChunks,
                     otaSession.scheduleBytes);
         }
+        if (OTA_WRITE_WITHOUT_RESPONSE) {
+            handler.postDelayed(this::writeNextOtaData, OTA_WRITE_PACE_MS);
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -814,11 +834,13 @@ final class GlimmerBleClient {
         if (gatt == null || otaChar == null) {
             return false;
         }
+        int writeType = OTA_WRITE_WITHOUT_RESPONSE
+                ? BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                : BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            return gatt.writeCharacteristic(otaChar, packet,
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS;
+            return gatt.writeCharacteristic(otaChar, packet, writeType) == BluetoothStatusCodes.SUCCESS;
         }
-        otaChar.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+        otaChar.setWriteType(writeType);
         otaChar.setValue(packet);
         return gatt.writeCharacteristic(otaChar);
     }
@@ -851,6 +873,7 @@ final class GlimmerBleClient {
 
     private void failOta(String reason) {
         OtaListener otaListener = otaSession == null ? null : otaSession.listener;
+        Log.w(TAG, "OTA failed: " + reason);
         otaActive = false;
         otaSession = null;
         if (otaListener != null) {
