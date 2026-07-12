@@ -1374,6 +1374,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             setLocalStatus("DEBUG_OTA missing path");
             return;
         }
+        pendingDebugOtaPath = path;
+        if (bleClient != null) {
+            bleClient.setOtaPreferredConnect(true);
+            if (debugReady) {
+                debugReady = false;
+                bleClient.disconnect();
+                maybeStartBoundReconnect();
+                return;
+            }
+        }
         startOtaFromDebugPath(path);
     }
 
@@ -3695,12 +3705,13 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
             handler.removeCallbacks(autoReconnectRunnable);
             handler.removeCallbacks(autoSyncRunnable);
-            handler.postDelayed(() -> requestPeerProfilesPage(0), 900);
-            handler.postDelayed(autoSyncRunnable, AUTO_SYNC_INTERVAL_MS);
-            enqueueAvatarForKnownPeers();
             if (!TextUtils.isEmpty(pendingDebugOtaPath)) {
                 String path = pendingDebugOtaPath;
                 handler.postDelayed(() -> startOtaFromDebugPath(path), 300);
+            } else {
+                handler.postDelayed(() -> requestPeerProfilesPage(0), 900);
+                handler.postDelayed(autoSyncRunnable, AUTO_SYNC_INTERVAL_MS);
+                enqueueAvatarForKnownPeers();
             }
         }
         rerenderCurrentTabForBackgroundUpdate();

@@ -175,12 +175,19 @@ def ota_start_ext_packet(pdu_len: int) -> bytes:
     return struct.pack("<HBB16s", CMD_OTA_START_EXT, pdu_len, 0, bytes(16))
 
 
-def ota_data_packet(index: int, chunk: bytes, pdu_len: int) -> bytes:
+def ota_data_packet(index: int, chunk: bytes, pdu_len: int, index_mode: str = "packet") -> bytes:
     if len(chunk) > pdu_len:
         raise ValueError("chunk too long")
+    if not chunk:
+        raise ValueError("chunk is empty")
     if len(chunk) < pdu_len:
-        chunk = chunk + bytes([0xFF]) * (pdu_len - len(chunk))
-    body = struct.pack("<H", index) + chunk
+        padded_len = ((len(chunk) + 15) // 16) * 16
+        chunk = chunk + bytes([0xFF]) * (padded_len - len(chunk))
+    if index_mode == "packet":
+        adr_index = index
+    else:
+        adr_index = index * (pdu_len // 16)
+    body = struct.pack("<H", adr_index) + chunk
     return body + struct.pack("<H", crc16(body))
 
 
@@ -243,11 +250,16 @@ async def run_one(
     target: OtaTarget,
     firmware: bytes,
     pdu_len: int,
+    index_mode: str,
     pace_s: float,
     write_response: bool,
+    pre_start_delay_s: float,
+    max_chunks: int = 0,
+    wwr_window_pdus: int = 0,
     package_version_code: int = 0,
     allow_downgrade: bool = False,
     progress: Optional[ProgressCallback] = None,
+    connect_timeout_s: float = 25.0,
 ) -> bool:
     result_code: Optional[int] = None
     schedule_count = 0
@@ -283,7 +295,7 @@ async def run_one(
     if scanned_device is not None:
         connect_target = scanned_device
         target.name = target.name or (scanned_device.name or "")
-    async with BleakClient(connect_target) as client:
+    async with BleakClient(connect_target, timeout=connect_timeout_s, winrt={"use_cached_services": False}) as client:
         services = client.services
         if services is None and hasattr(client, "get_services"):
             services = await client.get_services()
@@ -313,20 +325,43 @@ async def run_one(
             await client.start_notify(ota_char, on_notify)
         except Exception as exc:
             log(f"{target.address}: notify unavailable: {exc}")
+        if pre_start_delay_s > 0:
+            await asyncio.sleep(pre_start_delay_s)
 
         chunks = math.ceil(len(firmware) / pdu_len)
-        max_index = chunks - 1
-        log(f"{target.address}: start OTA size={len(firmware)} pdu={pdu_len} chunks={chunks}")
+        index_step = 1 if index_mode == "packet" else (pdu_len // 16)
+        max_index = (chunks * index_step) - 1
+        log(f"{target.address}: start OTA size={len(firmware)} pdu={pdu_len} index={index_mode} chunks={chunks}")
         emit("start", total_bytes=len(firmware), total_chunks=chunks, pdu_len=pdu_len)
-        await client.write_gatt_char(ota_char, ota_start_ext_packet(pdu_len), response=write_response)
+        await client.write_gatt_char(ota_char, ota_start_ext_packet(pdu_len), response=True)
+        log(f"{target.address}: OTA_START_EXT sent")
+        if not write_response:
+            await asyncio.sleep(max(0.05, pace_s))
 
         last_print = time.monotonic()
         for index in range(chunks):
+            if max_chunks > 0 and index >= max_chunks:
+                log(f"{target.address}: debug stop after {max_chunks}/{chunks} chunks")
+                emit("debug_stop", sent_chunks=max_chunks, total_chunks=chunks)
+                return False
             start = index * pdu_len
-            packet = ota_data_packet(index, firmware[start:start + pdu_len], pdu_len)
+            packet = ota_data_packet(index, firmware[start:start + pdu_len], pdu_len, index_mode)
             await client.write_gatt_char(ota_char, packet, response=write_response)
             if pace_s > 0:
                 await asyncio.sleep(pace_s)
+            if not write_response and wwr_window_pdus > 0 and index + 1 >= wwr_window_pdus:
+                wait_deadline = time.monotonic() + 8.0
+                while (index + 1) - schedule_count >= wwr_window_pdus:
+                    if result_code is not None:
+                        raise OtaResult(result_code)
+                    if not client.is_connected:
+                        raise ConnectionError("Not connected")
+                    if time.monotonic() >= wait_deadline:
+                        raise TimeoutError(
+                            f"OTA schedule stalled: sent={index + 1}, confirmed={schedule_count}, "
+                            f"window={wwr_window_pdus}"
+                        )
+                    await asyncio.sleep(0.02)
             now = time.monotonic()
             if now - last_print >= 1.0 or index + 1 == chunks:
                 percent = (index + 1) * 100.0 / chunks
@@ -347,7 +382,7 @@ async def run_one(
             )
 
         await asyncio.sleep(0.15)
-        await client.write_gatt_char(ota_char, ota_end_packet(max_index), response=write_response)
+        await client.write_gatt_char(ota_char, ota_end_packet(max_index), response=True)
         log(f"{target.address}: OTA_END sent max_index={max_index}")
         emit("end_sent", max_index=max_index)
 
@@ -355,6 +390,10 @@ async def run_one(
         while time.monotonic() < deadline:
             if result_code is not None:
                 if result_code == 0:
+                    log(f"{target.address}: success result received; waiting for device reboot")
+                    reboot_deadline = time.monotonic() + 10.0
+                    while time.monotonic() < reboot_deadline and client.is_connected:
+                        await asyncio.sleep(0.2)
                     emit("done")
                     return True
                 raise OtaResult(result_code)
@@ -404,21 +443,36 @@ async def run(args: argparse.Namespace) -> int:
     ok_count = 0
     for index, target in enumerate(targets, start=1):
         log(f"=== OTA {index}/{len(targets)} {target.address} ===")
-        try:
-            if await run_one(
-                target,
-                firmware,
-                args.pdu_len,
-                args.pace_ms / 1000.0,
-                args.write_response,
-                package_version_code=image.version_code if image.signed else 0,
-                allow_downgrade=args.allow_downgrade or args.force,
-            ):
-                ok_count += 1
-        except Exception as exc:
-            log(f"{target.address}: FAIL {exc}")
-            if args.stop_on_error:
+        for attempt in range(1, args.connect_retries + 1):
+            try:
+                if await run_one(
+                    target,
+                    firmware,
+                    args.pdu_len,
+                    args.index_mode,
+                    args.pace_ms / 1000.0,
+                    args.write_response,
+                    args.pre_start_delay_ms / 1000.0,
+                    max_chunks=args.max_chunks,
+                    wwr_window_pdus=args.wwr_window_pdus,
+                    package_version_code=image.version_code if image.signed else 0,
+                    allow_downgrade=args.allow_downgrade or args.force,
+                    connect_timeout_s=args.connect_timeout_s,
+                ):
+                    ok_count += 1
                 break
+            except asyncio.CancelledError as exc:
+                log(f"{target.address}: BLE operation cancelled on attempt {attempt}/{args.connect_retries}")
+                if attempt >= args.connect_retries:
+                    if args.stop_on_error:
+                        raise RuntimeError("BLE operation cancelled repeatedly") from exc
+                    break
+                await asyncio.sleep(1.5 * attempt)
+            except Exception as exc:
+                log(f"{target.address}: FAIL {type(exc).__name__}: {exc!r}")
+                if attempt >= args.connect_retries or args.stop_on_error:
+                    break
+                await asyncio.sleep(1.5 * attempt)
         await asyncio.sleep(args.gap)
 
     log(f"done: {ok_count}/{len(targets)} succeeded")
@@ -433,7 +487,9 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="max scanned devices, 0 means all")
     parser.add_argument("--scan-timeout", type=float, default=8.0)
     parser.add_argument("--pdu-len", type=int, default=16, help="OTA firmware payload per packet; PC Windows BLE usually requires 16")
+    parser.add_argument("--index-mode", choices=("packet", "block16"), default="packet", help="OTA adr_index mode for extended PDU diagnostics")
     parser.add_argument("--pace-ms", type=float, default=0.0, help="delay between OTA data writes")
+    parser.add_argument("--pre-start-delay-ms", type=float, default=200.0, help="delay after enabling OTA notify before START")
     parser.add_argument("--write-response", dest="write_response", action="store_true", default=True, help="use GATT write-with-response")
     parser.add_argument("--no-write-response", dest="write_response", action="store_false", help="use GATT write-without-response")
     parser.add_argument("--gap", type=float, default=3.0, help="delay between multiple devices")
@@ -444,6 +500,10 @@ def main() -> int:
     parser.add_argument("--current-version-code", type=int, default=0, help="device firmware version code for anti-rollback checks")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--stop-on-error", action="store_true")
+    parser.add_argument("--connect-retries", type=int, default=3, help="retry BLE connect/service discovery cancellations")
+    parser.add_argument("--connect-timeout-s", type=float, default=25.0, help="BLE connect/service discovery timeout")
+    parser.add_argument("--max-chunks", type=int, default=0, help="diagnostic: stop after N OTA data chunks without sending OTA_END")
+    parser.add_argument("--wwr-window-pdus", type=int, default=0, help="write-without-response flow-control window using OTA schedule indications")
     args = parser.parse_args()
     return asyncio.run(run(args))
 

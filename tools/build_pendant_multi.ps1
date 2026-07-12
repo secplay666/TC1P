@@ -3,7 +3,8 @@ param(
     [string]$WorkspacePath = ".telink_workspace",
     [switch]$KeepWorkspace,
     [switch]$Headless,
-    [switch]$Clean
+    [switch]$Clean,
+    [int]$VersionCode = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +25,7 @@ if (!(Test-Path -LiteralPath (Join-Path $projectDir ".project"))) {
 }
 
 if (Test-Path -LiteralPath $buildInfoScript) {
-    & $buildInfoScript -RepoRoot $repoRoot
+    & $buildInfoScript -RepoRoot $repoRoot -VersionCode $VersionCode
     $buildInfoUsers = @(
         "vendor\pendant\app_ota.o",
         "vendor\pendant\host_cmd\app_host_cmd.o",

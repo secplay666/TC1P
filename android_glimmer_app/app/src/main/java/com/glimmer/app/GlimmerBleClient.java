@@ -110,6 +110,7 @@ final class GlimmerBleClient {
     private boolean debugReady;
     private boolean writeInProgress;
     private boolean otaActive;
+    private boolean otaPreferredConnect;
     private boolean serviceDiscoveryRequested;
     private String connectedAddress;
     private String pendingAddress;
@@ -133,6 +134,10 @@ final class GlimmerBleClient {
 
     boolean isOtaReady() {
         return debugReady && gatt != null && otaChar != null && !otaActive;
+    }
+
+    void setOtaPreferredConnect(boolean enabled) {
+        otaPreferredConnect = enabled;
     }
 
     List<ScanDevice> getScanDevices() {
@@ -356,13 +361,15 @@ final class GlimmerBleClient {
         }
 
         otaActive = true;
+        otaPreferredConnect = false;
         txQueue.clear();
+        writeInProgress = false;
         otaSession = new OtaSession(firmware, otaListener);
         listener.onBleStatus("OTA start v" + image.versionCode);
         if (otaListener != null) {
             otaListener.onOtaProgress(0, otaSession.totalChunks, 0);
         }
-        writeOtaStartWhenIdle();
+        handler.postDelayed(this::writeOtaStartWhenIdle, 250);
     }
 
     void requestFullSync() {
@@ -570,6 +577,11 @@ final class GlimmerBleClient {
                 if (CMD_WRITE_WITHOUT_RESPONSE) {
                     return;
                 }
+                if (otaActive) {
+                    writeInProgress = false;
+                    txQueue.clear();
+                    return;
+                }
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     Log.w(TAG, "onCharacteristicWrite failed status=" + status
                             + " uuid=" + characteristic.getUuid());
@@ -649,11 +661,16 @@ final class GlimmerBleClient {
         }
         BluetoothGattCharacteristic characteristic = notifyQueue.poll();
         if (characteristic == null) {
-            Log.i(TAG, "debug channel ready; requesting full sync");
+            boolean skipInitialSync = otaPreferredConnect;
+            Log.i(TAG, skipInitialSync
+                    ? "debug channel ready; OTA preferred"
+                    : "debug channel ready; requesting full sync");
             debugReady = true;
             listener.onBleStatus("我的 Glimmer 已连接");
             listener.onDebugReady(true);
-            requestFullSync();
+            if (!skipInitialSync) {
+                requestFullSync();
+            }
             return;
         }
 
@@ -710,6 +727,11 @@ final class GlimmerBleClient {
 
     @SuppressLint("MissingPermission")
     private void writeNextPacket() {
+        if (otaActive) {
+            txQueue.clear();
+            writeInProgress = false;
+            return;
+        }
         if (gatt == null || cmdChar == null) {
             writeInProgress = false;
             txQueue.clear();
@@ -908,17 +930,23 @@ final class GlimmerBleClient {
     }
 
     private byte[] otaDataPacket(int index, byte[] firmware, int offset) {
-        byte[] packet = new byte[OTA_PDU_LEN + 4];
-        wr16(packet, 0, index);
-        int copy = Math.min(OTA_PDU_LEN, firmware.length - offset);
-        if (copy > 0) {
-            System.arraycopy(firmware, offset, packet, 2, copy);
+        int remaining = firmware.length - offset;
+        if (remaining <= 0) {
+            throw new IllegalArgumentException("empty OTA chunk");
         }
-        for (int i = 2 + copy; i < 2 + OTA_PDU_LEN; i++) {
+        int copy = Math.min(OTA_PDU_LEN, remaining);
+        if (copy <= 0) {
+            copy = OTA_PDU_LEN;
+        }
+        int payloadLen = copy < OTA_PDU_LEN ? ((copy + 15) / 16) * 16 : OTA_PDU_LEN;
+        byte[] packet = new byte[payloadLen + 4];
+        wr16(packet, 0, index);
+        System.arraycopy(firmware, offset, packet, 2, copy);
+        for (int i = 2 + copy; i < 2 + payloadLen; i++) {
             packet[i] = (byte) 0xFF;
         }
-        int crc = crc16(packet, 0, OTA_PDU_LEN + 2);
-        wr16(packet, OTA_PDU_LEN + 2, crc);
+        int crc = crc16(packet, 0, payloadLen + 2);
+        wr16(packet, payloadLen + 2, crc);
         return packet;
     }
 

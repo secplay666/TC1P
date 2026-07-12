@@ -53,7 +53,12 @@
 // Keep BLE startup independent from optional haptic hardware probing.
 #define PENDANT_MOTOR_BOOT_INIT_ENABLE                0
 #define PENDANT_OTA_ENABLE                            1
-#define PENDANT_OTA_FIRMWARE_MAX_K                    188
+/* Slot1 is 0x40000..0x6ffff on 512K flash. Telink OTA needs one 4K
+ * scratch/reserved sector after the declared firmware area, so keep the
+ * firmware cap at 184K and leave 0x6e000 for the OTA stack. 0x6f000 is
+ * then available for Glimmer rollback backup metadata.
+ */
+#define PENDANT_OTA_FIRMWARE_MAX_K                    184
 #define PENDANT_OTA_GUARD_ENABLE                      1
 #define PENDANT_OTA_CONFIRM_DELAY_MS                  15000
 #define PENDANT_OTA_MAX_PENDING_BOOT_ATTEMPTS         2

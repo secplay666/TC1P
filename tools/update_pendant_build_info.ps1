@@ -1,5 +1,6 @@
 param(
-    [string]$RepoRoot = ""
+    [string]$RepoRoot = "",
+    [int]$VersionCode = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,7 +44,7 @@ $content = @"
 
 #define APP_BUILD_FW_NAME          "glimmer"
 #define APP_BUILD_FW_VERSION       "0.1.0-dev"
-#define APP_BUILD_VERSION_CODE     120
+#define APP_BUILD_VERSION_CODE     $VersionCode
 #define APP_BUILD_BOARD_NAME       "B85_DANGLE"
 #define APP_BUILD_CHIP_NAME        "TLSR8258"
 

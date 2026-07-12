@@ -21,7 +21,7 @@ class IdentityWriter:
         self.messages: list[proto.HostMessage] = []
 
     async def __aenter__(self) -> "IdentityWriter":
-        self.client = BleakClient(self.address)
+        self.client = BleakClient(self.address, winrt={"use_cached_services": False})
         await self.client.connect(timeout=15.0)
         services = self.client.services
         if services is None and hasattr(self.client, "get_services"):

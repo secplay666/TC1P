@@ -217,7 +217,11 @@ class BleWorker:
         self.post("status", text=f"连接 {address} ...")
         self.assembler.reset()
 
-        self.client = BleakClient(address, disconnected_callback=self._on_disconnected)
+        self.client = BleakClient(
+            address,
+            disconnected_callback=self._on_disconnected,
+            winrt={"use_cached_services": False},
+        )
         await self.client.connect(timeout=15.0)
         self.post("status", text="已连接，发现 GATT 服务...")
 
@@ -321,8 +325,10 @@ class BleWorker:
                         target,
                         firmware,
                         pdu_len,
+                        "packet",
                         pace_ms / 1000.0,
                         write_response,
+                        0.2,
                         package_version_code=image.version_code if image.signed else 0,
                         allow_downgrade=force,
                         progress=on_progress,

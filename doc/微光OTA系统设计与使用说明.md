@@ -17,11 +17,11 @@
 
 - 有线/基础固件 slot：`0x00000`
 - OTA 目标 slot：`0x40000`
-- OTA firmware max：`188KB`
+- OTA firmware max：`184KB`
 - OTA guard metadata：应用存储区前 1 个 sector
 - 旧 slot 首 sector 备份：应用存储区前 2 个 sector
 
-`PENDANT_OTA_FIRMWARE_MAX_K` 从 192KB 收紧到 188KB，是为了在不移动现有身份、配置、profile 等应用分区的前提下，给 OTA guard metadata 和旧 slot 首 sector 备份留出空间。
+`PENDANT_OTA_FIRMWARE_MAX_K` 从 192KB 收紧到 184KB，是为了在不移动现有身份、配置、profile 等应用分区的前提下，给 Telink OTA 保留 sector、OTA guard metadata 和旧 slot 首 sector 备份留出空间。512KB Flash 当前关键布局为：slot1 固件区 `0x40000..0x6DFFF`，Telink OTA 保留区 `0x6E000..0x6EFFF`，旧 slot 首 sector 备份 `0x6F000..0x6FFFF`，OTA guard/snapshot `0x70000..0x70FFF`。
 
 ## 签名包格式
 

@@ -88,7 +88,7 @@ class Endpoint:
     responses: list[str] = field(default_factory=list)
 
     async def connect(self) -> None:
-        self.client = BleakClient(self.address)
+        self.client = BleakClient(self.address, winrt={"use_cached_services": False})
         await self.client.connect(timeout=15.0)
         services = self.client.services
         if services is None and hasattr(self.client, "get_services"):

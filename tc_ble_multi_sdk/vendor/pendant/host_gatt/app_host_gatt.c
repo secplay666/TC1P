@@ -6,7 +6,7 @@
 #include "stack/ble/service/ota/ota_server.h"
 #include "common/string.h"
 
-#define HOST_GATT_NOTIFY_QUEUE_SIZE 8
+#define HOST_GATT_NOTIFY_QUEUE_SIZE 16
 
 enum {
     ATT_HANDLE_NONE = 0,
@@ -226,8 +226,6 @@ static int app_host_gatt_ccc_write_cb(u16 conn_handle, void *p)
 static int app_host_gatt_ota_write_cb(u16 conn_handle, void *p)
 {
     rf_packet_att_t *pkt = (rf_packet_att_t *)p;
-    u8 ota_buf[517 + 6];
-    rf_packet_att_data_t *ota_pkt = (rf_packet_att_data_t *)ota_buf;
     u16 value_len;
     int ret;
 
@@ -241,15 +239,9 @@ static int app_host_gatt_ota_write_cb(u16 conn_handle, void *p)
         return 0;
     }
 
-    ota_pkt->att = pkt->opcode;
-    ota_pkt->handle = pkt->handle;
-    ota_pkt->l2cap = value_len + 3;
-    ota_pkt->rf_len = value_len + 7;
-    memcpy(ota_pkt->dat, pkt->dat, value_len);
-
-    ret = otaWrite(conn_handle, ota_pkt);
+    ret = otaWrite(conn_handle, p);
     app_ota_diag_note_after_write(pkt->dat, value_len, ret);
-    return ret;
+    return 0;
 }
 
 void app_host_gatt_init(void)
