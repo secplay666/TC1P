@@ -126,6 +126,23 @@ static void app_ota_clear_slot_boot_mark(u8 slot)
     flash_write_page(app_ota_slot_base(slot) + BOOT_MARK_ADDR, 1, &zero);
 }
 
+/* The Telink OTA server writes without erasing and verifies by read-back,
+ * so any programmed byte left in the target slot head (e.g. a cleared boot
+ * mark) makes the next update fail with OTA_WRITE_FLASH_ERR. */
+static void app_ota_erase_slot_head_if_dirty(u8 slot)
+{
+    u8 head[16];
+    u8 i;
+
+    flash_read_page(app_ota_slot_base(slot), sizeof(head), head);
+    for (i = 0; i < sizeof(head); i++) {
+        if (head[i] != 0xff) {
+            flash_erase_sector(app_ota_slot_base(slot));
+            return;
+        }
+    }
+}
+
 static u8 app_ota_detect_active_slot(void)
 {
     u8 mark0 = app_ota_read_slot_boot_mark(0);
@@ -292,7 +309,8 @@ static void app_ota_guard_abort_update(u8 error)
         failed_slot = s_guard.pending_slot;
     }
 
-    app_ota_clear_slot_boot_mark(failed_slot);
+    /* Erase rather than zero the boot mark so the slot stays writable. */
+    flash_erase_sector(app_ota_slot_base(failed_slot));
 
     if (s_guard.backup_valid &&
         s_guard.previous_slot != APP_OTA_SLOT_INVALID &&
@@ -420,6 +438,7 @@ static void app_ota_on_start(void)
     s_ota_last_result = 0xff;
     s_ota_dbg_start_accepted = 1;
     analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_START_ACCEPTED);
+    app_ota_erase_slot_head_if_dirty(app_ota_other_slot(app_ota_detect_active_slot()));
 
 #if (PENDANT_OTA_GUARD_ENABLE)
     app_ota_guard_prepare_for_update();
