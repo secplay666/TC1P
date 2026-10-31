@@ -554,17 +554,6 @@ static void cmd_peers(u8 argc, char **argv)
     }
 }
 
-static void cmd_beacon(u8 argc, char **argv)
-{
-    app_status_t st;
-    (void)argc;
-    (void)argv;
-
-    st = app_adv_scheduler_request_beacon_update();
-    app_debug_shell_cmd_puts("[DBG] beacon\r\n");
-    app_debug_shell_cmd_print_u8(" st=", (u8)st);
-}
-
 #if APP_DEBUG_SHELL_ENABLE_ADV_TEST_CMDS
 static void cmd_send(u8 argc, char **argv)
 {
@@ -1177,29 +1166,6 @@ static void cmd_reset(u8 argc, char **argv)
     app_debug_shell_cmd_puts("[DBG] reset\r\n");
     sleep_ms(20);
     start_reboot();
-}
-
-static void cmd_usb(u8 argc, char **argv)
-{
-    if (argc == 1) {
-        app_debug_shell_cmd_puts("[DBG] usb\r\n");
-        app_debug_shell_cmd_print_u8(" en=", app_usb_download_is_enabled());
-        return;
-    }
-
-    if (argc == 2 && str_eq(argv[1], "on")) {
-        app_usb_download_set_enabled(1);
-        app_debug_shell_cmd_puts("[DBG] usb on\r\n");
-        return;
-    }
-
-    if (argc == 2 && str_eq(argv[1], "off")) {
-        app_usb_download_set_enabled(0);
-        app_debug_shell_cmd_puts("[DBG] usb off\r\n");
-        return;
-    }
-
-    app_debug_shell_cmd_puts("[DBG] usage: usb [on|off]\r\n");
 }
 
 static void lower_command_name(char *text)

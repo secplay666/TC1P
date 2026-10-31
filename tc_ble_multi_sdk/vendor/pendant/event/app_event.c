@@ -52,8 +52,4 @@ app_status_t app_event_fetch(app_event_t *event)
     s_count--;
     return APP_OK;
 }
-
-u8 app_event_pending_count(void)
-{
-    return s_count;
-}
+

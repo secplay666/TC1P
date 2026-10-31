@@ -30,7 +30,6 @@
 #include "app_ota.h"
 #include "app_buffer.h"
 #include "default_att.h"
-#include "app_ui.h"
 #include "app_pendant.h"
 #include "host_gatt/app_host_gatt.h"
 #include "system/app_system.h"
@@ -42,7 +41,6 @@
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
 
 
-int	central_smp_pending = 0; 		// SMP: security & encryption;
 
 #if (PENDANT_USB_ENABLE)
 static u8 s_usb_download_enabled;
@@ -513,64 +511,8 @@ static u8 app_ext_adv_reasm_report(extAdvEvt_info_t *info, const u8 **out_data, 
  */
 int app_le_adv_report_event_handle(u8 *p)
 {
-#if 1
-	event_adv_report_t *pa = (event_adv_report_t *)p;
-	s8 rssi = pa->data[pa->len];
-	(void)rssi;
-
+	(void)p;
 	AA_dbg_adv_rpt ++;
-
-	#if 0  //debug, print ADV report number
-		if(clock_time_exceed(tick_adv_rpt, 200000)){
-//			tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]Adv report", pa->mac, 6);
-			tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]Adv report", pa->mac, pa->len + 7);
-			tick_adv_rpt = clock_time();
-		}
-	#endif
-
-
-	/*********************** Master Create connection demo: Key press or ADV pair packet triggers pair  ********************/
-#if (ACL_CENTRAL_MAX_NUM && PENDANT_DEMO_CENTRAL_CONNECT_ENABLE)
-	if(central_smp_pending ){ 	 //if previous connection SMP not finish, can not create a new connection
-		return 1;
-	}
-	if (central_disconnect_connhandle){ //one master connection is in un_pair disconnection flow, do not create a new one
-		return 1;
-	}
-
-	int central_auto_connect = 0;
-	int user_manual_pairing = 0;
-
-	//manual pairing methods 1: key press triggers
-	user_manual_pairing = central_pairing_enable && (rssi > -56);  //button trigger pairing(RSSI threshold, short distance)
-
-	#if (ACL_CENTRAL_SMP_ENABLE)
-		central_auto_connect = blc_smp_searchBondingSlaveDevice_by_PeerMacAddress(pa->adr_type, pa->mac);
-	#else
-		//search in slave mac_address table to find whether this device is an old device which has already paired with master
-	#endif
-
-
-	if(central_auto_connect || user_manual_pairing){
-
-
-		/* send create connection command to Controller, trigger it switch to initiating state. After this command, Controller
-		 * will scan all the ADV packets it received but not report to host, to find the specified device(mac_adr_type & mac_adr),
-		 * then send a "CONN_REQ" packet, enter to connection state and send a connection complete event
-		 * (HCI_SUB_EVT_LE_CONNECTION_COMPLETE) to Host*/
-		u8 status = blc_ll_createConnection( SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS, INITIATE_FP_ADV_SPECIFY,  \
-								 pa->adr_type, pa->mac, OWN_ADDRESS_PUBLIC, \
-								 CONN_INTERVAL_31P25MS, CONN_INTERVAL_31P25MS, 0, CONN_TIMEOUT_4S, \
-								 0, 0xFFFF);
-
-		if(status != BLE_SUCCESS){
-
-		}
-	}
-#endif
-	/*********************** Master Create connection demo code end  *******************************************************/
-
-#endif
 	return 0;
 }
 
@@ -683,105 +625,6 @@ int app_le_ext_adv_report_event_handle(u8 *p, int evt_data_len)
 		}
 
 
-		u8 ext_evtType = pExtAdvInfo->event_type & EXTADV_RPT_EVTTYPE_MASK;
-		//u8 data_status = pExtAdvInfo->event_type & EXTADV_RPT_DATA_STATUS_MASK;
-
-		int conn_adv_flag = 0;
-		/* Legacy ADV */
-		if(ext_evtType == EXTADV_RPT_EVTTYPE_LEGACY_ADV_IND || ext_evtType == EXTADV_RPT_EVTTYPE_LEGACY_ADV_DIRECT_IND){
-			 /* Legacy connectable */
-			conn_adv_flag = 1;  //legacy
-		}
-		else if(ext_evtType == EXTADV_RPT_EVTTYPE_LEGACY_ADV_SCAN_IND){
-
-		}
-		else if(ext_evtType == EXTADV_RPT_EVTTYPE_LEGACY_ADV_NONCONN_IND){
-
-		}
-		else if(ext_evtType == EXTADV_RPT_EVTTYPE_LEGACY_SCAN_RSP_2_ADV_IND || ext_evtType == EXTADV_RPT_EVTTYPE_LEGACY_SCAN_RSP_2_ADV_SCAN_IND){
-
-		}
-		/* Extended ADV */
-		else if(ext_evtType == EXTADV_RPT_EVTTYPE_EXT_NON_CONN_NON_SCAN_UNDIRECTED || ext_evtType == EXTADV_RPT_EVTTYPE_EXT_NON_CONN_NON_SCAN_DIRECTED){
-			/* Extended, Non_Connectable Non_Scannable Undirected */
-		}
-		else if(ext_evtType == EXTADV_RPT_EVTTYPE_EXT_CONNECTABLE_UNDIRECTED || ext_evtType == EXTADV_RPT_EVTTYPE_EXT_CONNECTABLE_DIRECTED){
-			/* Extended, Connectable Undirected */
-			conn_adv_flag = 2;  //Extended
-			//tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]ext_conn_adv", pExtAdvInfo, EXTADV_INFO_LENGTH + pExtAdvInfo->data_length);
-		}
-		else if(ext_evtType == EXTADV_RPT_EVTTYPE_EXT_SCANNABLE_UNDIRECTED || ext_evtType == EXTADV_RPT_EVTTYPE_EXT_SCANNABLE_DIRECTED){
-			/* Extended, Scannable Undirected */
-		}
-		else if(ext_evtType == EXTADV_RPT_EVTTYPE_EXT_SCAN_RESPONSE){
-
-		}
-
-
-
-
-		if(conn_adv_flag)
-		{
-#if (ACL_CENTRAL_MAX_NUM && PENDANT_DEMO_CENTRAL_CONNECT_ENABLE)
-				/*********************** Master Create connection demo: Key press or ADV pair packet triggers pair  ********************/
-				if(central_smp_pending ){ 	 //if previous connection SMP not finish, can not create a new connection
-					return 1;
-				}
-				if (central_disconnect_connhandle){ //one master connection is in un_pair disconnection flow, do not create a new one
-					return 1;
-				}
-
-				int central_auto_connect = 0;
-				int user_manual_pairing = 0;
-
-				//manual pairing methods 1: key press triggers
-				user_manual_pairing = central_pairing_enable && (rssi > -56);  //button trigger pairing(RSSI threshold, short distance)
-
-				#if (ACL_CENTRAL_SMP_ENABLE)
-					central_auto_connect = blc_smp_searchBondingSlaveDevice_by_PeerMacAddress(pExtAdvInfo->address_type, pExtAdvInfo->address);
-				#else
-					//search in slave mac_address table to find whether this device is an old device which has already paired with master
-				#endif
-
-
-				if(central_auto_connect || user_manual_pairing){
-
-
-					/* send create connection command to Controller, trigger it switch to initiating state. After this command, Controller
-					 * will scan all the ADV packets it received but not report to host, to find the specified device(mac_adr_type & mac_adr),
-					 * then send a "CONN_REQ" packet, enter to connection state and send a connection complete event
-					 * (HCI_SUB_EVT_LE_CONNECTION_COMPLETE) to Host*/
-					u8 status;
-					if(conn_adv_flag == 1){ //legacy
-						/* only 1M used */
-
-						status = blc_ll_extended_createConnection( INITIATE_FP_ADV_SPECIFY, OWN_ADDRESS_PUBLIC, pExtAdvInfo->address_type, pExtAdvInfo->address, INIT_PHY_1M, \
-																   SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS, CONN_INTERVAL_31P25MS, CONN_INTERVAL_31P25MS, CONN_TIMEOUT_4S, \
-																   0, 0, 0, 0, 0, \
-																   0, 0, 0, 0, 0);
-
-					}
-					else{
-						status = blc_ll_extended_createConnection( INITIATE_FP_ADV_SPECIFY, OWN_ADDRESS_PUBLIC, pExtAdvInfo->address_type, pExtAdvInfo->address, INIT_PHY_1M, \
-																   SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS, CONN_INTERVAL_31P25MS, CONN_INTERVAL_31P25MS, CONN_TIMEOUT_4S, \
-																   SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS, CONN_INTERVAL_31P25MS, CONN_INTERVAL_31P25MS, CONN_TIMEOUT_4S, \
-																   SCAN_INTERVAL_100MS, SCAN_WINDOW_100MS, CONN_INTERVAL_31P25MS, CONN_INTERVAL_31P25MS, CONN_TIMEOUT_4S);
-
-					}
-
-					if(status != BLE_SUCCESS){
-//						DBG_CHN7_TOGGLE;
-						if(status != HCI_ERR_CONN_REJ_LIMITED_RESOURCES){
-							tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]ext init fail", &status, 1);
-						}
-					}
-					else{
-//						DBG_CHN6_TOGGLE;
-						tlkapi_send_string_data(APP_LOG_EN, "[APP][EVT]ext init ok", &status, 1);
-					}
-				}
-#endif
-		}
 
 
 	}
@@ -811,14 +654,6 @@ int app_le_enhanced_connection_complete_event_handle(u8 *p)
 			app_pendant_on_app_connected(pConnEvt->PeerAddr, pConnEvt->connHandle);
 		}
 
-		if( pConnEvt->role == ACL_ROLE_CENTRAL ) // master role, process SMP and SDP if necessary
-		{
-			#if (ACL_CENTRAL_SMP_ENABLE)
-				central_smp_pending = pConnEvt->connHandle; // this connection need SMP
-			#else
-
-			#endif
-		}
 	}
 
 	return 0;
@@ -849,34 +684,6 @@ int app_le_connection_complete_event_handle(u8 *p)
 int 	app_disconnect_event_handle(u8 *p)
 {
 	event_disconnection_t	*pCon = (event_disconnection_t *)p;
-
-	//terminate reason
-	if(pCon->reason == HCI_ERR_CONN_TIMEOUT){  	//connection timeout
-
-	}
-	else if(pCon->reason == HCI_ERR_REMOTE_USER_TERM_CONN){  	//peer device send terminate command on link layer
-
-	}
-	//master host disconnect( blm_ll_disconnect(current_connHandle, HCI_ERR_REMOTE_USER_TERM_CONN) )
-	else if(pCon->reason == HCI_ERR_CONN_TERM_BY_LOCAL_HOST){
-
-	}
-	else{
-
-	}
-
-
-
-	//if previous connection SMP & SDP not finished, clear flag
-#if (ACL_CENTRAL_SMP_ENABLE)
-	if(central_smp_pending == pCon->connHandle){
-		central_smp_pending = 0;
-	}
-#endif
-
-	if(central_disconnect_connhandle == pCon->connHandle){  //un_pair disconnection flow finish, clear flag
-		central_disconnect_connhandle = 0;
-	}
 
 	if(dev_char_get_conn_role_by_connhandle(pCon->connHandle) == ACL_ROLE_PERIPHERAL){
 		u_printf("[APP][EVT] disconnect\r\n");
@@ -956,111 +763,9 @@ int app_controller_event_callback(u32 h, u8 *p, int n)
 
 
 
-/**
- * @brief      BLE host event handler call-back.
- * @param[in]  h       event type
- * @param[in]  para    Pointer point to event parameter buffer.
- * @param[in]  n       the length of event parameter.
- * @return
- */
-int app_host_event_callback(u32 h, u8 *para, int n)
-{
-	u8 event = h & 0xFF;
-
-	switch(event)
-	{
-		case GAP_EVT_SMP_PAIRING_BEGIN:
-		{
-		}
-		break;
-
-		case GAP_EVT_SMP_PAIRING_SUCCESS:
-		{
-		}
-		break;
-
-		case GAP_EVT_SMP_PAIRING_FAIL:
-		{
-		#if (ACL_CENTRAL_SMP_ENABLE)
-			gap_smp_pairingFailEvt_t *p = (gap_smp_pairingFailEvt_t *)para;
-
-			if( dev_char_get_conn_role_by_connhandle(p->connHandle) == ACL_ROLE_CENTRAL){  //master connection
-				if(central_smp_pending == p->connHandle){
-					central_smp_pending = 0;
-				}
-			}
-		#endif
-		}
-		break;
-
-		case GAP_EVT_SMP_CONN_ENCRYPTION_DONE:
-		{
-
-		}
-		break;
-
-		case GAP_EVT_SMP_SECURITY_PROCESS_DONE:
-		{
-		#if (ACL_CENTRAL_SMP_ENABLE)
-			gap_smp_securityProcessDoneEvt_t* p = (gap_smp_securityProcessDoneEvt_t*)para;
-
-			if( dev_char_get_conn_role_by_connhandle(p->connHandle) == ACL_ROLE_CENTRAL){  //master connection
-
-				if(central_smp_pending == p->connHandle){
-					central_smp_pending = 0;
-				}
-
-			}
-		#endif
-		}
-		break;
-		case GAP_EVT_ATT_EXCHANGE_MTU:
-		{
-
-		}
-		break;
-
-		case GAP_EVT_GATT_HANDLE_VALUE_CONFIRM:
-		{
-
-		}
-		break;
-
-		default:
-		break;
-	}
-
-	return 0;
-}
 
 
 
-/**
- * @brief       This function is used to send consumer HID report by USB.
- * @param[in]   conn     - connection handle
- * @param[in]   p        - Pointer point to data buffer.
- * @return
- */
-void	att_keyboard_media (u16 conn, u8 *p)
-{
-	(void)conn;
-	u16 consumer_key = p[0] | p[1]<<8;
-
-#if (!UI_LED_ENABLE)
-	(void)consumer_key;
-#endif
-
-#if (1 && UI_LED_ENABLE)	//Demo effect: when slave send Vol+/Vol- to master, LED GPIO toggle to show the result
-	if(consumer_key == MKEY_VOL_UP){
-		gpio_toggle(GPIO_LED_GREEN);
-	}
-	else if(consumer_key == MKEY_VOL_DN){
-		gpio_toggle(GPIO_LED_BLUE);
-	}
-#endif
-}
-
-#define			HID_HANDLE_CONSUME_REPORT			25
 /**
  * @brief      BLE GATT data handler call-back.
  * @param[in]  connHandle     connection handle.
@@ -1069,58 +774,8 @@ void	att_keyboard_media (u16 conn, u8 *p)
  */
 int app_gatt_data_handler(u16 connHandle, u8 *pkt)
 {
-	if( dev_char_get_conn_role_by_connhandle(connHandle) == ACL_ROLE_CENTRAL)   //GATT data for Master
-	{
-		rf_packet_att_t *pAtt = (rf_packet_att_t*)pkt;
-
-		//so any ATT data before service discovery will be dropped
-		dev_char_info_t* dev_info = dev_char_info_search_by_connhandle (connHandle);
-		if(dev_info)
-		{
-			//-------	user process ------------------------------------------------
-			if(pAtt->opcode == ATT_OP_HANDLE_VALUE_NOTI)  //slave handle notify
-			{
-
-			}
-			else if (pAtt->opcode == ATT_OP_HANDLE_VALUE_IND)
-			{
-				blc_gatt_pushConfirm(connHandle);
-			}
-		}
-
-		/* The Master does not support GATT Server by default */
-		if(!(pAtt->opcode & 0x01)){
-			switch(pAtt->opcode){
-				case ATT_OP_FIND_INFO_REQ:
-				case ATT_OP_FIND_BY_TYPE_VALUE_REQ:
-				case ATT_OP_READ_BY_TYPE_REQ:
-				case ATT_OP_READ_BY_GROUP_TYPE_REQ:
-					blc_gatt_pushErrResponse(connHandle, pAtt->opcode, pAtt->handle, ATT_ERR_ATTR_NOT_FOUND);
-					break;
-				case ATT_OP_READ_REQ:
-				case ATT_OP_READ_BLOB_REQ:
-				case ATT_OP_READ_MULTI_REQ:
-				case ATT_OP_WRITE_REQ:
-				case ATT_OP_PREPARE_WRITE_REQ:
-					blc_gatt_pushErrResponse(connHandle, pAtt->opcode, pAtt->handle, ATT_ERR_INVALID_HANDLE);
-					break;
-				case ATT_OP_EXECUTE_WRITE_REQ:
-				case ATT_OP_HANDLE_VALUE_CFM:
-				case ATT_OP_WRITE_CMD:
-				case ATT_OP_SIGNED_WRITE_CMD:
-					//ignore
-					break;
-				default://no action
-					break;
-			}
-		}
-	}
-	else{   //GATT data for Slave
-
-
-	}
-
-
+	(void)connHandle;
+	(void)pkt;
 	return 0;
 }
 
@@ -1308,21 +963,11 @@ _attribute_no_inline_ void user_init_normal(void)
 		blc_smp_setSecurityLevel_slave(No_Security);
 	#endif
 
-	#if (ACL_CENTRAL_SMP_ENABLE) //Master SMP Enable
-		blc_smp_setSecurityLevel_master(Unauthenticated_Pairing_with_Encryption);  //LE_Security_Mode_1_Level_2
-	#else
-		blc_smp_setSecurityLevel_master(No_Security);
-	#endif
 
 	blc_smp_smpParamInit();
 
 
 	//host(GAP/SMP/GATT/ATT) event process: register host event callback and set event mask
-	blc_gap_registerHostEventHandler( app_host_event_callback );
-	blc_gap_setEventMask( GAP_EVT_MASK_SMP_PAIRING_BEGIN 			|  \
-						  GAP_EVT_MASK_SMP_PAIRING_SUCCESS   		|  \
-						  GAP_EVT_MASK_SMP_PAIRING_FAIL				|  \
-						  GAP_EVT_MASK_SMP_SECURITY_PROCESS_DONE);
 	//////////// Host Initialization  End /////////////////////////
 
 	/* Check if any Stack(Controller & Host) Initialization error after all BLE initialization done.

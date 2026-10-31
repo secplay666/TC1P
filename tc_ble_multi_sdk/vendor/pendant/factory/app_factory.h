@@ -22,9 +22,7 @@ typedef struct {
 void app_factory_init(void);
 app_status_t app_factory_get_info(app_factory_info_t *info);
 app_status_t app_factory_write_unique_id(const app_unique_id_t *id);
-app_status_t app_factory_read_unique_id(app_unique_id_t *id);
 app_status_t app_factory_run_self_test(u32 test_mask, u32 *result_mask);
 app_status_t app_factory_lock_identity(void);
-u8 app_factory_is_locked(void);
 
 #endif

@@ -77,7 +77,6 @@ int app_controller_event_callback(u32 h, u8 *p, int n);
  * @param[in]  n       the length of event parameter.
  * @return
  */
-int app_host_event_callback(u32 h, u8 *para, int n);
 
 
 /**

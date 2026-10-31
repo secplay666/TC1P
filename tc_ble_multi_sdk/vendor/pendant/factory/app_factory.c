@@ -154,18 +154,6 @@ app_status_t app_factory_write_unique_id(const app_unique_id_t *id)
     return st;
 }
 
-app_status_t app_factory_read_unique_id(app_unique_id_t *id)
-{
-    const app_identity_info_t *identity;
-
-    if (!id) {
-        return APP_ERR_PARAM;
-    }
-    identity = app_identity_get_info();
-    *id = identity->unique_id;
-    return app_identity_self_check();
-}
-
 app_status_t app_factory_run_self_test(u32 test_mask, u32 *result_mask)
 {
     s_factory.test_mask = test_mask;
@@ -199,8 +187,4 @@ app_status_t app_factory_lock_identity(void)
     }
     return st;
 }
-
-u8 app_factory_is_locked(void)
-{
-    return app_identity_is_locked();
-}
+
