@@ -957,14 +957,12 @@ _attribute_no_inline_ void user_init_normal(void)
 		blc_smp_configPairingSecurityInfoStorageAddressAndSize(flash_sector_smp_storage, FLASH_SMP_PAIRING_MAX_SIZE);
 	#endif
 
+	/* Without SMP the stack defaults to no security; skipping the SMP init
+	 * calls keeps the SMP module out of the image. */
 	#if (ACL_PERIPHR_SMP_ENABLE)  //Slave SMP Enable
 		blc_smp_setSecurityLevel_slave(Unauthenticated_Pairing_with_Encryption);  //LE_Security_Mode_1_Level_2
-	#else
-		blc_smp_setSecurityLevel_slave(No_Security);
+		blc_smp_smpParamInit();
 	#endif
-
-
-	blc_smp_smpParamInit();
 
 
 	//host(GAP/SMP/GATT/ATT) event process: register host event callback and set event mask
