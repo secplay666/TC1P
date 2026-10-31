@@ -17,6 +17,9 @@
 #define APP_OTA_SLOT0_BASE                      0x00000UL
 #define APP_OTA_SLOT1_BASE                      MULTI_BOOT_ADDR_0x40000
 #define APP_OTA_SECTOR_SIZE                     0x1000UL
+#define APP_OTA_CONN_INTERVAL_MIN               6     /* 7.5 ms, 1.25 ms units */
+#define APP_OTA_CONN_INTERVAL_MAX               12    /* 15 ms */
+#define APP_OTA_CONN_TIMEOUT                    400   /* 4 s, 10 ms units */
 #define APP_OTA_GUARD_MAGIC                     0x4741544FUL /* OTAG */
 #define APP_OTA_GUARD_VERSION                   1
 #define APP_OTA_GUARD_STATE_CONFIRMED           1
@@ -423,7 +426,15 @@ static void app_ota_on_start(void)
 #endif
 
     app_ble_get_conn_info(&info);
-    (void)info;
+    if (info.connected) {
+        /* OTA throughput is bounded by round trips per connection event;
+         * ask the central for a short interval (it may decline). */
+        bls_l2cap_requestConnParamUpdate(info.conn_handle,
+                                         APP_OTA_CONN_INTERVAL_MIN,
+                                         APP_OTA_CONN_INTERVAL_MAX,
+                                         0,
+                                         APP_OTA_CONN_TIMEOUT);
+    }
 
     app_ble_set_scan_enabled(0);
     app_ble_set_adv1_enabled(0);
@@ -673,23 +684,6 @@ void app_ota_poll(void)
         app_system_watchdog_feed();
     } else {
         app_ota_guard_poll();
-    }
-}
-
-void app_ota_on_disconnected(void)
-{
-    if (s_ota_active) {
-        s_ota_last_result = 0x0e;
-        s_ota_active = 0;
-#if (PENDANT_OTA_GUARD_ENABLE)
-        app_ota_guard_abort_update(0x0e);
-#endif
-        app_ota_restore_idle_radio();
-    } else if (s_ota_dbg_write_count) {
-#if (PENDANT_OTA_GUARD_ENABLE)
-        app_ota_guard_abort_update(0x0e);
-#endif
-        app_ota_restore_idle_radio();
     }
 }
 

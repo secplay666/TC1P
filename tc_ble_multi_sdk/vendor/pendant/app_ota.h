@@ -8,7 +8,6 @@ void app_ota_configure_boot(void);
 void app_ota_guard_boot_check(void);
 void app_ota_init(void);
 void app_ota_poll(void);
-void app_ota_on_disconnected(void);
 u8 app_ota_is_active(void);
 u8 app_ota_last_result(void);
 void app_ota_debug_note_write(u16 l2cap_len, const u8 *value, u16 value_len);

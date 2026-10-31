@@ -167,6 +167,5 @@ void app_pendant_on_app_disconnected(u8 reason)
 {
     app_ble_on_disconnected(reason);
     app_host_gatt_on_disconnected();
-    app_ota_on_disconnected();
     (void)reason;
 }
