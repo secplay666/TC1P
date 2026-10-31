@@ -45,9 +45,12 @@
 #define DRV2625_WAVE_ERROR             0x2F
 #define DRV2625_WAVE_DELAY_100MS       0x82
 
-#define MOTOR_DEFAULT_RATED_VOLTAGE    0x46
-#define MOTOR_DEFAULT_OD_CLAMP         0x5C
+#define MOTOR_DEFAULT_RATED_VOLTAGE    0x89
+#define MOTOR_DEFAULT_OD_CLAMP         0x7D
 #define MOTOR_DEFAULT_DRIVE_TIME       0x10
+#define MOTOR_MAX_RATED_VOLTAGE        0x89
+#define MOTOR_MAX_OD_CLAMP             0x89
+#define MOTOR_MAX_DRIVE_TIME           0x10
 
 #define MOTOR_BUSY_ONE_US              140000
 #define MOTOR_BUSY_TWO_US              380000
@@ -258,9 +261,9 @@ app_status_t app_motor_set_drive_params(u8 rated_voltage, u8 od_clamp, u8 drive_
     if (!rated_voltage || !od_clamp || !drive_time) {
         return APP_ERR_PARAM;
     }
-    if (rated_voltage > MOTOR_DEFAULT_RATED_VOLTAGE ||
-        od_clamp > MOTOR_DEFAULT_OD_CLAMP ||
-        drive_time > MOTOR_DEFAULT_DRIVE_TIME) {
+    if (rated_voltage > MOTOR_MAX_RATED_VOLTAGE ||
+        od_clamp > MOTOR_MAX_OD_CLAMP ||
+        drive_time > MOTOR_MAX_DRIVE_TIME) {
         return APP_ERR_PARAM;
     }
 
