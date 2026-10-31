@@ -151,8 +151,9 @@ OTA 写入成功后：
 
 ## 已知限制
 
-- PC Windows/Bleak 实测 ATT MTU 通常为 23，默认 16 字节 PDU + write-response。
+- PC 工具默认按 ATT MTU 自动选 PDU：MTU ≥ 71 用 64 字节，否则 16 字节；固定使用 write-response。2026-10-31 实测（Windows，MTU 83）约 118KB 用时约 62 秒（约 1.9KB/s）。write-without-response 会超过设备写 Flash 的速度，报 `WRITE_FLASH_ERR` 或数据包超时，暂不使用。
+- OTA 开始时固件会请求 7.5–15ms 连接间隔，主机可以拒绝。
 - PC 支持多地址顺序 OTA，当前不是并行 OTA。
-- Android 会请求更大的 MTU，但实测仍可能回落到 23，因此默认仍使用 16 字节 OTA PDU。
+- Android 在 OTA 前请求 MTU 83、高连接优先级和 2M PHY；协商到 MTU ≥ 71 时用 64 字节 PDU，否则回落到 16 字节（该路径尚未在手机上实测）。
 - 签名公钥目前是仓库内的开发公钥，量产前必须替换。
 - BLE 链路本身仍基于当前连接安全级别；签名包解决的是固件来源与完整性，不等同于 BLE 链路加密。
