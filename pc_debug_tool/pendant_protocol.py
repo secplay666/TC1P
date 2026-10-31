@@ -385,6 +385,20 @@ def parse_device_info(payload: bytes) -> dict:
             )
         if len(payload) >= 74:
             info["ota_debug_boot_wakeup_src"] = u16le(payload, 72)
+        if len(payload) >= 82:
+            flags = payload[77]
+            info.update(
+                {
+                    "battery_mv": u16le(payload, 74),
+                    "battery_percent": payload[76],
+                    "battery_valid": bool(flags & 0x01),
+                    "battery_low": bool(flags & 0x02),
+                    "battery_critical": bool(flags & 0x04),
+                    "charging": bool(flags & 0x08),
+                    "battery_min_mv": u16le(payload, 78),
+                    "battery_raw_mv": u16le(payload, 80),
+                }
+            )
     else:
         info["fw_version_code"] = 0
     return info
