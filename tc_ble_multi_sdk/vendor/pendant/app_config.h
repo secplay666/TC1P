@@ -46,6 +46,12 @@
 // Keep RX opt-in: a noisy or floating PC3 can flood the debug shell and starve BLE.
 #define PENDANT_UART_RX_PINMUX_ENABLE                 0
 #define APP_HOST_ENABLE_ADV_TRANSPORT                 0
+// 1 = development build: UART/BLE debug shell, PC-tool-only host commands
+// (state/flash/motor/log/sleep/identity/factory) and LOG frames.
+// 0 = release build: only what the Android app and OTA tooling use.
+#ifndef PENDANT_DEBUG_BUILD
+#define PENDANT_DEBUG_BUILD                           0
+#endif
 #define PENDANT_BLE_AUTO_START                        1
 #define PENDANT_WATCHDOG_ENABLE                       1
 #define PENDANT_WATCHDOG_TIMEOUT_MS                   10000

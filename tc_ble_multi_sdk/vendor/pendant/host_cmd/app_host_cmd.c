@@ -104,12 +104,14 @@ static u32 s_reboot_tick;
 static u8 s_disconnect_pending;
 static u32 s_disconnect_tick;
 
+#if (PENDANT_DEBUG_BUILD)
 typedef struct {
     u8 *buf;
     u16 len;
     u16 max;
     u8 truncated;
 } host_shell_capture_t;
+#endif
 
 static void wr16(u8 *p, u16 v)
 {
@@ -135,6 +137,7 @@ static u32 rd32(const u8 *p)
     return ((u32)p[0]) | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
 
+#if (PENDANT_DEBUG_BUILD)
 static u8 chr_lower(u8 ch)
 {
     if (ch >= 'A' && ch <= 'Z') {
@@ -167,6 +170,7 @@ static u8 bytes_eq_word_ci(const u8 *payload, u16 len, const char *word)
     }
     return start + i == end;
 }
+#endif
 
 static u32 p2p_chat_short_id_from_eid(const app_eid_t *eid)
 {
@@ -206,6 +210,7 @@ static void notify_p2p_chat_plain(u32 short_id, s8 rssi, const u8 *text, u16 len
     s_p2p_chat_event_rx_count++;
 }
 
+#if (PENDANT_DEBUG_BUILD)
 static void shell_capture_write(void *ctx, const char *text, u16 len)
 {
     host_shell_capture_t *cap = (host_shell_capture_t *)ctx;
@@ -236,6 +241,7 @@ static void shell_capture_puts(host_shell_capture_t *cap, const char *text)
     }
     shell_capture_write(cap, text, len);
 }
+#endif
 
 static u8 host_status_from_app(app_status_t st)
 {
@@ -313,6 +319,7 @@ static void handle_get_device_info(u8 seq)
     send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 74);
 }
 
+#if (PENDANT_DEBUG_BUILD)
 static void handle_get_system_state(u8 seq)
 {
     app_system_snapshot_t sys;
@@ -345,6 +352,7 @@ static void handle_get_adv_frame(u8 seq)
     app_status_t st = app_adv_scheduler_build_next_adv_data(s_rsp_buf, APP_HOST_MESSAGE_MAX_LEN, &len);
     send_rsp(seq, HOST_CMD_GET_ADV_FRAME, host_status_from_app(st), s_rsp_buf, st == APP_OK ? len : 0);
 }
+#endif
 
 static void handle_get_peer_table(u8 seq)
 {
@@ -462,6 +470,7 @@ static void handle_get_peer_profiles(u8 seq, const u8 *payload, u16 len)
     send_rsp(seq, HOST_CMD_GET_PEER_PROFILES, HOST_STATUS_OK, s_rsp_buf, offset);
 }
 
+#if (PENDANT_DEBUG_BUILD)
 static void handle_set_rssi_config(u8 seq, const u8 *payload, u16 len)
 {
     app_runtime_config_t cfg;
@@ -752,6 +761,7 @@ static void handle_shell_exec(u8 seq, const u8 *payload, u16 len)
     s_pending.data.line[i] = 0;
     s_pending.len = i;
 }
+#endif
 
 static void handle_p2p_chat_send(u8 seq, const u8 *payload, u16 len)
 {
@@ -964,6 +974,7 @@ static void handle_p2p_chat_pending(void)
     send_rsp(seq, HOST_CMD_P2P_CHAT_SEND, HOST_STATUS_OK, s_rsp_buf, 12);
 }
 
+#if (PENDANT_DEBUG_BUILD)
 static void handle_shell_pending(void)
 {
     host_shell_capture_t cap;
@@ -1034,11 +1045,12 @@ static void handle_shell_pending(void)
     }
     send_rsp(seq, HOST_CMD_SHELL_EXEC, HOST_STATUS_OK, s_rsp_buf, cap.len);
 }
+#endif
 
-static void handle_flash_pending(void)
+#if (PENDANT_DEBUG_BUILD)
+static void handle_factory_pending(void)
 {
     app_unique_id_t id;
-    app_profile_summary_t profile;
     app_status_t st;
     u32 test_mask;
     u32 result_mask = 0;
@@ -1047,36 +1059,6 @@ static void handle_flash_pending(void)
     u8 seq;
     u8 cmd;
     u8 lock_after_write;
-
-    if (!s_pending.active || s_pending.cmd == HOST_CMD_SHELL_EXEC) {
-        return;
-    }
-
-    if (s_pending.cmd == HOST_CMD_P2P_CHAT_SEND) {
-        handle_p2p_chat_pending();
-        return;
-    }
-
-    if (s_pending.cmd == HOST_CMD_P2P_FILE_SEND) {
-        handle_p2p_file_pending();
-        return;
-    }
-
-    if (s_pending.cmd == HOST_CMD_SET_PROFILE_SUMMARY) {
-        seq = s_pending.seq;
-        st = app_profile_parse_host_payload(s_pending.data.payload, s_pending.len, &profile);
-        if (st == APP_OK) {
-            st = app_profile_set_summary(&profile);
-        }
-        s_pending.active = 0;
-        if (st == APP_OK) {
-            app_adv_scheduler_request_beacon_update();
-            handle_get_profile_summary(seq);
-        } else {
-            send_rsp(seq, HOST_CMD_SET_PROFILE_SUMMARY, host_status_from_app(st), 0, 0);
-        }
-        return;
-    }
 
     seq = s_pending.seq;
     cmd = s_pending.cmd;
@@ -1130,6 +1112,50 @@ static void handle_flash_pending(void)
         return;
     }
 }
+#endif
+
+static void handle_flash_pending(void)
+{
+    app_profile_summary_t profile;
+    app_status_t st;
+    u8 seq;
+
+    if (!s_pending.active || s_pending.cmd == HOST_CMD_SHELL_EXEC) {
+        return;
+    }
+
+    if (s_pending.cmd == HOST_CMD_P2P_CHAT_SEND) {
+        handle_p2p_chat_pending();
+        return;
+    }
+
+    if (s_pending.cmd == HOST_CMD_P2P_FILE_SEND) {
+        handle_p2p_file_pending();
+        return;
+    }
+
+    if (s_pending.cmd == HOST_CMD_SET_PROFILE_SUMMARY) {
+        seq = s_pending.seq;
+        st = app_profile_parse_host_payload(s_pending.data.payload, s_pending.len, &profile);
+        if (st == APP_OK) {
+            st = app_profile_set_summary(&profile);
+        }
+        s_pending.active = 0;
+        if (st == APP_OK) {
+            app_adv_scheduler_request_beacon_update();
+            handle_get_profile_summary(seq);
+        } else {
+            send_rsp(seq, HOST_CMD_SET_PROFILE_SUMMARY, host_status_from_app(st), 0, 0);
+        }
+        return;
+    }
+
+#if (PENDANT_DEBUG_BUILD)
+    handle_factory_pending();
+#else
+    s_pending.active = 0;
+#endif
+}
 
 static void handle_p2p_chat_event_pending(void)
 {
@@ -1174,12 +1200,6 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
     case HOST_CMD_GET_DEVICE_INFO:
         handle_get_device_info(seq);
         break;
-    case HOST_CMD_GET_SYSTEM_STATE:
-        handle_get_system_state(seq);
-        break;
-    case HOST_CMD_GET_ADV_FRAME:
-        handle_get_adv_frame(seq);
-        break;
     case HOST_CMD_GET_PEER_TABLE:
         handle_get_peer_table(seq);
         break;
@@ -1188,6 +1208,22 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
         break;
     case HOST_CMD_GET_PEER_PROFILES:
         handle_get_peer_profiles(seq, payload, len);
+        break;
+    case HOST_CMD_P2P_CHAT_SEND:
+        handle_p2p_chat_send(seq, payload, len);
+        break;
+    case HOST_CMD_P2P_FILE_SEND:
+        handle_p2p_file_send(seq, payload, len);
+        break;
+    case HOST_CMD_SET_PROFILE_SUMMARY:
+        handle_set_profile_summary(seq, payload, len);
+        break;
+#if (PENDANT_DEBUG_BUILD)
+    case HOST_CMD_GET_SYSTEM_STATE:
+        handle_get_system_state(seq);
+        break;
+    case HOST_CMD_GET_ADV_FRAME:
+        handle_get_adv_frame(seq);
         break;
     case HOST_CMD_SET_RSSI_CONFIG:
         handle_set_rssi_config(seq, payload, len);
@@ -1225,15 +1261,7 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
     case HOST_CMD_SHELL_EXEC:
         handle_shell_exec(seq, payload, len);
         break;
-    case HOST_CMD_P2P_CHAT_SEND:
-        handle_p2p_chat_send(seq, payload, len);
-        break;
-    case HOST_CMD_P2P_FILE_SEND:
-        handle_p2p_file_send(seq, payload, len);
-        break;
-    case HOST_CMD_SET_PROFILE_SUMMARY:
-        handle_set_profile_summary(seq, payload, len);
-        break;
+#endif
     default:
         send_rsp(seq, cmd, HOST_STATUS_ERR_UNSUPPORTED, 0, 0);
         break;
@@ -1273,7 +1301,9 @@ void app_host_cmd_init(void)
 void app_host_cmd_poll(void)
 {
     handle_flash_pending();
+#if (PENDANT_DEBUG_BUILD)
     handle_shell_pending();
+#endif
     handle_p2p_chat_event_pending();
     if (s_disconnect_pending && clock_time_exceed(s_disconnect_tick, 300000)) {
         s_disconnect_pending = 0;
@@ -1387,6 +1417,7 @@ void app_host_cmd_on_rx_message(app_host_frame_type_t type, u8 seq, u8 cmd, u8 s
 
 void app_host_cmd_log_text(u8 level, const char *tag, const char *msg)
 {
+#if (PENDANT_DEBUG_BUILD)
     u8 payload[64];
     u8 offset = 4;
     u8 i = 0;
@@ -1408,6 +1439,11 @@ void app_host_cmd_log_text(u8 level, const char *tag, const char *msg)
         payload[offset++] = (u8)msg[i++];
     }
     app_host_transport_send_message(HOST_FRAME_TYPE_LOG, 0, HOST_STATUS_OK, payload, offset);
+#else
+    (void)level;
+    (void)tag;
+    (void)msg;
+#endif
 }
 
 void app_host_cmd_notify_p2p_chat(const app_eid_t *src_eid, s8 rssi, const u8 *text, u16 len)

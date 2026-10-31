@@ -83,7 +83,9 @@ void app_pendant_init(void)
     app_config_init();
     app_identity_init();
     app_profile_init();
+#if (PENDANT_DEBUG_BUILD)
     app_factory_init();
+#endif
     app_battery_init();
     app_charge_init();
     app_motion_init();
@@ -101,7 +103,9 @@ void app_pendant_init(void)
     app_host_cmd_init();
     app_host_transport_init();
     app_system_init();
+#if (PENDANT_DEBUG_BUILD)
     app_debug_shell_init();
+#endif
 }
 
 void app_pendant_poll(void)
@@ -109,7 +113,9 @@ void app_pendant_poll(void)
     u32 now = clock_time();
     app_pendant_trace_set(0x80);
     app_pendant_trace_set(0x81);
+#if (PENDANT_DEBUG_BUILD)
     app_debug_shell_poll();
+#endif
     app_pendant_trace_set(0x82);
     app_ble_poll();
     app_pendant_trace_set(0x83);
