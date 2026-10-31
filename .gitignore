@@ -12,3 +12,4 @@ tc_ble_multi_sdk/build/B85/pendant/
 artifacts/
 glimmer_*.log
 glimmer_*.xml
+~$*

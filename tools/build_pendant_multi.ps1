@@ -24,6 +24,35 @@ if (!(Test-Path -LiteralPath (Join-Path $projectDir ".project"))) {
     throw "Telink project not found: $projectDir"
 }
 
+# The generated makefiles do not track header dependencies (no .d files), so a
+# changed header (e.g. app_config.h) would leave stale objects behind. Hash all
+# headers and force a clean build whenever they differ from the last build.
+# app_build_info.h is excluded: it changes every build and its users are
+# rebuilt explicitly below.
+$sdkRoot = Join-Path $repoRoot "tc_ble_multi_sdk"
+$sdkBuildRoot = Join-Path $sdkRoot "build"
+$headerHashFile = Join-Path $buildDir ".header_hash"
+$headerFiles = Get-ChildItem -LiteralPath $sdkRoot -Recurse -File -Filter "*.h" |
+    Where-Object {
+        !$_.FullName.StartsWith($sdkBuildRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+        $_.Name -ne "app_build_info.h"
+    } |
+    Sort-Object FullName
+$sha = [System.Security.Cryptography.SHA256]::Create()
+$hashInput = New-Object System.IO.MemoryStream
+foreach ($header in $headerFiles) {
+    $nameBytes = [System.Text.Encoding]::UTF8.GetBytes($header.FullName.Substring($sdkRoot.Length))
+    $hashInput.Write($nameBytes, 0, $nameBytes.Length)
+    $contentBytes = [System.IO.File]::ReadAllBytes($header.FullName)
+    $hashInput.Write($contentBytes, 0, $contentBytes.Length)
+}
+$headerHash = [System.BitConverter]::ToString($sha.ComputeHash($hashInput.ToArray())).Replace("-", "")
+$lastHeaderHash = if (Test-Path -LiteralPath $headerHashFile) { (Get-Content -LiteralPath $headerHashFile -Raw).Trim() } else { "" }
+if (!$Clean -and $headerHash -ne $lastHeaderHash) {
+    Write-Host "Header files changed since last build (or no record); forcing clean build."
+    $Clean = $true
+}
+
 if (Test-Path -LiteralPath $buildInfoScript) {
     & $buildInfoScript -RepoRoot $repoRoot -VersionCode $VersionCode
     $buildInfoUsers = @(
@@ -94,6 +123,8 @@ if ($Headless) {
 if (!(Test-Path -LiteralPath $outputBin)) {
     throw "Build succeeded but output bin was not found: $outputBin"
 }
+
+Set-Content -LiteralPath $headerHashFile -Value $headerHash -NoNewline
 
 $bin = Get-Item -LiteralPath $outputBin
 Write-Host "Built: $($bin.FullName) ($($bin.Length) bytes)"
