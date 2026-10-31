@@ -279,6 +279,7 @@ static void handle_get_device_info(u8 seq)
     const app_board_info_t *board = app_board_get_info();
     const app_identity_info_t *id = app_identity_get_info();
     app_ota_guard_info_t ota;
+    app_battery_state_t bat;
 
     s_rsp_buf[0] = 1;
     s_rsp_buf[1] = (u8)board->hw_rev;
@@ -316,7 +317,15 @@ static void handle_get_device_info(u8 seq)
     wr16(&s_rsp_buf[68], ota.debug_write_count);
     wr16(&s_rsp_buf[70], ota.debug_last_index);
     wr16(&s_rsp_buf[72], ota.debug_boot_wakeup_src);
-    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 74);
+    /* Battery (appended; older clients read only the first 74 bytes). */
+    app_battery_get_state(&bat);
+    wr16(&s_rsp_buf[74], bat.voltage_mv);
+    s_rsp_buf[76] = bat.percent;
+    s_rsp_buf[77] = (bat.valid ? 0x01 : 0) | (bat.low ? 0x02 : 0) |
+                    (bat.critical ? 0x04 : 0) | (app_charge_is_charging() ? 0x08 : 0);
+    wr16(&s_rsp_buf[78], bat.min_mv);
+    wr16(&s_rsp_buf[80], bat.raw_mv);
+    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 82);
 }
 
 #if (PENDANT_DEBUG_BUILD)
