@@ -223,6 +223,20 @@ final class HostProtocol {
         if (payload.length < 36) {
             throw new IllegalArgumentException("device info payload too short");
         }
+        DeviceInfo info = newDeviceInfo(payload);
+        if (payload.length >= 82) {
+            int flags = u8(payload[77]);
+            info.hasBatteryInfo = true;
+            info.batteryMv = u16le(payload, 74);
+            info.batteryPercent = u8(payload[76]);
+            info.batteryValid = (flags & 0x01) != 0;
+            info.batteryLow = (flags & 0x02) != 0;
+            info.charging = (flags & 0x08) != 0;
+        }
+        return info;
+    }
+
+    private static DeviceInfo newDeviceInfo(byte[] payload) {
         return new DeviceInfo(
                 u8(payload[0]),
                 u8(payload[1]),
@@ -733,6 +747,12 @@ final class HostProtocol {
         final long otaConfirmedVersion;
         final long otaPendingVersion;
         final int otaDebugBootWakeupSrc;
+        boolean hasBatteryInfo;
+        int batteryMv;
+        int batteryPercent;
+        boolean batteryValid;
+        boolean batteryLow;
+        boolean charging;
 
         DeviceInfo(int protocolVersion, int hardwareRevision, int firmwareMajor, int firmwareMinor,
                    int firmwarePatch, int keyId, int privacyMode, long shortId, byte[] eid,
@@ -779,6 +799,17 @@ final class HostProtocol {
 
         boolean hasPrivacyKey() {
             return keyId != 0;
+        }
+
+        /** Short battery label for the device card, or null if firmware does not report it. */
+        String batteryText() {
+            if (!hasBatteryInfo) {
+                return null;
+            }
+            if (!batteryValid) {
+                return charging ? "充电中" : "电量未知";
+            }
+            return batteryPercent + "%" + (charging ? " 充电中" : "");
         }
     }
 

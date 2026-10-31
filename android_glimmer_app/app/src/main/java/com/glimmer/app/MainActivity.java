@@ -93,6 +93,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private static final String PEER_AVATAR_PREFIX = "peer_avatar_";
     private static final String PEER_AVATAR_SUFFIX = ".jpg";
     private static final long AUTO_SYNC_INTERVAL_MS = 10000;
+    // Refresh device info (battery) every N auto-sync ticks.
+    private static final int DEVICE_INFO_REFRESH_TICKS = 6;
     private static final long AUTO_RECONNECT_INTERVAL_MS = 15000;
     private static final long CHAT_SEND_TIMEOUT_MS = 25000;
     private static final long AVATAR_SEND_DELAY_MS = 5000;
@@ -125,12 +127,16 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     private final Set<String> avatarQueuedKeys = new HashSet<>();
     private final Set<String> avatarSentKeys = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private int autoSyncTicks;
     private final Runnable autoSyncRunnable = new Runnable() {
         @Override
         public void run() {
             if (debugReady) {
                 bleClient.requestPeerTable();
                 handler.postDelayed(() -> requestPeerProfilesPage(0), 300);
+                if (!otaRunning && ++autoSyncTicks % DEVICE_INFO_REFRESH_TICKS == 0) {
+                    handler.postDelayed(bleClient::requestDeviceInfo, 600);
+                }
                 handler.postDelayed(this, AUTO_SYNC_INTERVAL_MS);
             }
         }
@@ -1919,7 +1925,8 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
                 }
             }
         } else {
-            panel.addView(infoPill(deviceInfo == null ? "正在读取设备信息" : "固件 " + deviceInfo.firmwareVersion() + " · 识别码 " + deviceInfo.shortCode()));
+            panel.addView(infoPill(deviceInfo == null ? "正在读取设备信息" : "固件 " + deviceInfo.firmwareVersion() + " · 识别码 " + deviceInfo.shortCode()
+                    + (deviceInfo.batteryText() == null ? "" : " · 电量 " + deviceInfo.batteryText())));
         }
 
         return panel;
@@ -3725,9 +3732,12 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
         try {
             if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_DEVICE_INFO && message.status == 0) {
+                boolean firstInfo = deviceInfo == null;
                 deviceInfo = HostProtocol.parseDeviceInfo(message.payload);
                 saveBoundDeviceInfo();
-                pushEvent("我的 Glimmer 信息已更新");
+                if (firstInfo) {
+                    pushEvent("我的 Glimmer 信息已更新");
+                }
             } else if (message.frameType == HostProtocol.TYPE_RSP && message.cmd == HostProtocol.CMD_GET_PEER_TABLE && message.status == 0) {
                 peers.clear();
                 for (HostProtocol.PeerInfo peer : HostProtocol.parsePeerTable(message.payload)) {
@@ -4207,10 +4217,18 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
         }
 
         String privacy = deviceInfo.hasPrivacyKey() ? "隐私密钥已启用" : "隐私密钥未启用";
+        String battery = "";
+        if (deviceInfo.batteryText() != null) {
+            battery = "\n电量 " + deviceInfo.batteryText()
+                    + (deviceInfo.batteryValid
+                    ? String.format(Locale.US, " · %.2fV", deviceInfo.batteryMv / 1000.0)
+                    : "");
+        }
         return "固件 " + deviceInfo.firmwareVersion()
                 + " · 硬件 " + deviceInfo.hardwareRevision
                 + "\n识别码 " + deviceInfo.shortCode()
-                + " · " + privacy;
+                + " · " + privacy
+                + battery;
     }
 
     private String productBleStatus(String raw) {
