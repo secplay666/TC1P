@@ -410,7 +410,7 @@ class PendantDebugApp:
         self.provision_status_var = tk.StringVar(value="")
         self.ota_busy = False
         self.ota_bin_var = tk.StringVar(value=str(DEFAULT_OTA_BIN))
-        self.ota_pdu_var = tk.StringVar(value="16")
+        self.ota_pdu_var = tk.StringVar(value="64")
         self.ota_pace_var = tk.StringVar(value="0")
         self.ota_write_response_var = tk.BooleanVar(value=True)
         self.ota_force_var = tk.BooleanVar(value=False)

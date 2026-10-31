@@ -316,6 +316,9 @@ async def run_one(
         max_wwr = getattr(ota_char, "max_write_without_response_size", None)
         log(f"{target.address}: ota_char={ota_char.uuid} props={','.join(getattr(ota_char, 'properties', []))} mtu={mtu_size} max_wwr={max_wwr}")
         emit("char", uuid=str(ota_char.uuid), mtu=mtu_size, max_wwr=max_wwr)
+        if pdu_len <= 0:
+            # Auto: 64-byte PDUs when the ATT MTU fits them (64 + 2 index + 2 CRC + 3 ATT header).
+            pdu_len = 64 if mtu_size and mtu_size >= 64 + 4 + 3 else 16
         write_len = pdu_len + 4
         if write_response and mtu_size and write_len > mtu_size - 3:
             raise RuntimeError(f"PDU {pdu_len} needs ATT MTU >= {write_len + 3}, current MTU is {mtu_size}")
@@ -333,6 +336,7 @@ async def run_one(
         max_index = (chunks * index_step) - 1
         log(f"{target.address}: start OTA size={len(firmware)} pdu={pdu_len} index={index_mode} chunks={chunks}")
         emit("start", total_bytes=len(firmware), total_chunks=chunks, pdu_len=pdu_len)
+        transfer_start = time.monotonic()
         await client.write_gatt_char(ota_char, ota_start_ext_packet(pdu_len), response=True)
         log(f"{target.address}: OTA_START_EXT sent")
         if not write_response:
@@ -391,6 +395,8 @@ async def run_one(
             if result_code is not None:
                 if result_code == 0:
                     log(f"{target.address}: success result received; waiting for device reboot")
+                    elapsed = time.monotonic() - transfer_start
+                    log(f"{target.address}: transfer {len(firmware)} bytes in {elapsed:.1f}s ({len(firmware) / elapsed:.0f} B/s)")
                     reboot_deadline = time.monotonic() + 10.0
                     while time.monotonic() < reboot_deadline and client.is_connected:
                         await asyncio.sleep(0.2)
@@ -486,7 +492,7 @@ def main() -> int:
     parser.add_argument("--scan", action="store_true", help="scan and update all discovered Glimmer devices")
     parser.add_argument("--limit", type=int, default=0, help="max scanned devices, 0 means all")
     parser.add_argument("--scan-timeout", type=float, default=8.0)
-    parser.add_argument("--pdu-len", type=int, default=16, help="OTA firmware payload per packet; PC Windows BLE usually requires 16")
+    parser.add_argument("--pdu-len", type=int, default=0, help="OTA firmware payload per packet (16..240, multiple of 16); 0 = auto from ATT MTU")
     parser.add_argument("--index-mode", choices=("packet", "block16"), default="packet", help="OTA adr_index mode for extended PDU diagnostics")
     parser.add_argument("--pace-ms", type=float, default=0.0, help="delay between OTA data writes")
     parser.add_argument("--pre-start-delay-ms", type=float, default=200.0, help="delay after enabling OTA notify before START")
