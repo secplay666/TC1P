@@ -175,6 +175,57 @@ static u8 s_ext_adv_rx_decode_enabled = 1;
 static u8 s_app_mac_public[6] = {0};
 static u8 s_app_mac_random_static[6] = {0};
 
+static u8 app_mac_is_invalid(const u8 *mac)
+{
+	u8 i;
+	u8 all_zero = 1;
+	u8 all_ff = 1;
+
+	if (!mac) {
+		return 1;
+	}
+	for (i = 0; i < 6; i++) {
+		if (mac[i] != 0x00) {
+			all_zero = 0;
+		}
+		if (mac[i] != 0xff) {
+			all_ff = 0;
+		}
+	}
+	return (all_zero || all_ff) ? 1 : 0;
+}
+
+static void app_mac_apply_debug_fallback(u8 *mac_public, u8 *mac_random_static)
+{
+	u8 mac_store[8];
+
+	if (!app_mac_is_invalid(mac_public) || !mac_random_static) {
+		return;
+	}
+
+	mac_public[0] = 0x30;
+	mac_public[1] = 0xe4;
+	mac_public[2] = 0x7e;
+	mac_public[3] = 0x38;
+	mac_public[4] = 0xc1;
+	mac_public[5] = 0xa4;
+
+	mac_random_static[0] = mac_public[0];
+	mac_random_static[1] = mac_public[1];
+	mac_random_static[2] = mac_public[2];
+	mac_random_static[3] = 0x9a;
+	mac_random_static[4] = 0xbc;
+	mac_random_static[5] = 0xc0;
+
+	memcpy(mac_store, mac_public, 6);
+	mac_store[6] = mac_random_static[3];
+	mac_store[7] = mac_random_static[4];
+	if (flash_sector_mac_address) {
+		flash_erase_sector(flash_sector_mac_address);
+		flash_write_page(flash_sector_mac_address, sizeof(mac_store), mac_store);
+	}
+}
+
 static u8 s_ext_adv_reasm_active = 0;
 static u8 s_ext_adv_reasm_addr_type = 0;
 static u8 s_ext_adv_reasm_addr[6] = {0};
@@ -1102,7 +1153,9 @@ _attribute_no_inline_ void user_init_normal(void)
 //////////////////////////// basic hardware Initialization  Begin //////////////////////////////////
 
 	UARTIF_uartinit();
+	app_pendant_trace_set(0x11); /* boot trace */
 	u_printf("Glimmer boot\r\n");
+	app_pendant_trace_set(0x12); /* boot trace */
 
 	/* random number generator must be initiated here( in the beginning of user_init_nromal).
 	 * When deepSleep retention wakeUp, no need initialize again */
@@ -1117,9 +1170,11 @@ _attribute_no_inline_ void user_init_normal(void)
 
 	blc_readFlashSize_autoConfigCustomFlashSector();
 	app_ota_guard_boot_check();
+	app_pendant_trace_set(0x14); /* boot trace */
 
 	/* attention that this function must be called after "blc_readFlashSize_autoConfigCustomFlashSector" !!!*/
 	blc_app_loadCustomizedParameters_normal();
+	app_pendant_trace_set(0x15); /* boot trace */
 
 #if (PENDANT_USB_ENABLE)
 	app_usb_download_init();
@@ -1133,6 +1188,8 @@ _attribute_no_inline_ void user_init_normal(void)
 	u8  mac_random_static[6];
 	/* for 512K Flash, flash_sector_mac_address equals to 0x76000, for 1M  Flash, flash_sector_mac_address equals to 0xFF000 */
 	blc_initMacAddress(flash_sector_mac_address, mac_public, mac_random_static);
+	app_mac_apply_debug_fallback(mac_public, mac_random_static);
+	app_pendant_trace_set(0x16); /* boot trace */
 	for(int i = 0; i < 6; i++){
 		s_app_mac_public[i] = mac_public[i];
 		s_app_mac_random_static[i] = mac_random_static[i];
@@ -1192,6 +1249,7 @@ _attribute_no_inline_ void user_init_normal(void)
 #endif
 
 	rf_set_power_level_index (RF_POWER_P3dBm);
+	app_pendant_trace_set(0x18); /* boot trace */
 
 	blc_ll_initChannelSelectionAlgorithm_2_feature();
 
@@ -1234,8 +1292,10 @@ _attribute_no_inline_ void user_init_normal(void)
 
 	/* GATT attribute table is registered by app_host_gatt_init(). */
 	blc_gatt_register_data_handler(app_gatt_data_handler);
+	app_pendant_trace_set(0x19); /* boot trace */
 	app_host_gatt_init();
 	app_ota_init();
+	app_pendant_trace_set(0x1a); /* boot trace */
 
 	/* SMP Initialization */
 	#if (ACL_PERIPHR_SMP_ENABLE || ACL_CENTRAL_SMP_ENABLE)
@@ -1268,6 +1328,7 @@ _attribute_no_inline_ void user_init_normal(void)
 	/* Check if any Stack(Controller & Host) Initialization error after all BLE initialization done.
 	 * attention that code will stuck in "while(1)" if any error detected in initialization, user need find what error happens and then fix it */
 	blc_app_checkControllerHostInitialization();
+	app_pendant_trace_set(0x1b); /* boot trace */
 //////////////////////////// BLE stack Initialization  End //////////////////////////////////
 
 

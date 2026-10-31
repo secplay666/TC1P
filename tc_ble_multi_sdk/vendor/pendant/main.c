@@ -27,6 +27,7 @@
 #include "app_config.h"
 #include "app.h"
 #include "app_ota.h"
+#include "app_pendant.h"
 #include "application/usbstd/usb.h"
 
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
@@ -68,14 +69,18 @@ _attribute_ram_code_ int main(void)
 	#endif
 
 	/* detect if MCU is wake_up from deep retention mode */
+	app_pendant_trace_set(0x01); /* boot trace */
 	int deepRetWakeUp = pm_is_MCU_deepRetentionWakeup();  //MCU deep retention wakeUp
 
 	
 	clock_init(SYS_CLK_TYPE);
+	app_pendant_trace_set(0x02); /* boot trace */
 
 	rf_drv_ble_init();
+	app_pendant_trace_set(0x03); /* boot trace */
 
 	gpio_init(!deepRetWakeUp);
+	app_pendant_trace_set(0x04); /* boot trace */
 
 #if (PENDANT_USB_ENABLE)
 	usb_init();
