@@ -807,11 +807,6 @@ _attribute_no_inline_ void user_init_normal(void)
 {
 //////////////////////////// basic hardware Initialization  Begin //////////////////////////////////
 
-	UARTIF_uartinit();
-	app_pendant_trace_set(0x11); /* boot trace */
-	u_printf("Glimmer boot\r\n");
-	app_pendant_trace_set(0x12); /* boot trace */
-
 	/* random number generator must be initiated here( in the beginning of user_init_nromal).
 	 * When deepSleep retention wakeUp, no need initialize again */
 	#if(MCU_CORE_TYPE == MCU_CORE_825x || MCU_CORE_TYPE == MCU_CORE_827x)
@@ -824,8 +819,16 @@ _attribute_no_inline_ void user_init_normal(void)
 	#endif
 
 	blc_readFlashSize_autoConfigCustomFlashSector();
+	/* Run the OTA boot check before any optional peripheral init, so a new
+	 * image that hangs later still counts a boot attempt and can roll back
+	 * after the watchdog resets it. */
 	app_ota_guard_boot_check();
 	app_pendant_trace_set(0x14); /* boot trace */
+
+	UARTIF_uartinit();
+	app_pendant_trace_set(0x11); /* boot trace */
+	u_printf("Glimmer boot\r\n");
+	app_pendant_trace_set(0x12); /* boot trace */
 
 	/* attention that this function must be called after "blc_readFlashSize_autoConfigCustomFlashSector" !!!*/
 	blc_app_loadCustomizedParameters_normal();

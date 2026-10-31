@@ -76,6 +76,14 @@ _attribute_ram_code_ int main(void)
 	clock_init(SYS_CLK_TYPE);
 	app_pendant_trace_set(0x02); /* boot trace */
 
+#if (PENDANT_WATCHDOG_ENABLE)
+	/* Start the watchdog before any init that could hang, so a bad image
+	 * resets instead of stalling forever (the OTA guard then rolls back). */
+	wd_set_interval_ms(PENDANT_WATCHDOG_TIMEOUT_MS, CLOCK_SYS_CLOCK_HZ / 1000);
+	wd_clear();
+	wd_start();
+#endif
+
 	rf_drv_ble_init();
 	app_pendant_trace_set(0x03); /* boot trace */
 

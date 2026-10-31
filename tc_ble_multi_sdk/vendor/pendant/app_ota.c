@@ -312,8 +312,13 @@ static void app_ota_guard_abort_update(u8 error)
     /* Erase rather than zero the boot mark so the slot stays writable. */
     flash_erase_sector(app_ota_slot_base(failed_slot));
 
+    /* Only rewrite the previous slot's first sector when its boot mark is
+     * actually gone (cleared by the stack at the end of a successful
+     * transfer). For mid-transfer failures it is intact, and erasing it
+     * would open a power-loss window with no bootable slot. */
     if (s_guard.backup_valid &&
         s_guard.previous_slot != APP_OTA_SLOT_INVALID &&
+        app_ota_read_slot_boot_mark(s_guard.previous_slot) != BOOT_MARK_VALUE &&
         app_ota_guard_calc_addresses()) {
         flash_erase_sector(app_ota_slot_base(s_guard.previous_slot));
         app_ota_guard_copy_sector(s_guard_backup_addr, app_ota_slot_base(s_guard.previous_slot));
