@@ -79,17 +79,22 @@ final class GlimmerBleClient {
     private static final int OTA_CMD_RESULT = 0xFF06;
     private static final int OTA_CMD_SCHEDULE_PDU_NUM = 0xFF08;
     private static final int OTA_CMD_SCHEDULE_FW_SIZE = 0xFF09;
-    private static final int OTA_PDU_LEN = 16;
+    private static final int OTA_PDU_LEN = 64;
+    private static final int OTA_FALLBACK_PDU_LEN = 16;
+    // 64-byte PDU + 2-byte index + 2-byte CRC + 3-byte ATT header.
+    private static final int OTA_MIN_MTU_FOR_FULL_PDU = OTA_PDU_LEN + 4 + 3;
     private static final int OTA_REQUEST_MTU = 83;
+    private static final long OTA_MTU_WAIT_MS = 1500;
     private static final boolean REQUEST_MTU_ON_CONNECT = false;
     private static final int OTA_MAX_FIRMWARE_BYTES = 188 * 1024;
     private static final boolean OTA_WRITE_WITHOUT_RESPONSE = false;
     private static final long OTA_FIRST_DATA_DELAY_MS = 1000;
-    private static final long OTA_WRITE_PACE_MS = 50;
+    private static final long OTA_WRITE_PACE_MS = 0;
 
     private final Context context;
     private final Listener listener;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private int negotiatedMtu = 23;
     private final HostProtocol.MessageAssembler assembler = new HostProtocol.MessageAssembler();
     private final Map<String, ScanDevice> scanMap = new HashMap<>();
     private final List<ScanDevice> scanDevices = new ArrayList<>();
@@ -369,7 +374,37 @@ final class GlimmerBleClient {
         if (otaListener != null) {
             otaListener.onOtaProgress(0, otaSession.totalChunks, 0);
         }
-        handler.postDelayed(this::writeOtaStartWhenIdle, 250);
+        requestFastOtaLink();
+    }
+
+    @SuppressLint("MissingPermission")
+    private void requestFastOtaLink() {
+        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            gatt.setPreferredPhy(BluetoothDevice.PHY_LE_2M_MASK, BluetoothDevice.PHY_LE_2M_MASK,
+                    BluetoothDevice.PHY_OPTION_NO_PREFERRED);
+        }
+        if (negotiatedMtu < OTA_MIN_MTU_FOR_FULL_PDU && gatt.requestMtu(OTA_REQUEST_MTU)) {
+            otaSession.waitingForMtu = true;
+            handler.postDelayed(this::startOtaAfterMtu, OTA_MTU_WAIT_MS);
+        } else {
+            handler.postDelayed(this::writeOtaStartWhenIdle, 250);
+        }
+    }
+
+    private void startOtaAfterMtu() {
+        if (otaSession == null || !otaSession.waitingForMtu) {
+            return;
+        }
+        otaSession.waitingForMtu = false;
+        writeOtaStartWhenIdle();
+    }
+
+    @SuppressLint("MissingPermission")
+    private void restoreConnectionPriority() {
+        if (gatt != null) {
+            gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED);
+        }
     }
 
     void requestFullSync() {
@@ -545,7 +580,16 @@ final class GlimmerBleClient {
         @Override
         public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
             Log.i(TAG, "onMtuChanged status=" + status + " mtu=" + mtu);
-            handler.post(() -> discoverServices(gatt));
+            handler.post(() -> {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    negotiatedMtu = mtu;
+                }
+                if (otaSession != null && otaSession.waitingForMtu) {
+                    startOtaAfterMtu();
+                } else {
+                    discoverServices(gatt);
+                }
+            });
         }
 
         @Override
@@ -791,7 +835,9 @@ final class GlimmerBleClient {
             failOta("OTA connection lost");
             return;
         }
-        Log.i(TAG, "OTA write start withoutResponse=" + OTA_WRITE_WITHOUT_RESPONSE
+        otaSession.setPduLen(negotiatedMtu >= OTA_MIN_MTU_FOR_FULL_PDU ? OTA_PDU_LEN : OTA_FALLBACK_PDU_LEN);
+        Log.i(TAG, "OTA write start mtu=" + negotiatedMtu + " pdu=" + otaSession.pduLen
+                + " withoutResponse=" + OTA_WRITE_WITHOUT_RESPONSE
                 + " firstDelayMs=" + OTA_FIRST_DATA_DELAY_MS
                 + " paceMs=" + OTA_WRITE_PACE_MS);
         if (!writeOtaPacket(otaStartExtPacket())) {
@@ -833,11 +879,11 @@ final class GlimmerBleClient {
         }
 
         int index = otaSession.nextIndex;
-        int offset = index * OTA_PDU_LEN;
+        int offset = index * otaSession.pduLen;
         if (index == 0 || (index & 0x01ff) == 0) {
             Log.i(TAG, "OTA write data index=" + index + "/" + otaSession.totalChunks);
         }
-        if (!writeOtaPacket(otaDataPacket(index, otaSession.firmware, offset))) {
+        if (!writeOtaPacket(otaDataPacket(index, otaSession.firmware, offset, otaSession.pduLen))) {
             failOta("OTA write failed");
             return;
         }
@@ -896,6 +942,7 @@ final class GlimmerBleClient {
     private void failOta(String reason) {
         OtaListener otaListener = otaSession == null ? null : otaSession.listener;
         Log.w(TAG, "OTA failed: " + reason);
+        restoreConnectionPriority();
         otaActive = false;
         otaSession = null;
         if (otaListener != null) {
@@ -924,21 +971,18 @@ final class GlimmerBleClient {
     private byte[] otaStartExtPacket() {
         byte[] packet = new byte[20];
         wr16(packet, 0, OTA_CMD_START_EXT);
-        packet[2] = (byte) OTA_PDU_LEN;
+        packet[2] = (byte) otaSession.pduLen;
         packet[3] = 0;
         return packet;
     }
 
-    private byte[] otaDataPacket(int index, byte[] firmware, int offset) {
+    private byte[] otaDataPacket(int index, byte[] firmware, int offset, int pduLen) {
         int remaining = firmware.length - offset;
         if (remaining <= 0) {
             throw new IllegalArgumentException("empty OTA chunk");
         }
-        int copy = Math.min(OTA_PDU_LEN, remaining);
-        if (copy <= 0) {
-            copy = OTA_PDU_LEN;
-        }
-        int payloadLen = copy < OTA_PDU_LEN ? ((copy + 15) / 16) * 16 : OTA_PDU_LEN;
+        int copy = Math.min(pduLen, remaining);
+        int payloadLen = copy < pduLen ? ((copy + 15) / 16) * 16 : pduLen;
         byte[] packet = new byte[payloadLen + 4];
         wr16(packet, 0, index);
         System.arraycopy(firmware, offset, packet, 2, copy);
@@ -1033,7 +1077,9 @@ final class GlimmerBleClient {
     private static final class OtaSession {
         final byte[] firmware;
         final OtaListener listener;
-        final int totalChunks;
+        int pduLen;
+        int totalChunks;
+        boolean waitingForMtu;
         int nextIndex;
         int schedulePdu;
         int scheduleBytes;
@@ -1042,7 +1088,12 @@ final class GlimmerBleClient {
         OtaSession(byte[] firmware, OtaListener listener) {
             this.firmware = firmware;
             this.listener = listener;
-            this.totalChunks = (firmware.length + OTA_PDU_LEN - 1) / OTA_PDU_LEN;
+            setPduLen(OTA_PDU_LEN);
+        }
+
+        void setPduLen(int pduLen) {
+            this.pduLen = pduLen;
+            this.totalChunks = (firmware.length + pduLen - 1) / pduLen;
         }
     }
 
