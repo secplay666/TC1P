@@ -267,6 +267,28 @@ static app_status_t app_ota_guard_backup_slot(u8 slot)
     return app_ota_guard_copy_sector(app_ota_slot_base(slot), s_guard_backup_addr);
 }
 
+/* The OTA server erases the other slot when a new image initialises it
+ * (blc_ota_initOtaServer_module), and the guard only backs up the first
+ * sector. Rolling back onto an erased slot would leave nothing bootable,
+ * so check that the image body is still there first. */
+static u8 app_ota_slot_body_intact(u8 slot)
+{
+    static const u32 probe_offsets[] = {APP_OTA_SECTOR_SIZE, 0x10000UL};
+    u8 probe[16];
+    u8 i;
+    u8 j;
+
+    for (i = 0; i < sizeof(probe_offsets) / sizeof(probe_offsets[0]); i++) {
+        flash_read_page(app_ota_slot_base(slot) + probe_offsets[i], sizeof(probe), probe);
+        for (j = 0; j < sizeof(probe) && probe[j] == 0xff; j++) {
+        }
+        if (j == sizeof(probe)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void app_ota_guard_request_rollback(u32 reason)
 {
     u8 active;
@@ -274,7 +296,8 @@ static void app_ota_guard_request_rollback(u32 reason)
 
     if (!s_guard_valid || !s_guard.backup_valid ||
         s_guard.previous_slot == APP_OTA_SLOT_INVALID ||
-        !app_ota_guard_calc_addresses()) {
+        !app_ota_guard_calc_addresses() ||
+        !app_ota_slot_body_intact(s_guard.previous_slot)) {
         return;
     }
 
@@ -515,10 +538,14 @@ void app_ota_guard_boot_check(void)
         active == s_guard.pending_slot) {
         if (APP_BUILD_VERSION_CODE < s_guard.confirmed_version) {
             app_ota_guard_request_rollback(APP_OTA_ROLLBACK_REASON_ANTI_ROLLBACK);
+            /* Only returns when the previous image is gone: keep this one. */
+            app_ota_guard_confirm_current();
             return;
         }
         if (s_guard.boot_attempts >= PENDANT_OTA_MAX_PENDING_BOOT_ATTEMPTS) {
             app_ota_guard_request_rollback(APP_OTA_ROLLBACK_REASON_BOOT_ATTEMPTS);
+            /* Only returns when the previous image is gone: keep this one. */
+            app_ota_guard_confirm_current();
             return;
         }
         s_guard.boot_attempts++;
@@ -532,6 +559,8 @@ void app_ota_guard_boot_check(void)
     if (APP_BUILD_VERSION_CODE < s_guard.confirmed_version &&
         s_guard.backup_valid) {
         app_ota_guard_request_rollback(APP_OTA_ROLLBACK_REASON_ANTI_ROLLBACK);
+        /* Only returns when the previous image is gone: keep this one. */
+        app_ota_guard_confirm_current();
         return;
     }
 
@@ -550,7 +579,16 @@ void app_ota_init(void)
     s_ota_active = 0;
     s_ota_last_result = 0xff;
 
+    /* On the first boot of a new image this erases the other slot, which
+     * can take several seconds; keep the early watchdog from firing. */
+#if (PENDANT_WATCHDOG_ENABLE)
+    wd_stop();
+#endif
     blc_ota_initOtaServer_module();
+#if (PENDANT_WATCHDOG_ENABLE)
+    wd_clear();
+    wd_start();
+#endif
     blc_ota_setFirmwareVersionNumber((u16)APP_BUILD_VERSION_CODE);
     blc_ota_setOtaProcessTimeout(1000);
     blc_ota_registerOtaStartCmdCb(app_ota_on_start);
