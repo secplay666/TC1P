@@ -86,40 +86,53 @@ powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi.ps1 -PortNu
 
 ## 串口继电器切换两块板
 
-当前调试台支持用一个 Telink Debugger 通过串口继电器切换两块 B85 dangle 板。继电器串口参数：
+当前调试台支持用一个 Telink Debugger 通过串口继电器切换多块 B85 板。继电器和板子 UART 都是 USB 串口，**COM 口号每次插拔都可能变化，使用前先确认，不要沿用旧编号**。
 
-- 端口：`COM18`
+继电器串口参数：
+
 - 波特率：`9600`
 - 数据格式：`8N1`
-- 控制方式：发送原始十六进制字节，不是 ASCII 字符串
+- 控制方式：发送原始十六进制字节，不是 ASCII 字符串。第 N 路开/关：`A0 N 01 (A1+N)` / `A0 N 00 (A0+N)`
+- 状态查询：发送单字节 `FF`，返回 `CH1: OFF ... CH16: OFF`
 
-当前接线映射：
+### 确认当前 COM 口
 
-- `COM16` / `A` / `ON`：继电器第一路打开，发送 `A0 01 01 A2`，返回 `CH1: 1`
-- `COM17` / `B` / `OFF`：继电器第一路关闭，发送 `A0 01 00 A1`，返回 `CH1: 0`
-
-只切换目标板：
+列出当前串口：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\relay_select_b85.ps1 -Target COM16
-powershell -ExecutionPolicy Bypass -File .\tools\relay_select_b85.ps1 -Target COM17
+[System.IO.Ports.SerialPort]::GetPortNames()
 ```
 
-切换后复位：
+识别继电器：逐个串口以 9600 发送 `FF`，有 `CHn: ON/OFF` 回复的就是继电器。其余 USB 串口是板子 UART（115200 8N1），只有固件打开 `PENDANT_UART_PINMUX_ENABLE` 后才有输出。
+
+### 选择目标板
+
+`-Target` 按继电器第 1/2/3 路的状态选择 SWS 通路，与 COM 口号无关：
+
+| Target | CH1 CH2 CH3 |
+| --- | --- |
+| `1` | 0 0 0 |
+| `2` | 1 0 0 |
+| `3` | 0 1 0 |
+| `4` | 0 0 1 |
+
+哪个 Target 对应哪块板取决于当前接线。例如 Telink SWM 接第 3 路 COM、第 3 路 NC 接板 A、第 3 路 NO 接第 2 路 COM、第 2 路 NC 接板 B 时：板 A 用 `1`，板 B 用 `4`。接线变化后先用 `ac` + `rf 0 -s 16` 确认 Swire 通再操作。
+
+下面命令中的 `<RELAY_COM>` 替换为本次确认的继电器 COM 口：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi_relay.ps1 -Target COM16 -DeviceId 1
-powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi_relay.ps1 -Target COM17 -DeviceId 1
+# 只切换
+powershell -ExecutionPolicy Bypass -File .\tools\relay_select_b85.ps1 -RelayPort <RELAY_COM> -Target 1
+# 切换后复位
+powershell -ExecutionPolicy Bypass -File .\tools\reset_pendant_multi_relay.ps1 -RelayPort <RELAY_COM> -Target 1 -DeviceId 1
+# 切换后烧录
+powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi_relay.ps1 -RelayPort <RELAY_COM> -Target 1 -DeviceId 1
 ```
 
-切换后烧录：
+注意：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi_relay.ps1 -Target COM16 -DeviceId 1
-powershell -ExecutionPolicy Bypass -File .\tools\flash_pendant_multi_relay.ps1 -Target COM17 -DeviceId 1
-```
-
-当前已实测：`COM17` 使用继电器 `OFF` 能刷写和复位，`COM16` 使用继电器 `ON` 能刷写和复位。BDT `ac` 激活命令仍可能偶发返回 `0x1002`，但后续 `wf` 烧录和 `rst` 复位可以成功。
+- BDT `ac` 激活命令可能偶发返回 `0x1002`，但后续 `wf` 烧录和 `rst` 复位通常可以成功；如果 `rf` 读 Flash 也报 `Swire error`，说明 SWS/GND 链路不通，先查接线。
+- BDT 通过 Swire 读 Flash 后 MCU 会停住、不再广播，读完需要 `rst` 恢复运行。
 
 ## USB 下载
 

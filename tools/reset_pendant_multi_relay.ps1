@@ -1,7 +1,8 @@
 param(
     [ValidateSet("1", "2", "3", "4", "BOARD1", "BOARD2", "BOARD3", "BOARD4", "COM9", "COM10", "COM16", "COM17", "A", "B", "ON", "OFF")]
     [string]$Target = "1",
-    [string]$RelayPort = "COM18",
+    [Parameter(Mandatory = $true)]
+    [string]$RelayPort,
     [int]$RelayBaudRate = 9600,
     [int]$RelaySettleMs = 700,
     [int]$DeviceId = 1,
