@@ -41,9 +41,18 @@ if ($Transport -eq "EVK") {
 }
 
 if ($Transport -eq "EVK" -and !$SkipActivate) {
-    & $bdt $bdtDeviceId $Chip ac
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "BDT activate failed with exit code $LASTEXITCODE; continue to flash. Use -SkipActivate to suppress this warning."
+    # Firmware with BLE power management suspends between radio events, and
+    # Swire cannot hold a suspended MCU. Reset first so activate lands in the
+    # firmware's awake window after boot, then confirm the core is halted.
+    $halted = $false
+    for ($attempt = 1; $attempt -le 5 -and !$halted; $attempt++) {
+        & $bdt $bdtDeviceId $Chip rst -f | Out-Null
+        & $bdt $bdtDeviceId $Chip ac | Out-Null
+        $probe = & $bdt $bdtDeviceId $Chip rf 0 -s 4 2>&1 | Out-String
+        $halted = $probe -match "00000000:"
+    }
+    if (!$halted) {
+        Write-Warning "BDT could not halt the MCU after 5 reset+activate attempts; trying to flash anyway."
     }
 }
 
