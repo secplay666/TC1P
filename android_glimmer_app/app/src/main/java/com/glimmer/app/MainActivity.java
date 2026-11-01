@@ -96,6 +96,10 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     // Refresh device info (battery) every N auto-sync ticks.
     private static final int DEVICE_INFO_REFRESH_TICKS = 6;
     private static final long AUTO_RECONNECT_INTERVAL_MS = 15000;
+    // While connected the pendant never idles into deep sleep, so release
+    // the link once the app has been in the background this long. Swiping
+    // the app away from recents does not reliably call onDestroy.
+    private static final long BACKGROUND_DISCONNECT_MS = 30000;
     private static final long CHAT_SEND_TIMEOUT_MS = 25000;
     private static final long AVATAR_SEND_DELAY_MS = 5000;
     private static final long AVATAR_BUSY_RETRY_MS = 8000;
@@ -141,10 +145,33 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             }
         }
     };
+    private boolean inBackground;
+    private boolean backgroundDisconnected;
+    private final Runnable backgroundDisconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!inBackground || bleClient == null) {
+                return;
+            }
+            if (otaRunning) {
+                handler.postDelayed(this, BACKGROUND_DISCONNECT_MS);
+                return;
+            }
+            Log.i("GlimmerApp", "background timeout: releasing Glimmer link");
+            backgroundDisconnected = true;
+            handler.removeCallbacks(autoReconnectRunnable);
+            bleClient.stopScan();
+            bleClient.disconnect();
+            // disconnect() closes GATT without a callback; run the same
+            // cleanup as a link loss so sync stops and reconnect can start.
+            onDebugReady(false);
+            rerenderCurrentTab();
+        }
+    };
     private final Runnable autoReconnectRunnable = new Runnable() {
         @Override
         public void run() {
-            if (!debugReady && hasBoundDevice()) {
+            if (!debugReady && hasBoundDevice() && !backgroundDisconnected) {
                 startScanFlow(false);
                 handler.postDelayed(this, AUTO_RECONNECT_INTERVAL_MS);
             }
@@ -392,7 +419,30 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        inBackground = false;
+        handler.removeCallbacks(backgroundDisconnectRunnable);
+        if (backgroundDisconnected) {
+            backgroundDisconnected = false;
+            Log.i("GlimmerApp", "foreground again: reconnecting Glimmer");
+            maybeStartBoundReconnect();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (!isChangingConfigurations()) {
+            inBackground = true;
+            handler.removeCallbacks(backgroundDisconnectRunnable);
+            handler.postDelayed(backgroundDisconnectRunnable, BACKGROUND_DISCONNECT_MS);
+        }
+    }
+
+    @Override
     protected void onDestroy() {
+        handler.removeCallbacks(backgroundDisconnectRunnable);
         handler.removeCallbacks(autoSyncRunnable);
         handler.removeCallbacks(autoReconnectRunnable);
         handler.removeCallbacks(avatarSendRunnable);
@@ -3702,7 +3752,7 @@ public class MainActivity extends Activity implements GlimmerBleClient.Listener 
             peers.clear();
             peerProfiles.clear();
             handler.removeCallbacks(autoSyncRunnable);
-            if (hasBoundDevice()) {
+            if (hasBoundDevice() && !backgroundDisconnected) {
                 handler.removeCallbacks(autoReconnectRunnable);
                 handler.postDelayed(autoReconnectRunnable, AUTO_RECONNECT_INTERVAL_MS);
             }
