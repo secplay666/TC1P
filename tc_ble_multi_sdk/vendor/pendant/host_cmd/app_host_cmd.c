@@ -16,6 +16,7 @@
 #include "../peer_transport/app_peer_transport.h"
 #include "../motor/app_motor.h"
 #include "../pm/app_pm.h"
+#include "../motion/app_motion.h"
 #include "../ble/app_ble.h"
 #include "../app_ota.h"
 #include "../build_info/app_build_info.h"
@@ -280,6 +281,7 @@ static void handle_get_device_info(u8 seq)
     const app_identity_info_t *id = app_identity_get_info();
     app_ota_guard_info_t ota;
     app_battery_state_t bat;
+    app_motion_state_t motion;
 
     s_rsp_buf[0] = 1;
     s_rsp_buf[1] = (u8)board->hw_rev;
@@ -325,7 +327,13 @@ static void handle_get_device_info(u8 seq)
                     (bat.critical ? 0x04 : 0) | (app_charge_is_charging() ? 0x08 : 0);
     wr16(&s_rsp_buf[78], bat.min_mv);
     wr16(&s_rsp_buf[80], bat.raw_mv);
-    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 82);
+    /* Power management (appended). */
+    app_motion_get_state(&motion);
+    wr16(&s_rsp_buf[82], app_pm_take_idle_peak_seconds());
+    wr16(&s_rsp_buf[84], (u16)motion.motion_count);
+    s_rsp_buf[86] = app_pm_get_raw_wakeup_src();
+    s_rsp_buf[87] = app_pm_take_idle_blockers();
+    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 88);
 }
 
 #if (PENDANT_DEBUG_BUILD)

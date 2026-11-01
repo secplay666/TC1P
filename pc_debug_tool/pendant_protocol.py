@@ -399,6 +399,15 @@ def parse_device_info(payload: bytes) -> dict:
                     "battery_raw_mv": u16le(payload, 80),
                 }
             )
+        if len(payload) >= 87:
+            info.update(
+                {
+                    "idle_seconds": u16le(payload, 82),
+                    "motion_count": u16le(payload, 84),
+                    "wakeup_src": payload[86],
+                    "idle_blockers": payload[87] if len(payload) >= 88 else None,
+                }
+            )
     else:
         info["fw_version_code"] = 0
     return info

@@ -30,7 +30,8 @@ async def main(address: str) -> int:
     print(f"info: ver={info['fw_version_code']} guard_state={info['ota_guard_state']} "
           f"active_slot={info['ota_active_slot']} confirmed={info['ota_confirmed_version']} "
           f"vbat={info.get('battery_mv')}mV min={info.get('battery_min_mv')}mV "
-          f"charging={info.get('charging')}")
+          f"charging={info.get('charging')} motion={info.get('motion_count')} "
+          f"wakeup_src=0x{info.get('wakeup_src', 0):02X} idle_blockers={info.get('idle_blockers')} idle_s={info.get('idle_seconds')}")
     return 0
 
 

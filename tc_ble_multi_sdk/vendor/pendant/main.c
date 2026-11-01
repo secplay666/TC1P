@@ -28,6 +28,7 @@
 #include "app.h"
 #include "app_ota.h"
 #include "app_pendant.h"
+#include "pm/app_pm.h"
 #include "application/usbstd/usb.h"
 
 #if (FEATURE_TEST_MODE == TEST_EXT_SCAN)
@@ -92,6 +93,10 @@ _attribute_ram_code_ int main(void)
 
 	gpio_init(!deepRetWakeUp);
 	app_pendant_trace_set(0x04); /* boot trace */
+
+	if (!deepRetWakeUp) {
+		app_pm_confirm_motion_wakeup();
+	}
 
 #if (PENDANT_USB_ENABLE)
 	usb_init();

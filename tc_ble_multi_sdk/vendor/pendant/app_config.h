@@ -55,6 +55,33 @@
 #define PENDANT_BLE_AUTO_START                        1
 // Let the BLE stack suspend the MCU between advertising/connection events.
 // Off in debug builds, whose UART shell is polled from the main loop.
+// Idle deep sleep after PENDANT_IDLE_SLEEP_S with no motion, no app
+// connection, not charging and no nearby pendant. Wakes on the vibration
+// switch (confirmed by PENDANT_MOTION_WAKE_*) or on charging start.
+#ifndef PENDANT_IDLE_SLEEP_ENABLE
+#define PENDANT_IDLE_SLEEP_ENABLE                     1
+#endif
+#ifndef PENDANT_IDLE_SLEEP_S
+#define PENDANT_IDLE_SLEEP_S                          300
+#endif
+// After a pin wake, stay awake only if switch toggles show up in at least
+// MIN_SLOTS different SLOT_MS slots within WINDOW_MS. A single knock (one
+// burst of contact bounce) or a glitch goes straight back to sleep.
+#ifndef PENDANT_MOTION_WAKE_WINDOW_MS
+#define PENDANT_MOTION_WAKE_WINDOW_MS                 2000
+#endif
+#ifndef PENDANT_MOTION_WAKE_SLOT_MS
+#define PENDANT_MOTION_WAKE_SLOT_MS                   100
+#endif
+#ifndef PENDANT_MOTION_WAKE_MIN_SLOTS
+#define PENDANT_MOTION_WAKE_MIN_SLOTS                 2
+#endif
+// Also suspend between connection events. Off by default: one dev board
+// (SDK crystal-start warning set) advertised fine but could not hold a
+// connection with it, while the product board and another dev board could.
+#ifndef PENDANT_BLE_PM_CONN_SLEEP
+#define PENDANT_BLE_PM_CONN_SLEEP                     0
+#endif
 #ifndef PENDANT_BLE_PM_ENABLE
 #define PENDANT_BLE_PM_ENABLE                         (!PENDANT_DEBUG_BUILD)
 #endif
