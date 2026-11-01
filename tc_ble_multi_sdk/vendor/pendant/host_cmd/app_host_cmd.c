@@ -333,7 +333,9 @@ static void handle_get_device_info(u8 seq)
     wr16(&s_rsp_buf[84], (u16)motion.motion_count);
     s_rsp_buf[86] = app_pm_get_raw_wakeup_src();
     s_rsp_buf[87] = app_pm_take_idle_blockers();
-    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 88);
+    s_rsp_buf[88] = app_pm_get_wake_slots();
+    wr16(&s_rsp_buf[89], app_pm_get_rejected_wakes());
+    send_rsp(seq, HOST_CMD_GET_DEVICE_INFO, HOST_STATUS_OK, s_rsp_buf, 91);
 }
 
 #if (PENDANT_DEBUG_BUILD)

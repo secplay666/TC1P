@@ -94,9 +94,7 @@ _attribute_ram_code_ int main(void)
 	gpio_init(!deepRetWakeUp);
 	app_pendant_trace_set(0x04); /* boot trace */
 
-	if (!deepRetWakeUp) {
-		app_pm_confirm_motion_wakeup();
-	}
+	app_pm_handle_boot(deepRetWakeUp);
 
 #if (PENDANT_USB_ENABLE)
 	usb_init();

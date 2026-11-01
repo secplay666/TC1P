@@ -18,6 +18,11 @@
 #define APP_PM_BLE_SLEEP_MASK  (PM_SLEEP_LEG_ADV | PM_SLEEP_EXT_ADV)
 #endif
 #define APP_PM_ACTIVITY_HOLD_US 1000000
+/* Idle sleep uses deep retention so that this marker, kept in retention
+ * SRAM, identifies a wake from our own sleep. The chip's pad-wake status
+ * could not be read reliably at the point it is needed, and plain deep
+ * sleep keeps neither SRAM nor the spare analog registers. */
+#define APP_PM_SLEEP_MAGIC      0x534C5050UL /* "SLPP" */
 /* Stay awake briefly after every boot: Swire cannot halt a suspended MCU,
  * so this is the window in which a debugger (BDT activate) can take over. */
 #define APP_PM_BOOT_AWAKE_US    3000000
@@ -38,13 +43,32 @@ static u16 s_idle_peak_s;
 static app_sleep_reason_t s_sleep_reason;
 static app_wakeup_reason_t s_wakeup_reason;
 static u8 s_raw_wakeup_src;
+/* Placed explicitly: the SDK's _attribute_data_retention_ is empty because
+ * PM_DEEPSLEEP_RETENTION_ENABLE is 0. The linker puts .retention_data right
+ * after ram_code, inside the low 32 KB kept by DEEPSLEEP_MODE_RET_SRAM_LOW32K;
+ * the non-zero initialiser keeps it out of .bss. */
+__attribute__((section(".retention_data"))) static u32 s_sleep_magic = 1;
+/* Outcome of the last wake check, handed across the reboot that follows it:
+ * .data_no_init is neither cleared nor initialised at boot, so it survives a
+ * software reboot. [31:16] magic, [15:8] active slots, [7:0] reason. */
+#define APP_PM_WAKE_REPORT_MAGIC 0x5741UL
+__attribute__((section(".data_no_init"))) static u32 s_wake_report;
+/* Wakes rejected since the last real boot: [15:8] count, [7:0] slots of the
+ * last one. Kept in retention SRAM across sleeps, handed over with the
+ * report on the next real wake. */
+__attribute__((section(".retention_data"))) static u32 s_rejected = 1;
+__attribute__((section(".data_no_init"))) static u32 s_rejected_report;
+static u16 s_rejected_info;
+static u8 s_wake_reason_code;
+static u8 s_retention_flag;
+static u8 s_wake_slots;
 
 void app_pm_init(void)
 {
     s_sleep_reason = PM_SLEEP_REASON_IDLE;
     s_raw_wakeup_src = (u8)pm_get_wakeup_src();
-    if (pm_is_deepPadWakeup()) {
-        s_raw_wakeup_src |= APP_PM_WAKEUP_DEEP_PAD;
+    if (s_wake_reason_code) {
+        s_raw_wakeup_src = 0x80 | s_wake_reason_code;
     }
     if (s_raw_wakeup_src & WAKEUP_STATUS_WD) {
         s_wakeup_reason = PM_WAKEUP_REASON_RESET;
@@ -94,16 +118,50 @@ app_status_t app_pm_prepare_sleep(app_sleep_reason_t reason)
     return APP_OK;
 }
 
+static void app_pm_retention_sleep(void)
+{
+    app_pm_arm_wakeup_pins();
+    s_sleep_magic = APP_PM_SLEEP_MAGIC;
+    /* Runtime BLE PM keeps deep retention off; without enabling it here the
+     * low-level sleep falls back to plain deep sleep and SRAM is lost. */
+    blc_pm_setDeepsleepRetentionEnable(PM_DeepRetn_Enable);
+    blc_pm_setDeepsleepRetentionType(DEEPSLEEP_MODE_RET_SRAM_LOW32K);
+    cpu_sleep_wakeup(DEEPSLEEP_MODE_RET_SRAM_LOW32K, PM_WAKEUP_PAD, 0);
+}
+
 void app_pm_enter_sleep(void)
 {
     (void)s_sleep_reason;
-    app_pm_arm_wakeup_pins();
-    cpu_sleep_wakeup(DEEPSLEEP_MODE, PM_WAKEUP_PAD, 0);
+    app_pm_retention_sleep();
 }
 
-void app_pm_confirm_motion_wakeup(void)
+/* Pad wake enables live in analog registers that survive resets (only a
+ * power cycle clears them). Left armed, a pin already at its wake level
+ * (e.g. the charge pin while charging) aborts every BLE suspend at once
+ * and the stack stops advertising, so disarm them on every boot. */
+static void app_pm_disarm_wakeup_pins(void)
 {
-#if (PENDANT_IDLE_SLEEP_ENABLE)
+    u32 motion_pin = app_board_get_pin(APP_PIN_MOTION);
+    u32 charge_pin = app_board_get_pin(APP_PIN_CHARGE_DET);
+
+    if (motion_pin) {
+        cpu_set_gpio_wakeup((GPIO_PinTypeDef)motion_pin, Level_High, 0);
+    }
+    if (charge_pin) {
+        cpu_set_gpio_wakeup((GPIO_PinTypeDef)charge_pin, Level_High, 0);
+    }
+}
+
+static void app_pm_reboot_after_wake(u8 reason, u8 slots)
+{
+    s_wake_report = (APP_PM_WAKE_REPORT_MAGIC << 16) | ((u32)slots << 8) |
+                    (s_retention_flag ? 0x40 : 0) | reason;
+    s_rejected_report = (APP_PM_WAKE_REPORT_MAGIC << 16) | (u16)s_rejected;
+    start_reboot();
+}
+
+void app_pm_handle_boot(u8 retention_wake)
+{
     u32 motion_pin;
     u32 charge_pin;
     u32 start_tick;
@@ -112,16 +170,33 @@ void app_pm_confirm_motion_wakeup(void)
     u8 slots = 0;
     u8 slot_active = 0;
 
-    /* Only a deep-sleep pad wake: the raw wakeup status can carry the PAD
-     * bit on a normal power-on or reset as well. */
-    if (!pm_is_deepPadWakeup()) {
+    app_board_init();
+    app_pm_disarm_wakeup_pins();
+    /* A normal boot always re-copies .retention_data from flash, so the
+     * marker survives only a real deep-retention wake; the SDK's retention
+     * flag (retention_wake) did not report it here. */
+    if (s_sleep_magic != APP_PM_SLEEP_MAGIC) {
+        s_sleep_magic = 1;
+        if ((s_wake_report >> 16) == APP_PM_WAKE_REPORT_MAGIC) {
+            s_wake_reason_code = (u8)s_wake_report;
+            s_wake_slots = (u8)(s_wake_report >> 8);
+            if ((s_rejected_report >> 16) == APP_PM_WAKE_REPORT_MAGIC) {
+                s_rejected_info = (u16)s_rejected_report;
+            }
+        }
+        s_wake_report = 0;
+        s_rejected_report = 0;
+        s_rejected = 0;
         return;
     }
-    app_board_init();
+    /* Waking from deep retention leaves non-retention RAM uninitialised, so
+     * every path below ends in a full reboot or another sleep. */
+    s_sleep_magic = 1;
+    s_retention_flag = retention_wake;
     motion_pin = app_board_get_pin(APP_PIN_MOTION);
     charge_pin = app_board_get_pin(APP_PIN_CHARGE_DET);
     if (!motion_pin || (charge_pin && gpio_read(charge_pin))) {
-        return;
+        app_pm_reboot_after_wake(APP_PM_WAKE_CHARGING, 0);
     }
 
     level = gpio_read(motion_pin) ? 1 : 0;
@@ -130,7 +205,7 @@ void app_pm_confirm_motion_wakeup(void)
     while (!clock_time_exceed(start_tick, PENDANT_MOTION_WAKE_WINDOW_MS * 1000UL)) {
         wd_clear();
         if (charge_pin && gpio_read(charge_pin)) {
-            return;
+            app_pm_reboot_after_wake(APP_PM_WAKE_CHARGING, slots);
         }
         if (clock_time_exceed(slot_tick, PENDANT_MOTION_WAKE_SLOT_MS * 1000UL)) {
             slot_tick = clock_time();
@@ -140,15 +215,17 @@ void app_pm_confirm_motion_wakeup(void)
             level ^= 1;
             if (!slot_active) {
                 slot_active = 1;
-                if (++slots >= PENDANT_MOTION_WAKE_MIN_SLOTS) {
-                    return;
-                }
+                slots++;
             }
         }
     }
-    app_pm_arm_wakeup_pins();
-    cpu_sleep_wakeup(DEEPSLEEP_MODE, PM_WAKEUP_PAD, 0);
-#endif
+    /* Watch the whole window (rather than stopping at the threshold) so the
+     * reported slot count shows how far a wake was from the threshold. */
+    if (slots >= PENDANT_MOTION_WAKE_MIN_SLOTS) {
+        app_pm_reboot_after_wake(APP_PM_WAKE_MOTION, slots);
+    }
+    s_rejected = (((s_rejected >> 8) + 1) & 0xFF) << 8 | slots;
+    app_pm_retention_sleep();
 }
 
 static u8 app_pm_idle_blocked(void)
@@ -216,6 +293,16 @@ static void app_pm_idle_poll(void)
         app_system_request_sleep(PM_SLEEP_REASON_IDLE);
     }
 #endif
+}
+
+u8 app_pm_get_wake_slots(void)
+{
+    return s_wake_slots;
+}
+
+u16 app_pm_get_rejected_wakes(void)
+{
+    return s_rejected_info;
 }
 
 u16 app_pm_take_idle_peak_seconds(void)

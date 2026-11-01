@@ -31,7 +31,7 @@ async def main(address: str) -> int:
           f"active_slot={info['ota_active_slot']} confirmed={info['ota_confirmed_version']} "
           f"vbat={info.get('battery_mv')}mV min={info.get('battery_min_mv')}mV "
           f"charging={info.get('charging')} motion={info.get('motion_count')} "
-          f"wakeup_src=0x{info.get('wakeup_src', 0):02X} idle_blockers={info.get('idle_blockers')} idle_s={info.get('idle_seconds')}")
+          f"wakeup_src=0x{info.get('wakeup_src', 0):02X} idle_blockers={info.get('idle_blockers')} idle_s={info.get('idle_seconds')} wake_slots={info.get('wake_slots')} rejected={info.get('rejected_wakes')}/last_slots={info.get('rejected_last_slots')}")
     return 0
 
 

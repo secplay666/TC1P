@@ -406,6 +406,9 @@ def parse_device_info(payload: bytes) -> dict:
                     "motion_count": u16le(payload, 84),
                     "wakeup_src": payload[86],
                     "idle_blockers": payload[87] if len(payload) >= 88 else None,
+                    "wake_slots": payload[88] if len(payload) >= 89 else None,
+                    "rejected_wakes": payload[90] if len(payload) >= 91 else None,
+                    "rejected_last_slots": payload[89] if len(payload) >= 91 else None,
                 }
             )
     else:

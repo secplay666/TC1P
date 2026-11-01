@@ -34,7 +34,7 @@
 #define APP_OTA_DBG_WRITE_LO_REG                DEEP_ANA_REG7
 #define APP_OTA_DBG_WRITE_HI_REG                DEEP_ANA_REG8
 #define APP_OTA_DBG_INDEX_LO_REG                DEEP_ANA_REG9
-#define APP_OTA_DBG_INDEX_HI_REG                DEEP_ANA_REG10
+ /* DEEP_ANA_REG10 unused: only the low byte of the last index is kept. */
 #define APP_OTA_DBG_STAGE_START                 0xa1
 #define APP_OTA_DBG_STAGE_START_ACCEPTED        0xa2
 #define APP_OTA_DBG_STAGE_DATA                  0xd1
@@ -619,7 +619,6 @@ void app_ota_debug_note_write(u16 l2cap_len, const u8 *value, u16 value_len)
         analog_write(APP_OTA_DBG_WRITE_LO_REG, 0);
         analog_write(APP_OTA_DBG_WRITE_HI_REG, 0);
         analog_write(APP_OTA_DBG_INDEX_LO_REG, 0xff);
-        analog_write(APP_OTA_DBG_INDEX_HI_REG, 0xff);
     }
     s_ota_dbg_write_count++;
     analog_write(APP_OTA_DBG_WRITE_LO_REG, (u8)s_ota_dbg_write_count);
@@ -629,7 +628,6 @@ void app_ota_debug_note_write(u16 l2cap_len, const u8 *value, u16 value_len)
         s_ota_dbg_last_index = cmd;
         analog_write(APP_OTA_DBG_STAGE_REG, APP_OTA_DBG_STAGE_DATA);
         analog_write(APP_OTA_DBG_INDEX_LO_REG, (u8)s_ota_dbg_last_index);
-        analog_write(APP_OTA_DBG_INDEX_HI_REG, (u8)(s_ota_dbg_last_index >> 8));
     }
 }
 
@@ -796,7 +794,6 @@ void app_ota_guard_get_info(app_ota_guard_info_t *info)
     info->debug_stage = analog_read(APP_OTA_DBG_STAGE_REG);
     info->debug_write_count = ((u16)analog_read(APP_OTA_DBG_WRITE_HI_REG) << 8) |
                               analog_read(APP_OTA_DBG_WRITE_LO_REG);
-    info->debug_last_index = ((u16)analog_read(APP_OTA_DBG_INDEX_HI_REG) << 8) |
-                             analog_read(APP_OTA_DBG_INDEX_LO_REG);
+    info->debug_last_index = analog_read(APP_OTA_DBG_INDEX_LO_REG);
     info->debug_boot_wakeup_src = s_guard.reserved;
 }
