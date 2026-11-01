@@ -52,6 +52,12 @@
 #ifndef PENDANT_DEBUG_BUILD
 #define PENDANT_DEBUG_BUILD                           0
 #endif
+// 1 = RF test build: host command SET_TX_POWER changes the radio TX level
+// at runtime (RAM only, back to +3 dBm on reboot). Independent of the debug
+// build so power management stays as in release.
+#ifndef PENDANT_RF_TEST_ENABLE
+#define PENDANT_RF_TEST_ENABLE                        0
+#endif
 #define PENDANT_BLE_AUTO_START                        1
 // Let the BLE stack suspend the MCU between advertising/connection events.
 // Off in debug builds, whose UART shell is polled from the main loop.

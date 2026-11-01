@@ -511,6 +511,25 @@ static void handle_set_rssi_config(u8 seq, const u8 *payload, u16 len)
     send_rsp(seq, HOST_CMD_SET_RSSI_CONFIG, host_status_from_app(st), 0, 0);
 }
 
+#endif
+
+#if (PENDANT_RF_TEST_ENABLE)
+/* payload[0] = RF_PowerTypeDef register value (rf_drv.h); empty = query.
+ * Response: the level now in use. Not persisted. */
+static void handle_set_tx_power(u8 seq, const u8 *payload, u16 len)
+{
+    static u8 s_tx_power_level = RF_POWER_P3dBm;
+
+    if (payload && len >= 1) {
+        s_tx_power_level = payload[0];
+        rf_set_power_level_index((RF_PowerTypeDef)s_tx_power_level);
+    }
+    s_rsp_buf[0] = s_tx_power_level;
+    send_rsp(seq, HOST_CMD_SET_TX_POWER, HOST_STATUS_OK, s_rsp_buf, 1);
+}
+#endif
+
+#if (PENDANT_DEBUG_BUILD)
 static void handle_motor_test(u8 seq, const u8 *payload, u16 len)
 {
     app_motor_pattern_t pattern;
@@ -1237,6 +1256,11 @@ static void handle_command(u8 seq, u8 cmd, const u8 *payload, u16 len)
     case HOST_CMD_SET_PROFILE_SUMMARY:
         handle_set_profile_summary(seq, payload, len);
         break;
+#if (PENDANT_RF_TEST_ENABLE)
+    case HOST_CMD_SET_TX_POWER:
+        handle_set_tx_power(seq, payload, len);
+        break;
+#endif
 #if (PENDANT_DEBUG_BUILD)
     case HOST_CMD_GET_SYSTEM_STATE:
         handle_get_system_state(seq);

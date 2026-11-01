@@ -31,6 +31,7 @@ typedef enum {
     HOST_CMD_SET_PROFILE_SUMMARY = 0x13,
     HOST_CMD_GET_PEER_PROFILES = 0x14,
     HOST_CMD_P2P_FILE_SEND = 0x15,
+    HOST_CMD_SET_TX_POWER = 0x16,
 } app_host_cmd_id_t;
 
 typedef enum {
