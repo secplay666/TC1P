@@ -485,6 +485,8 @@ static void app_ota_on_start(void)
 
     app_ble_set_scan_enabled(0);
     app_ble_set_adv1_enabled(0);
+    /* Flash writes run from the main loop; keep it running between events. */
+    app_pm_block_ble_sleep(APP_PM_BLOCK_OTA, 1);
 }
 
 static void app_ota_restore_idle_radio(void)
@@ -492,6 +494,7 @@ static void app_ota_restore_idle_radio(void)
     app_ble_set_adv0_enabled(1);
     app_ble_set_adv1_enabled(1);
     app_ble_set_scan_enabled(1);
+    app_pm_block_ble_sleep(APP_PM_BLOCK_OTA, 0);
 }
 
 static void app_ota_on_result(int result)

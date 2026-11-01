@@ -53,6 +53,11 @@
 #define PENDANT_DEBUG_BUILD                           0
 #endif
 #define PENDANT_BLE_AUTO_START                        1
+// Let the BLE stack suspend the MCU between advertising/connection events.
+// Off in debug builds, whose UART shell is polled from the main loop.
+#ifndef PENDANT_BLE_PM_ENABLE
+#define PENDANT_BLE_PM_ENABLE                         (!PENDANT_DEBUG_BUILD)
+#endif
 #define PENDANT_WATCHDOG_ENABLE                       1
 #define PENDANT_WATCHDOG_TIMEOUT_MS                   10000
 #define PENDANT_DEMO_CENTRAL_CONNECT_ENABLE           0

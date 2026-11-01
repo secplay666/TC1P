@@ -1363,6 +1363,7 @@ void app_host_cmd_on_rx_frame(const u8 *data, u8 len)
 
     s_rx_frame_count++;
     s_last_rx_frame_len = len;
+    app_pm_note_host_activity();
     st = app_host_frame_decode(data, len, &frame);
     s_last_rx_status = (u8)st;
     if (st != APP_OK) {

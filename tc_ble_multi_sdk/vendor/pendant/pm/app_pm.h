@@ -24,5 +24,13 @@ u8 app_pm_get_raw_wakeup_src(void);
 app_status_t app_pm_prepare_sleep(app_sleep_reason_t reason);
 void app_pm_enter_sleep(void);
 void app_pm_poll(u32 now_tick);
+/* BLE suspend between radio events; call after link layer init. */
+#define APP_PM_BLOCK_OTA            0x01
+#define APP_PM_BLOCK_HOST_ACTIVITY  0x02
+void app_pm_init_ble(void);
+/* Suspend is allowed only while no blocker is set. */
+void app_pm_block_ble_sleep(u8 blocker, u8 block);
+/* Keep the MCU awake briefly after app traffic so replies are not delayed. */
+void app_pm_note_host_activity(void);
 
 #endif

@@ -57,6 +57,9 @@ _attribute_ram_code_ void irq_handler(void)
 _attribute_ram_code_ int main(void)
 {
 	app_ota_configure_boot();
+	/* No 32K crystal is fitted: sleep timing runs on the internal 32K RC.
+	 * This also binds cpu_sleep_wakeup, which is NULL until selected. */
+	blc_pm_select_internal_32k_crystal();
 
 	#if(MCU_CORE_TYPE == MCU_CORE_825x)
 		cpu_wakeup_init();

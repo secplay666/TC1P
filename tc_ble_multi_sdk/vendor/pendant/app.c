@@ -31,6 +31,7 @@
 #include "app_buffer.h"
 #include "default_att.h"
 #include "app_pendant.h"
+#include "pm/app_pm.h"
 #include "host_gatt/app_host_gatt.h"
 #include "system/app_system.h"
 #include "common/app_debug_print.h"
@@ -973,6 +974,8 @@ _attribute_no_inline_ void user_init_normal(void)
 
 	/* Check if any Stack(Controller & Host) Initialization error after all BLE initialization done.
 	 * attention that code will stuck in "while(1)" if any error detected in initialization, user need find what error happens and then fix it */
+	app_pm_init_ble();
+
 	blc_app_checkControllerHostInitialization();
 	app_pendant_trace_set(0x1b); /* boot trace */
 //////////////////////////// BLE stack Initialization  End //////////////////////////////////
